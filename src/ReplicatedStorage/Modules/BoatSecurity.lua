@@ -198,8 +198,8 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
 	end
 
 	-- Check for NaN or infinite values
-	if newPosition.X ~= newPosition.X or 
-		newPosition.Y ~= newPosition.Y or 
+	if newPosition.X ~= newPosition.X or
+		newPosition.Y ~= newPosition.Y or
 		newPosition.Z ~= newPosition.Z or
 		math.abs(newPosition.X) == math.huge or
 		math.abs(newPosition.Y) == math.huge or
@@ -207,8 +207,12 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
 		return false, "Invalid position", true
 	end
 
-	local currentPosition = boat.PrimaryPart.Position
-	local distance = (newPosition - currentPosition).Magnitude
+	-- Boats are physically moved by AlignPosition constraints which can lag
+	-- slightly behind the server controlled "target" position. When checking
+	-- for suspicious movement we therefore compare against the last validated
+	-- target position if we have one instead of the boat's physical location.
+	local referencePosition = LastValidPositions[player] or boat.PrimaryPart.Position
+	local distance = (newPosition - referencePosition).Magnitude
 
 	-- Store position history
 	local history = BoatPositionHistory[player]

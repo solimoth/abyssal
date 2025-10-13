@@ -1,0 +1,4 @@
+[tools]
+rojo = "Roblox/rojo@7.4.4"
+stylua = "JohnnyMorganz/stylua@0.20.0"
+selene = "kampfkarren/selene@0.27.1"

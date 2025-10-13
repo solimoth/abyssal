@@ -1,0 +1,25 @@
+{
+  "name": "Abyssal",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "Modules": { "$path": "src/ReplicatedStorage/Modules" },
+      "Remotes": { "$className": "Folder" }
+    },
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "Config": { "$path": "src/ServerScriptService/Config" },
+      "Systems": { "$path": "src/ServerScriptService/Systems" },
+      "Security": { "$path": "src/ServerScriptService/Security" },
+      "TerrainWaterSystem": { "$path": "src/ServerScriptService/TerrainWaterSystem.server.lua" }
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "StarterPlayerScripts": {
+        "$className": "StarterPlayerScripts",
+        "$path": "src/StarterPlayer/StarterPlayerScripts"
+      }
+    }
+  }
+}

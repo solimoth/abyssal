@@ -6,7 +6,12 @@ local RunService = game:GetService("RunService")
 
 local BoatSecurity = {}
 
--- Security constants
+local RATE_TOLERANCE = 0.15 -- allow 15% headroom to absorb Heartbeat jitter
+local BURST_MULTIPLIER = 2
+local MIN_BUCKET_HEADROOM = 5
+local WARN_THRESHOLD = 10
+local WARN_COOLDOWN = 2
+local KICK_THRESHOLD = 50
 local MAX_BOATS_PER_SERVER = 50
 local MAX_SPEED_TOLERANCE = 2.05 -- Only 5% tolerance
 local MAX_TELEPORT_DISTANCE = 50 -- Max distance boat can move in one frame
@@ -118,13 +123,16 @@ function BoatSecurity.CheckRemoteRateLimit(player, remoteName, maxCallsPerSecond
 
         local currentTime = tick()
         maxCallsPerSecond = math.max(maxCallsPerSecond or 1, 1)
+        local fillRate = maxCallsPerSecond * (1 + RATE_TOLERANCE)
+        local bucketCapacity = math.max(maxCallsPerSecond * BURST_MULTIPLIER, maxCallsPerSecond + MIN_BUCKET_HEADROOM)
         local limits = RemoteRateLimits[player]
 
         if not limits[remoteName] then
                 limits[remoteName] = {
-                        tokens = maxCallsPerSecond,
+                        tokens = bucketCapacity,
                         lastUpdate = currentTime,
                         violations = 0,
+                        lastWarnTime = 0,
                 }
         end
 
@@ -132,22 +140,29 @@ function BoatSecurity.CheckRemoteRateLimit(player, remoteName, maxCallsPerSecond
         local timeElapsed = currentTime - (remoteData.lastUpdate or currentTime)
         remoteData.lastUpdate = currentTime
 
+        if remoteData.tokens > bucketCapacity then
+                remoteData.tokens = bucketCapacity
+        end
+
         -- Refill bucket using a token bucket so short spikes are tolerated and
         -- a slightly higher burst (2x requested rate) is allowed before we
         -- start counting violations. This matches the behaviour players see
         -- when packets arrive in small clumps instead of perfectly spaced
         -- intervals.
-        local bucketCapacity = math.max(maxCallsPerSecond * 2, maxCallsPerSecond + 5)
-        remoteData.tokens = math.min(bucketCapacity, (remoteData.tokens or maxCallsPerSecond) + timeElapsed * maxCallsPerSecond)
+        remoteData.tokens = math.min(bucketCapacity, (remoteData.tokens or bucketCapacity) + timeElapsed * fillRate)
 
         if remoteData.tokens < 1 then
                 remoteData.violations = (remoteData.violations or 0) + 1
+                remoteData.lastWarnTime = remoteData.lastWarnTime or 0
 
-                if remoteData.violations > 10 then
-                        warn("Player", player.Name, "exceeded rate limit for", remoteName)
+                if remoteData.violations >= WARN_THRESHOLD then
+                        if currentTime - remoteData.lastWarnTime >= WARN_COOLDOWN then
+                                warn("Player", player.Name, "exceeded rate limit for", remoteName)
+                                remoteData.lastWarnTime = currentTime
+                        end
 
                         -- Kick for excessive violations
-                        if remoteData.violations > 50 then
+                        if remoteData.violations > KICK_THRESHOLD then
                                 player:Kick("Rate limit violation")
                         end
                 end

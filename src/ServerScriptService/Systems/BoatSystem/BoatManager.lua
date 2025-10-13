@@ -473,35 +473,59 @@ function BoatManager.DespawnBoat(player)
 end
 
 -- ENHANCED CONTROL UPDATE WITH BETTER VALIDATION
+local function sanitizeControlAxis(value)
+        if typeof(value) ~= "number" then
+                return 0
+        end
+
+        if value ~= value or math.abs(value) == math.huge then
+                return 0
+        end
+
+        return math.clamp(value, -1, 1)
+end
+
 local function UpdateBoatControl(player, controls)
-	-- Better rate limiting
-	if not BoatSecurity.CheckRemoteRateLimit(player, "UpdateBoatControl", MAX_CONTROL_RATE) then
-		return
-	end
+        -- Better rate limiting
+        if not BoatSecurity.CheckRemoteRateLimit(player, "UpdateBoatControl", MAX_CONTROL_RATE) then
+                return
+        end
 
-	-- Validate inputs
-	local throttle = controls.throttle
-	local steer = controls.steer
+        local boat = ActiveBoats[player]
+        if not boat or not boat.Parent then
+                return
+        end
 
-	if type(throttle) ~= "number" or type(steer) ~= "number" then
-		warn("Invalid control types from", player.Name)
-		return
-	end
+        if not BoatSecurity.ValidateOwnership(player, boat) then
+                return
+        end
 
-	throttle = math.clamp(throttle, -1, 1)
-	steer = math.clamp(steer, -1, 1)
+        if not BoatControllers[player] or not BoatControllers[player].Parent then
+                return
+        end
 
-	local ascend = math.clamp(controls.ascend or 0, -1, 1)
-	local pitch = math.clamp(controls.pitch or 0, -1, 1)
-	local roll = math.clamp(controls.roll or 0, -1, 1)
+        -- Validate inputs
+        local throttle = sanitizeControlAxis(controls.throttle)
+        local steer = sanitizeControlAxis(controls.steer)
+        local ascend = sanitizeControlAxis(controls.ascend)
+        local pitch = sanitizeControlAxis(controls.pitch)
+        local roll = sanitizeControlAxis(controls.roll)
 
-	-- Validate speed from client with stricter checks
-	local clientSpeed = controls.currentSpeed
-	if clientSpeed and BoatAccelerationData[player] then
-		local maxAllowed = BoatAccelerationData[player].maxSpeed
-		if math.abs(clientSpeed) > maxAllowed then
-			-- Track violations
-			PlayerViolations[player] = (PlayerViolations[player] or 0) + 1
+        -- Validate speed from client with stricter checks
+        local clientSpeed = controls.currentSpeed
+        if clientSpeed ~= nil then
+                if typeof(clientSpeed) ~= "number" or clientSpeed ~= clientSpeed or math.abs(clientSpeed) == math.huge then
+                        warn("Invalid speed value from", player.Name)
+                        return
+                end
+
+        end
+
+        if clientSpeed and BoatAccelerationData[player] then
+                local maxAllowed = BoatAccelerationData[player].maxSpeed
+                if math.abs(clientSpeed) > maxAllowed then
+                        -- Track violations
+                        PlayerViolations[player] = (PlayerViolations[player] or 0) + 1
 
 			if PlayerViolations[player] > 50 then
 				warn("Excessive speed violations from", player.Name)
@@ -516,12 +540,12 @@ local function UpdateBoatControl(player, controls)
 		return
 	end
 
-	BoatControls[player] = {
-		throttle = throttle,
-		steer = steer,
-		ascend = ascend,
-		pitch = pitch,
-		roll = roll
+        BoatControls[player] = {
+                throttle = throttle,
+                steer = steer,
+                ascend = ascend,
+                pitch = pitch,
+                roll = roll
 	}
 
 	BoatLastActivity[player] = tick()
@@ -743,35 +767,62 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 	end
 
 	-- Validate movement
-	local valid, message, shouldKick = BoatSecurity.ValidateBoatMovement(
-		player, boat, newCFrame.Position, deltaTime
-	)
+        local valid, message, shouldKick = BoatSecurity.ValidateBoatMovement(
+                player, boat, newCFrame.Position, deltaTime
+        )
 
-	if shouldKick then
-		PlayerViolations[player] = (PlayerViolations[player] or 0) + 10
+        if not valid then
+                if message then
+                        warn("Rejected boat movement for", player.Name, "-", message)
+                end
 
-		if PlayerViolations[player] > 100 then
-			player:Kick("Movement security violation")
-			CleanupBoat(player)
-			return
-		end
-	end
+                PlayerViolations[player] = (PlayerViolations[player] or 0) + 1
 
-	-- Update position
-	controlPart.CFrame = newCFrame
+                if shouldKick then
+                        PlayerViolations[player] = PlayerViolations[player] + 9
+                end
 
-	-- Update BodyVelocity for momentum
-	if boat.PrimaryPart then
-		local bodyVel = boat.PrimaryPart:FindFirstChild("BoatBodyVelocity")
-		if bodyVel then
-			local velocityDirection = newCFrame.LookVector
-			local momentumFactor = 0.3 * (1 + config.Weight * 0.05)
-			local targetVelocity = velocityDirection * currentSpeed * momentumFactor
-			bodyVel.Velocity = bodyVel.Velocity:Lerp(targetVelocity, 0.1)
-		end
-	end
+                if PlayerViolations[player] > 100 or shouldKick then
+                        if shouldKick then
+                                player:Kick("Movement security violation")
+                        end
+                        CleanupBoat(player)
+                        return
+                end
 
-	BoatLastActivity[player] = tick()
+                local lastValidPosition = BoatSecurity.GetLastValidPosition(player)
+                if lastValidPosition then
+                        local fallbackCFrame = CFrame.new(lastValidPosition, lastValidPosition + currentCFrame.LookVector)
+                        controlPart.CFrame = fallbackCFrame
+                else
+                        controlPart.CFrame = currentCFrame
+                end
+
+                if boat.PrimaryPart then
+                        local bodyVel = boat.PrimaryPart:FindFirstChild("BoatBodyVelocity")
+                        if bodyVel then
+                                bodyVel.Velocity = Vector3.new(0, 0, 0)
+                        end
+                end
+
+                return
+        end
+
+        -- Update position
+        controlPart.CFrame = newCFrame
+
+        -- Update BodyVelocity for momentum
+        if boat.PrimaryPart then
+                local bodyVel = boat.PrimaryPart:FindFirstChild("BoatBodyVelocity")
+                if bodyVel then
+                        local velocityDirection = newCFrame.LookVector
+                        local momentumFactor = 0.3 * (1 + config.Weight * 0.05)
+                        local targetVelocity = velocityDirection * currentSpeed * momentumFactor
+                        bodyVel.Velocity = bodyVel.Velocity:Lerp(targetVelocity, 0.1)
+                end
+        end
+
+        BoatLastActivity[player] = tick()
 end
 
 -- Main update loop

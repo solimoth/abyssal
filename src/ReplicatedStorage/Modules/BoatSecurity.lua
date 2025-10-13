@@ -6,11 +6,15 @@ local RunService = game:GetService("RunService")
 
 local BoatSecurity = {}
 
--- Security constants
+local RATE_TOLERANCE = 0.15 -- allow 15% headroom to absorb Heartbeat jitter
+local BURST_MULTIPLIER = 2
+local MIN_BUCKET_HEADROOM = 5
+local WARN_THRESHOLD = 10
+local WARN_COOLDOWN = 2
+local KICK_THRESHOLD = 50
 local MAX_BOATS_PER_SERVER = 50
 local MAX_SPEED_TOLERANCE = 2.05 -- Only 5% tolerance
 local MAX_TELEPORT_DISTANCE = 50 -- Max distance boat can move in one frame
-local RATE_LIMIT_WINDOW = 1 -- Time window in seconds
 local MAX_POSITION_HISTORY = 10
 
 -- Player data storage
@@ -115,48 +119,60 @@ end
 
 -- Enhanced remote rate limiting
 function BoatSecurity.CheckRemoteRateLimit(player, remoteName, maxCallsPerSecond)
-	InitializePlayer(player)
+        InitializePlayer(player)
 
-	local currentTime = tick()
-	local limits = RemoteRateLimits[player]
+        local currentTime = tick()
+        maxCallsPerSecond = math.max(maxCallsPerSecond or 1, 1)
+        local fillRate = maxCallsPerSecond * (1 + RATE_TOLERANCE)
+        local bucketCapacity = math.max(maxCallsPerSecond * BURST_MULTIPLIER, maxCallsPerSecond + MIN_BUCKET_HEADROOM)
+        local limits = RemoteRateLimits[player]
 
-	if not limits[remoteName] then
-		limits[remoteName] = {
-			calls = {},
-			violations = 0
-		}
-	end
+        if not limits[remoteName] then
+                limits[remoteName] = {
+                        tokens = bucketCapacity,
+                        lastUpdate = currentTime,
+                        violations = 0,
+                        lastWarnTime = 0,
+                }
+        end
 
-	local remoteData = limits[remoteName]
+        local remoteData = limits[remoteName]
+        local timeElapsed = currentTime - (remoteData.lastUpdate or currentTime)
+        remoteData.lastUpdate = currentTime
 
-	-- Clean old calls
-	local validCalls = {}
-	for _, callTime in ipairs(remoteData.calls) do
-		if currentTime - callTime < RATE_LIMIT_WINDOW then
-			table.insert(validCalls, callTime)
-		end
-	end
-	remoteData.calls = validCalls
+        if remoteData.tokens > bucketCapacity then
+                remoteData.tokens = bucketCapacity
+        end
 
-	-- Check rate
-	if #remoteData.calls >= maxCallsPerSecond then
-		remoteData.violations = remoteData.violations + 1
+        -- Refill bucket using a token bucket so short spikes are tolerated and
+        -- a slightly higher burst (2x requested rate) is allowed before we
+        -- start counting violations. This matches the behaviour players see
+        -- when packets arrive in small clumps instead of perfectly spaced
+        -- intervals.
+        remoteData.tokens = math.min(bucketCapacity, (remoteData.tokens or bucketCapacity) + timeElapsed * fillRate)
 
-		if remoteData.violations > 10 then
-			warn("Player", player.Name, "exceeded rate limit for", remoteName)
+        if remoteData.tokens < 1 then
+                remoteData.violations = (remoteData.violations or 0) + 1
+                remoteData.lastWarnTime = remoteData.lastWarnTime or 0
 
-			-- Kick for excessive violations
-			if remoteData.violations > 50 then
-				player:Kick("Rate limit violation")
-			end
-		end
+                if remoteData.violations >= WARN_THRESHOLD then
+                        if currentTime - remoteData.lastWarnTime >= WARN_COOLDOWN then
+                                warn("Player", player.Name, "exceeded rate limit for", remoteName)
+                                remoteData.lastWarnTime = currentTime
+                        end
 
-		return false
-	end
+                        -- Kick for excessive violations
+                        if remoteData.violations > KICK_THRESHOLD then
+                                player:Kick("Rate limit violation")
+                        end
+                end
 
-	-- Add current call
-	table.insert(remoteData.calls, currentTime)
-	return true
+                return false
+        end
+
+        remoteData.tokens = math.max(remoteData.tokens - 1, 0)
+        remoteData.violations = math.max((remoteData.violations or 0) - 0.25, 0)
+        return true
 end
 
 -- Validate boat ownership

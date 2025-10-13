@@ -10,7 +10,6 @@ local BoatSecurity = {}
 local MAX_BOATS_PER_SERVER = 50
 local MAX_SPEED_TOLERANCE = 2.05 -- Only 5% tolerance
 local MAX_TELEPORT_DISTANCE = 50 -- Max distance boat can move in one frame
-local RATE_LIMIT_WINDOW = 1 -- Time window in seconds
 local MAX_POSITION_HISTORY = 10
 
 -- Player data storage
@@ -115,48 +114,50 @@ end
 
 -- Enhanced remote rate limiting
 function BoatSecurity.CheckRemoteRateLimit(player, remoteName, maxCallsPerSecond)
-	InitializePlayer(player)
+        InitializePlayer(player)
 
-	local currentTime = tick()
-	local limits = RemoteRateLimits[player]
+        local currentTime = tick()
+        maxCallsPerSecond = math.max(maxCallsPerSecond or 1, 1)
+        local limits = RemoteRateLimits[player]
 
-	if not limits[remoteName] then
-		limits[remoteName] = {
-			calls = {},
-			violations = 0
-		}
-	end
+        if not limits[remoteName] then
+                limits[remoteName] = {
+                        tokens = maxCallsPerSecond,
+                        lastUpdate = currentTime,
+                        violations = 0,
+                }
+        end
 
-	local remoteData = limits[remoteName]
+        local remoteData = limits[remoteName]
+        local timeElapsed = currentTime - (remoteData.lastUpdate or currentTime)
+        remoteData.lastUpdate = currentTime
 
-	-- Clean old calls
-	local validCalls = {}
-	for _, callTime in ipairs(remoteData.calls) do
-		if currentTime - callTime < RATE_LIMIT_WINDOW then
-			table.insert(validCalls, callTime)
-		end
-	end
-	remoteData.calls = validCalls
+        -- Refill bucket using a token bucket so short spikes are tolerated and
+        -- a slightly higher burst (2x requested rate) is allowed before we
+        -- start counting violations. This matches the behaviour players see
+        -- when packets arrive in small clumps instead of perfectly spaced
+        -- intervals.
+        local bucketCapacity = math.max(maxCallsPerSecond * 2, maxCallsPerSecond + 5)
+        remoteData.tokens = math.min(bucketCapacity, (remoteData.tokens or maxCallsPerSecond) + timeElapsed * maxCallsPerSecond)
 
-	-- Check rate
-	if #remoteData.calls >= maxCallsPerSecond then
-		remoteData.violations = remoteData.violations + 1
+        if remoteData.tokens < 1 then
+                remoteData.violations = (remoteData.violations or 0) + 1
 
-		if remoteData.violations > 10 then
-			warn("Player", player.Name, "exceeded rate limit for", remoteName)
+                if remoteData.violations > 10 then
+                        warn("Player", player.Name, "exceeded rate limit for", remoteName)
 
-			-- Kick for excessive violations
-			if remoteData.violations > 50 then
-				player:Kick("Rate limit violation")
-			end
-		end
+                        -- Kick for excessive violations
+                        if remoteData.violations > 50 then
+                                player:Kick("Rate limit violation")
+                        end
+                end
 
-		return false
-	end
+                return false
+        end
 
-	-- Add current call
-	table.insert(remoteData.calls, currentTime)
-	return true
+        remoteData.tokens = math.max(remoteData.tokens - 1, 0)
+        remoteData.violations = math.max((remoteData.violations or 0) - 0.25, 0)
+        return true
 end
 
 -- Validate boat ownership
@@ -198,8 +199,8 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
 	end
 
 	-- Check for NaN or infinite values
-	if newPosition.X ~= newPosition.X or 
-		newPosition.Y ~= newPosition.Y or 
+	if newPosition.X ~= newPosition.X or
+		newPosition.Y ~= newPosition.Y or
 		newPosition.Z ~= newPosition.Z or
 		math.abs(newPosition.X) == math.huge or
 		math.abs(newPosition.Y) == math.huge or
@@ -207,8 +208,12 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
 		return false, "Invalid position", true
 	end
 
-	local currentPosition = boat.PrimaryPart.Position
-	local distance = (newPosition - currentPosition).Magnitude
+	-- Boats are physically moved by AlignPosition constraints which can lag
+	-- slightly behind the server controlled "target" position. When checking
+	-- for suspicious movement we therefore compare against the last validated
+	-- target position if we have one instead of the boat's physical location.
+	local referencePosition = LastValidPositions[player] or boat.PrimaryPart.Position
+	local distance = (newPosition - referencePosition).Magnitude
 
 	-- Store position history
 	local history = BoatPositionHistory[player]

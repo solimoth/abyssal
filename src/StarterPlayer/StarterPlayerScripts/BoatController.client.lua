@@ -947,9 +947,53 @@ local function OnCharacterAdded(character)
 end
 
 if player.Character then
-	OnCharacterAdded(player.Character)
+        OnCharacterAdded(player.Character)
 end
 player.CharacterAdded:Connect(OnCharacterAdded)
+
+local function WatchPlayerGui(gui)
+        if not gui then
+                return
+        end
+
+        local function hookBoatHud(screenGui)
+                task.defer(EnsureHud)
+
+                screenGui:GetAttributeChangedSignal(HUD_ENABLE_ATTRIBUTE):Connect(function()
+                        task.defer(EnsureHud)
+                end)
+
+                screenGui:GetAttributeChangedSignal(HUD_RUNTIME_ATTRIBUTE):Connect(function()
+                        task.defer(EnsureHud)
+                end)
+        end
+
+        for _, descendant in ipairs(gui:GetDescendants()) do
+                if descendant:IsA("ScreenGui") and descendant.Name == "BoatHUD" then
+                        hookBoatHud(descendant)
+                end
+        end
+
+        gui.DescendantAdded:Connect(function(descendant)
+                if descendant:IsA("ScreenGui") and descendant.Name == "BoatHUD" then
+                        hookBoatHud(descendant)
+                end
+        end)
+end
+
+task.defer(EnsureHud)
+
+local existingGui = player:FindFirstChildOfClass("PlayerGui") or player:FindFirstChild("PlayerGui")
+if existingGui then
+        WatchPlayerGui(existingGui)
+end
+
+player.ChildAdded:Connect(function(child)
+        if child:IsA("PlayerGui") then
+                WatchPlayerGui(child)
+                task.defer(EnsureHud)
+        end
+end)
 
 -- Input handling
 local keysPressed = {}

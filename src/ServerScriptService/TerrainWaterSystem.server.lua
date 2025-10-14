@@ -13,8 +13,6 @@ local BASE_SWIM_SPEED = 16 -- Default humanoid walk speed is reused for swimming
 local MIN_SWIM_SPEED = 6 -- Minimum speed at extreme depth
 local DEPTH_SLOW_FACTOR = 0.2 -- Speed lost per stud of depth
 
-local WATER_LEVEL = WaterPhysics.GetWaterLevel()
-
 local playerStates = {}
 
 local BUOYANCY_ATTACHMENT_NAME = "WaterBuoyancyAttachment"
@@ -96,7 +94,7 @@ local function getOrCreateLinearVelocity(attachment)
         return linearVelocity
 end
 
-local function updateSwimController(character, state, enabled, desiredVelocity, deltaTime)
+local function updateSwimController(character, state, enabled, desiredVelocity, deltaTime, surfaceY)
         local rootPart = character and character:FindFirstChild("HumanoidRootPart")
         if not rootPart then
                 return
@@ -133,7 +131,7 @@ local function updateSwimController(character, state, enabled, desiredVelocity, 
         local targetVertical = verticalInput
 
         if math.abs(verticalInput) < 0.1 then
-                local targetSurfaceY = WATER_LEVEL - SURFACE_HOLD_OFFSET
+                local targetSurfaceY = (surfaceY or rootPart.Position.Y) - SURFACE_HOLD_OFFSET
                 local positionError = targetSurfaceY - rootPart.Position.Y
                 local damping = currentVelocity.Y * SURFACE_HOLD_DAMPING
                 targetVertical = math.clamp((positionError * SURFACE_HOLD_STIFFNESS) - damping, -MAX_VERTICAL_SPEED, MAX_VERTICAL_SPEED)
@@ -247,7 +245,8 @@ local function processCharacter(player, deltaTime)
         end
 
         local insideShip = isInsideShipInterior(character)
-        local rootUnderwater = WaterPhysics.IsUnderwater(rootPart.Position)
+        local surfaceY = WaterPhysics.TryGetWaterSurface(rootPart.Position)
+        local rootUnderwater = surfaceY ~= nil and rootPart.Position.Y < surfaceY
         local headUnderwater = WaterPhysics.IsUnderwater(head.Position)
 
         local shouldSwim = rootUnderwater and not insideShip
@@ -263,10 +262,13 @@ local function processCharacter(player, deltaTime)
                 desiredVelocity = Vector3.zero
         end
 
-        updateSwimController(character, state, shouldSwim, desiredVelocity, deltaTime)
+        updateSwimController(character, state, shouldSwim, desiredVelocity, deltaTime, surfaceY)
 
         if humanoid:GetState() == Enum.HumanoidStateType.Swimming and rootUnderwater then
-                local depth = math.max(0, WATER_LEVEL - rootPart.Position.Y)
+                local depth = 0
+                if surfaceY then
+                        depth = math.max(0, surfaceY - rootPart.Position.Y)
+                end
                 updateSwimmingSpeed(humanoid, depth, state)
         else
                 restoreSpeedIfNeeded(humanoid, state)

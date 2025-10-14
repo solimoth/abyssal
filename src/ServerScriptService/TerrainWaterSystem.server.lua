@@ -20,8 +20,8 @@ local playerStates = {}
 local BUOYANCY_FORCE_NAME = "WaterBuoyancyForce"
 local BUOYANCY_ATTACHMENT_NAME = "WaterBuoyancyAttachment"
 local WATER_DRAG_COEFFICIENT = 4 -- How quickly velocity bleeds off while submerged
-local BOB_FORCE = 1.2 -- Upward/downward acceleration used to simulate gentle bobbing
-local BOB_FREQUENCY = 0.8
+local BOB_FORCE = 0.12 -- Upward/downward acceleration used to simulate gentle bobbing
+local BOB_FREQUENCY = 0.55
 local SWIM_FORCE_COEFFICIENT = 10 -- How aggressively characters accelerate toward their desired velocity
 local SWIM_DESIRED_VELOCITY_ATTRIBUTE = "WaterSwimDesiredVelocity"
 

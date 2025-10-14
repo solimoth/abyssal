@@ -19,6 +19,9 @@ local playerStates = {}
 
 local BUOYANCY_FORCE_NAME = "WaterBuoyancyForce"
 local BUOYANCY_ATTACHMENT_NAME = "WaterBuoyancyAttachment"
+local WATER_DRAG_COEFFICIENT = 6 -- How quickly velocity bleeds off while submerged
+local BOB_FORCE = 6 -- Upward/downward acceleration used to simulate gentle bobbing
+local BOB_FREQUENCY = 1.1
 
 local function ensureState(player)
         local state = playerStates[player]
@@ -29,6 +32,7 @@ local function ensureState(player)
                         defaultSpeed = nil,
                         isDrowning = false,
                         nextOxygenPrint = 0,
+                        bobOffset = math.random(),
                 }
                 playerStates[player] = state
         end
@@ -42,6 +46,7 @@ local function resetStateForCharacter(player)
         state.defaultSpeed = nil
         state.isDrowning = false
         state.nextOxygenPrint = 0
+        state.bobOffset = math.random()
 end
 
 local function isInsideShipInterior(character)
@@ -66,7 +71,7 @@ local function isInsideShipInterior(character)
         return false
 end
 
-local function setBuoyancyEnabled(character, enabled)
+local function updateBuoyancy(character, state, enabled)
         local rootPart = character and character:FindFirstChild("HumanoidRootPart")
         if not rootPart then
                 return
@@ -75,29 +80,41 @@ local function setBuoyancyEnabled(character, enabled)
         local attachment = rootPart:FindFirstChild(BUOYANCY_ATTACHMENT_NAME)
         local force = rootPart:FindFirstChild(BUOYANCY_FORCE_NAME)
 
-        if enabled then
-                if not attachment then
-                        attachment = Instance.new("Attachment")
-                        attachment.Name = BUOYANCY_ATTACHMENT_NAME
-                        attachment.Parent = rootPart
+        if not enabled then
+                if force then
+                        force.Force = Vector3.zero
+                        force.Enabled = false
                 end
-
-                if not force then
-                        force = Instance.new("VectorForce")
-                        force.Name = BUOYANCY_FORCE_NAME
-                        force.ApplyAtCenterOfMass = true
-                        force.RelativeTo = Enum.ActuatorRelativeTo.World
-                        force.Attachment0 = attachment
-                        force.Parent = rootPart
-                end
-
-                local mass = rootPart.AssemblyMass
-                force.Force = Vector3.new(0, Workspace.Gravity * mass, 0)
-                force.Enabled = true
-        elseif force then
-                force.Force = Vector3.zero
-                force.Enabled = false
+                return
         end
+
+        if not attachment then
+                attachment = Instance.new("Attachment")
+                attachment.Name = BUOYANCY_ATTACHMENT_NAME
+                attachment.Parent = rootPart
+        end
+
+        if not force then
+                force = Instance.new("VectorForce")
+                force.Name = BUOYANCY_FORCE_NAME
+                force.ApplyAtCenterOfMass = true
+                force.RelativeTo = Enum.ActuatorRelativeTo.World
+                force.Attachment0 = attachment
+                force.Parent = rootPart
+        end
+
+        local mass = rootPart.AssemblyMass
+        local velocity = rootPart.AssemblyLinearVelocity
+        local dragForce = -velocity * WATER_DRAG_COEFFICIENT * mass
+
+        local bobTime = tick() + (state and state.bobOffset or 0)
+        local bobAcceleration = math.sin(bobTime * BOB_FREQUENCY) * BOB_FORCE
+
+        local gravityForce = Vector3.new(0, Workspace.Gravity * mass, 0)
+        local bobbingForce = Vector3.new(0, bobAcceleration * mass, 0)
+
+        force.Force = gravityForce + bobbingForce + dragForce
+        force.Enabled = true
 end
 
 local function updateSwimmingSpeed(humanoid, depth, state)
@@ -200,13 +217,15 @@ local function processCharacter(player, deltaTime)
         local rootUnderwater = WaterPhysics.IsUnderwater(rootPart.Position)
         local headUnderwater = WaterPhysics.IsUnderwater(head.Position)
 
-        if rootUnderwater and not insideShip then
+        local shouldSwim = rootUnderwater and not insideShip
+
+        if shouldSwim then
                 ensureSwimming(humanoid)
-                setBuoyancyEnabled(character, true)
         else
                 ensureNotSwimming(humanoid)
-                setBuoyancyEnabled(character, false)
         end
+
+        updateBuoyancy(character, state, shouldSwim)
 
         if humanoid:GetState() == Enum.HumanoidStateType.Swimming and rootUnderwater then
                 local depth = math.max(0, WATER_LEVEL - rootPart.Position.Y)

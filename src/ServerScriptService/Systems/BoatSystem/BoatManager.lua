@@ -1032,3 +1032,4 @@ function BoatManager.Initialize()
 end
 
 return BoatManager
+

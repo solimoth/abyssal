@@ -46,6 +46,26 @@ local submarineMode = "surface"
 local WATER_LEVEL = 908.935
 local activeDiveTask = nil
 
+-- HUD elements
+local hudGui = nil
+local hudFrame = nil
+local hudElements = {}
+local hudTweens = {
+        throttle = nil,
+        speed = nil,
+        fade = nil,
+}
+local hudState = {
+        throttleValue = 0,
+        speedPercent = 0,
+}
+local hudFadeToken = 0
+local lastHudUpdate = 0
+
+local function IsTextObject(object)
+        return object and (object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox"))
+end
+
 -- ACCELERATION SYSTEM VARIABLES
 local currentSpeed = 0
 local targetSpeed = 0
@@ -69,6 +89,157 @@ local rollAccelerationRate = 2
 local inputSmoothness = 0.15
 local smoothedThrottle = 0
 local smoothedSteer = 0
+
+local function EnsureHud()
+        local playerGui = player:FindFirstChildOfClass("PlayerGui") or player:FindFirstChild("PlayerGui")
+        if not playerGui then
+                playerGui = player:WaitForChild("PlayerGui", 5)
+        end
+
+        if not playerGui then
+                hudGui = nil
+                hudFrame = nil
+                hudElements = {}
+                return false
+        end
+
+        if hudGui and not hudGui:IsDescendantOf(playerGui) then
+                hudGui = nil
+                hudFrame = nil
+                hudElements = {}
+        end
+
+        if not hudGui then
+                local candidate = playerGui:FindFirstChild("BoatHUD", true)
+                if candidate and candidate:IsA("ScreenGui") then
+                        hudGui = candidate
+                end
+        end
+
+        if hudGui then
+                if not hudFrame or not hudFrame.Parent then
+                        hudFrame = hudGui:FindFirstChild("Container", true)
+                end
+        end
+
+        if not (hudGui and hudFrame and hudFrame:IsA("GuiObject")) then
+                hudFrame = nil
+                hudElements = {}
+                return false
+        end
+
+        hudElements = {
+                boatLabel = hudFrame:FindFirstChild("BoatLabel", true),
+                speedValue = hudFrame:FindFirstChild("SpeedValue", true),
+                speedUnit = hudFrame:FindFirstChild("SpeedUnit", true),
+                detailLabel = hudFrame:FindFirstChild("DetailLabel", true),
+                cameraLabel = hudFrame:FindFirstChild("CameraLabel", true),
+                statusLabel = hudFrame:FindFirstChild("StatusLabel", true),
+        }
+
+        local speedMeter = hudFrame:FindFirstChild("SpeedMeter", true)
+        if speedMeter and speedMeter:IsA("GuiObject") then
+                hudElements.speedFill = speedMeter:FindFirstChild("SpeedFill", true)
+        end
+
+        local throttleContainer = hudFrame:FindFirstChild("ThrottleContainer", true)
+        if throttleContainer and throttleContainer:IsA("GuiObject") then
+                hudElements.throttleIndicator = throttleContainer:FindFirstChild("ThrottleIndicator", true)
+        end
+
+        local depthContainer = hudFrame:FindFirstChild("DepthContainer", true)
+        if depthContainer and depthContainer:IsA("GuiObject") then
+                hudElements.depthContainer = depthContainer
+                hudElements.depthValue = depthContainer:FindFirstChild("DepthValue", true)
+        end
+
+        return true
+end
+
+local function ToggleHud(visible)
+        if not EnsureHud() then
+                return
+        end
+
+        if visible then
+                hudFadeToken = hudFadeToken + 1
+                hudGui.Enabled = true
+                hudFrame.Visible = true
+                if hudTweens.fade then
+                        hudTweens.fade:Cancel()
+                        hudTweens.fade = nil
+                end
+                hudFrame.Position = UDim2.new(0.5, 0, 1, 12)
+                local tween = TweenService:Create(hudFrame, TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out), {
+                        Position = UDim2.new(0.5, 0, 1, -48),
+                        BackgroundTransparency = 0.25,
+                })
+                tween:Play()
+                hudTweens.fade = tween
+        else
+                hudFadeToken = hudFadeToken + 1
+                local token = hudFadeToken
+                if hudTweens.fade then
+                        hudTweens.fade:Cancel()
+                        hudTweens.fade = nil
+                end
+
+                local tween = TweenService:Create(hudFrame, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+                        Position = UDim2.new(0.5, 0, 1, 12),
+                        BackgroundTransparency = 0.45,
+                })
+                tween:Play()
+                hudTweens.fade = tween
+
+                task.delay(0.22, function()
+                        if hudGui and hudFadeToken == token then
+                                hudGui.Enabled = false
+                        end
+                        if hudFrame and hudFadeToken == token then
+                                hudFrame.Visible = false
+                        end
+                end)
+        end
+end
+
+local function RefreshHudStaticInfo()
+        if not EnsureHud() then
+                return
+        end
+
+        local boatType = currentBoat and currentBoat:GetAttribute("BoatType")
+        local displayName = (boatConfig and boatConfig.DisplayName)
+                or (boatType and boatType:gsub("%u", function(letter)
+                        return " " .. letter
+                end):gsub("^ ", ""))
+                or "Vessel"
+
+        local boatLabel = hudElements.boatLabel
+        if IsTextObject(boatLabel) then
+                boatLabel.Text = string.upper(displayName)
+        end
+
+        local statusLabel = hudElements.statusLabel
+        if IsTextObject(statusLabel) then
+                local vesselType = boatConfig and boatConfig.Type or "Surface"
+                statusLabel.Text = string.upper(vesselType .. " MODE")
+        end
+
+        local detailLabel = hudElements.detailLabel
+        if IsTextObject(detailLabel) and boatType then
+                local accelTime = BoatConfig.GetTimeToMaxSpeed(boatType)
+                detailLabel.Text = string.format("MAX %d  |  %.1fs TO MAX  |  %dT", math.floor(maxSpeed + 0.5), accelTime, boatWeight)
+        elseif IsTextObject(detailLabel) then
+                detailLabel.Text = string.format("MAX %d  |  %dT", math.floor(maxSpeed + 0.5), boatWeight)
+        end
+end
+
+local function UpdateCameraIndicator()
+        local cameraLabel = hudElements.cameraLabel
+        if IsTextObject(cameraLabel) then
+                cameraLabel.Text = string.format("CAM: %s", string.upper(cameraMode))
+        end
+end
 
 -- Helper functions
 local function GetBoatFromSeat(seat)
@@ -104,13 +275,15 @@ local function UpdateAccelerationValues()
 	-- Submarine rotation acceleration MUCH MORE affected by weight
 	-- Light subs (weight 2): factor = 1.64, Heavy subs (weight 10): factor = 0.2
 	local rotationAccelFactor = 2.0 - (boatWeight * 0.18)
-	rotationAccelFactor = math.clamp(rotationAccelFactor, 0.2, 2.0)
+        rotationAccelFactor = math.clamp(rotationAccelFactor, 0.2, 2.0)
 
-	pitchAccelerationRate = 3 * rotationAccelFactor  -- Much more dramatic
-	rollAccelerationRate = 2.5 * rotationAccelFactor  -- Roll is harder
+        pitchAccelerationRate = 3 * rotationAccelFactor  -- Much more dramatic
+        rollAccelerationRate = 2.5 * rotationAccelFactor  -- Roll is harder
 
-	print(string.format("Boat physics loaded: Weight=%d, MaxSpeed=%d, AccelRate=%.1f, PitchAccel=%.1f", 
-		boatWeight, maxSpeed, accelerationRate, pitchAccelerationRate))
+        print(string.format("Boat physics loaded: Weight=%d, MaxSpeed=%d, AccelRate=%.1f, PitchAccel=%.1f",
+                boatWeight, maxSpeed, accelerationRate, pitchAccelerationRate))
+
+        RefreshHudStaticInfo()
 end
 
 -- ENHANCED CONTROL SENDING WITH ACCELERATION
@@ -286,14 +459,97 @@ end
 
 -- Display speed info (optional UI element)
 local function UpdateSpeedDisplay()
-	if not isControlling or not currentBoat then return end
+        if not isControlling or not currentBoat then return end
 
-	-- You can add UI elements here to show:
-	-- Current Speed: currentSpeed
-	-- Max Speed: maxSpeed
-	-- Speed Percentage: (currentSpeed/maxSpeed) * 100
-	-- Weight: boatWeight
-	-- Acceleration Time: BoatConfig.GetTimeToMaxSpeed(currentBoat:GetAttribute("BoatType"))
+        local now = tick()
+        if now - lastHudUpdate < 1/30 then
+                return
+        end
+        lastHudUpdate = now
+
+        if not EnsureHud() then
+                return
+        end
+
+        if hudGui and not hudGui.Enabled then
+                ToggleHud(true)
+        end
+
+        UpdateCameraIndicator()
+
+        local speedAbs = math.abs(currentSpeed)
+        local speedPercent = (maxSpeed > 0) and math.clamp(speedAbs / maxSpeed, 0, 1) or 0
+
+        local speedValueLabel = hudElements.speedValue
+        if IsTextObject(speedValueLabel) then
+                speedValueLabel.Text = string.format("%03d", math.floor(speedAbs + 0.5))
+        end
+
+        local speedUnitLabel = hudElements.speedUnit
+        if IsTextObject(speedUnitLabel) then
+                speedUnitLabel.Text = string.format("STUDS/SEC  •  %d%%", math.floor((speedPercent * 100) + 0.5))
+        end
+
+        local speedFill = hudElements.speedFill
+        if speedFill and speedFill:IsA("GuiObject") and math.abs(speedPercent - hudState.speedPercent) > 0.01 then
+                if hudTweens.speed then
+                        hudTweens.speed:Cancel()
+                end
+                hudTweens.speed = TweenService:Create(speedFill, TweenInfo.new(0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
+                        Size = UDim2.new(speedPercent, 0, 1, 0),
+                })
+                hudTweens.speed:Play()
+                hudState.speedPercent = speedPercent
+        end
+
+        local throttleValue = math.clamp(smoothedThrottle, -1, 1)
+        local throttleIndicator = hudElements.throttleIndicator
+        if throttleIndicator and throttleIndicator:IsA("GuiObject") and math.abs(throttleValue - hudState.throttleValue) > 0.01 then
+                hudState.throttleValue = throttleValue
+                if hudTweens.throttle then
+                        hudTweens.throttle:Cancel()
+                end
+
+                local throttleColor = throttleValue >= 0 and Color3.fromRGB(72, 210, 170) or Color3.fromRGB(255, 120, 120)
+                local throttleTween = TweenService:Create(throttleIndicator, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                        Position = UDim2.new(0.5 + 0.45 * throttleValue, 0, 0.5, 0),
+                        BackgroundColor3 = throttleColor,
+                })
+                hudTweens.throttle = throttleTween
+                throttleTween:Play()
+        end
+
+        local statusLabel = hudElements.statusLabel
+        if IsTextObject(statusLabel) then
+                local throttlePercent = math.floor(math.abs(throttleValue) * 100 + 0.5)
+                local statusPrefix
+                if isSubmarine then
+                        statusPrefix = string.upper(submarineMode)
+                else
+                        statusPrefix = throttleValue >= 0 and "AHEAD" or "ASTERN"
+                end
+
+                statusLabel.Text = string.format("%s • %d%% PWR", statusPrefix, throttlePercent)
+        end
+
+        local depthContainer = hudElements.depthContainer
+        if depthContainer and depthContainer:IsA("GuiObject") then
+                depthContainer.Visible = isSubmarine
+                local depthValueLabel = hudElements.depthValue
+                if isSubmarine and IsTextObject(depthValueLabel) and currentBoat.PrimaryPart then
+                        local depth = math.max(0, WATER_LEVEL - currentBoat.PrimaryPart.Position.Y)
+                        depthValueLabel.Text = string.format("%.1f", depth)
+
+                        if depth < 8 then
+                                depthValueLabel.TextColor3 = Color3.fromRGB(190, 245, 220)
+                        elseif depth < 40 then
+                                depthValueLabel.TextColor3 = Color3.fromRGB(120, 210, 255)
+                        else
+                                depthValueLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
+                        end
+                end
+        end
+
 end
 
 -- Cleanup
@@ -310,14 +566,53 @@ local function CleanupBoatSession()
 		Camera.FieldOfView = 70
 	end
 
-	if controlUpdateConnection then
-		controlUpdateConnection:Disconnect()
-		controlUpdateConnection = nil
-	end
+        if controlUpdateConnection then
+                controlUpdateConnection:Disconnect()
+                controlUpdateConnection = nil
+        end
 
-	-- Reset all variables including speed and rotation speeds
-	submarineControls = {ascend = 0, pitch = 0, roll = 0}
-	smoothedThrottle = 0
+        if hudTweens.throttle then
+                hudTweens.throttle:Cancel()
+                hudTweens.throttle = nil
+        end
+
+        if hudTweens.speed then
+                hudTweens.speed:Cancel()
+                hudTweens.speed = nil
+        end
+
+        if hudTweens.fade then
+                hudTweens.fade:Cancel()
+                hudTweens.fade = nil
+        end
+
+        if hudGui and hudGui.Enabled then
+                ToggleHud(false)
+        end
+
+        hudState.throttleValue = 0
+        hudState.speedPercent = 0
+
+        local speedFill = hudElements.speedFill
+        if speedFill and speedFill:IsA("GuiObject") then
+                speedFill.Size = UDim2.new(0, 0, 1, 0)
+        end
+
+        local throttleIndicator = hudElements.throttleIndicator
+        if throttleIndicator and throttleIndicator:IsA("GuiObject") then
+                throttleIndicator.Position = UDim2.new(0.5, 0, 0.5, 0)
+                throttleIndicator.BackgroundColor3 = Color3.fromRGB(72, 210, 170)
+        end
+
+        if hudElements.depthContainer and hudElements.depthContainer:IsA("GuiObject") then
+                hudElements.depthContainer.Visible = false
+        end
+
+        lastHudUpdate = 0
+
+        -- Reset all variables including speed and rotation speeds
+        submarineControls = {ascend = 0, pitch = 0, roll = 0}
+        smoothedThrottle = 0
 	smoothedSteer = 0
 	currentSpeed = 0
 	targetSpeed = 0
@@ -356,21 +651,42 @@ local function OnCharacterSeated(active, seatPart)
 					return BoatConfig.GetBoatData(boatType)
 				end)
 
-				if success then
-					boatConfig = config
-					isSubmarine = boatConfig and boatConfig.Type == "Submarine"
+                                if success then
+                                        boatConfig = config
+                                        isSubmarine = boatConfig and boatConfig.Type == "Submarine"
 
-					-- Update acceleration values for this boat
-					UpdateAccelerationValues()
-				end
+                                        -- Update acceleration values for this boat
+                                        UpdateAccelerationValues()
+                                end
 
-				if isOwner then
-					isControlling = true
+                                if isOwner then
+                                        isControlling = true
 
-					if isSubmarine and currentBoat.PrimaryPart then
-						local depth = WATER_LEVEL - currentBoat.PrimaryPart.Position.Y
-						submarineMode = depth > 8 and "dive" or "surface"
-					end
+                                        if EnsureHud() then
+                                                ToggleHud(true)
+                                                hudState.throttleValue = 0
+                                                hudState.speedPercent = 0
+                                                lastHudUpdate = 0
+
+                                                  local throttleIndicator = hudElements.throttleIndicator
+                                                  if throttleIndicator and throttleIndicator:IsA("GuiObject") then
+                                                          throttleIndicator.Position = UDim2.new(0.5, 0, 0.5, 0)
+                                                          throttleIndicator.BackgroundColor3 = Color3.fromRGB(72, 210, 170)
+                                                  end
+
+                                                  local speedFill = hudElements.speedFill
+                                                  if speedFill and speedFill:IsA("GuiObject") then
+                                                          speedFill.Size = UDim2.new(0, 0, 1, 0)
+                                                  end
+
+                                                  RefreshHudStaticInfo()
+                                                UpdateCameraIndicator()
+                                        end
+
+                                        if isSubmarine and currentBoat.PrimaryPart then
+                                                local depth = WATER_LEVEL - currentBoat.PrimaryPart.Position.Y
+                                                submarineMode = depth > 8 and "dive" or "surface"
+                                        end
 
 					cameraMode = "Follow"
 					cameraConnection = RunService.RenderStepped:Connect(UpdateBoatCamera)
@@ -516,16 +832,17 @@ local function OnInputBegan(input, gameProcessed)
 		currentIndex = currentIndex % #modes + 1
 		cameraMode = modes[currentIndex]
 
-		if cameraMode == "Follow" then
-			cameraSmoothness = 0.2
-		elseif cameraMode == "Chase" then
-			cameraSmoothness = 0.25
-		elseif cameraMode == "Cinematic" then
-			cameraSmoothness = 0.12
-		end
+                if cameraMode == "Follow" then
+                        cameraSmoothness = 0.2
+                elseif cameraMode == "Chase" then
+                        cameraSmoothness = 0.25
+                elseif cameraMode == "Cinematic" then
+                        cameraSmoothness = 0.12
+                end
 
-		print("Camera:", cameraMode)
-	end
+                UpdateCameraIndicator()
+                print("Camera:", cameraMode)
+        end
 end
 
 local function OnInputEnded(input, gameProcessed)

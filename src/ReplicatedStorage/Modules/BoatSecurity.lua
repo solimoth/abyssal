@@ -4,6 +4,8 @@
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
 
+local BoatConfig = require(game.ReplicatedStorage.Modules.BoatConfig)
+
 local BoatSecurity = {}
 
 local RATE_TOLERANCE = 0.15 -- allow 15% headroom to absorb Heartbeat jitter
@@ -31,9 +33,10 @@ local function InitializePlayer(player)
 			lastSpawnTime = 0,
 			violations = 0,
 			lastViolationTime = 0,
-			boatSpawnedAt = 0
-		}
-	end
+                        boatSpawnedAt = 0,
+                        lastDecayTime = 0
+                }
+        end
 
 	if not RemoteRateLimits[player] then
 		RemoteRateLimits[player] = {}
@@ -207,11 +210,14 @@ end
 
 -- Enhanced boat movement validation
 function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
-	InitializePlayer(player)
+        InitializePlayer(player)
 
-	if not boat or not boat.PrimaryPart then
-		return false, "Invalid boat", false
-	end
+        local data = PlayerData[player]
+        local currentTime = tick()
+
+        if not boat or not boat.PrimaryPart then
+                return false, "Invalid boat", false
+        end
 
 	-- Check for NaN or infinite values
 	if newPosition.X ~= newPosition.X or
@@ -231,7 +237,11 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
 	local distance = (newPosition - referencePosition).Magnitude
 
 	-- Store position history
-	local history = BoatPositionHistory[player]
+        local history = BoatPositionHistory[player]
+        if not history then
+                BoatPositionHistory[player] = {}
+                history = BoatPositionHistory[player]
+        end
 	table.insert(history, {
 		position = newPosition,
 		time = tick(),
@@ -245,16 +255,17 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
 
 	-- Check for teleporting
 	local maxAllowedDistance = MAX_TELEPORT_DISTANCE * math.max(deltaTime, 0.03)
-	if distance > maxAllowedDistance then
-		PlayerData[player].violations = PlayerData[player].violations + 1
+        if distance > maxAllowedDistance then
+                data.violations = data.violations + 1
+                data.lastViolationTime = currentTime
 
-		-- Use last valid position if available
-		if LastValidPositions[player] then
-			return false, "Teleport detected", PlayerData[player].violations > 10
-		end
+                -- Use last valid position if available
+                if LastValidPositions[player] then
+                        return false, "Teleport detected", data.violations > 10
+                end
 
-		return false, "Teleport detected", false
-	end
+                return false, "Teleport detected", false
+        end
 
 	-- Check speed over time
 	if #history >= 3 then
@@ -268,20 +279,21 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
 
 		if totalTime > 0 then
 			local averageSpeed = totalDistance / totalTime
-			local config = require(game.ReplicatedStorage.Modules.BoatConfig).GetBoatData(boat:GetAttribute("BoatType"))
+                        local config = BoatConfig.GetBoatData(boat:GetAttribute("BoatType"))
 
 			if config then
 				local maxSpeed = (config.MaxSpeed or config.Speed or 30) * MAX_SPEED_TOLERANCE
 
 				if averageSpeed > maxSpeed then
-					PlayerData[player].violations = PlayerData[player].violations + 1
+                                        data.violations = data.violations + 1
+                                        data.lastViolationTime = currentTime
 
-					if PlayerData[player].violations > 20 then
-						return false, "Speed violation", true
-					end
+                                        if data.violations > 20 then
+                                                return false, "Speed violation", true
+                                        end
 
-					return false, "Speed warning", false
-				end
+                                        return false, "Speed warning", false
+                                end
 			end
 		end
 	end
@@ -290,11 +302,18 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
 	LastValidPositions[player] = newPosition
 
 	-- Clear violations if player has been good for a while
-	if tick() - PlayerData[player].lastViolationTime > 30 then
-		PlayerData[player].violations = math.max(0, PlayerData[player].violations - 1)
-	end
+        if data.violations > 0 and data.lastViolationTime and data.lastViolationTime > 0 then
+                if currentTime - data.lastViolationTime > 30 and currentTime - (data.lastDecayTime or 0) > 5 then
+                        data.violations = math.max(0, data.violations - 1)
+                        data.lastDecayTime = currentTime
+                end
+        end
 
-	return true, "Valid", false
+        return true, "Valid", false
+end
+
+function BoatSecurity.GetLastValidPosition(player)
+        return LastValidPositions[player]
 end
 
 -- Check for suspicious boat modifications
@@ -318,13 +337,13 @@ function BoatSecurity.ValidateBoatIntegrity(boat)
 
 	-- Check for suspicious properties
 	local primaryPart = boat.PrimaryPart
-	if primaryPart.Massless and boat:GetAttribute("BoatType") then
-		local config = require(game.ReplicatedStorage.Modules.BoatConfig).GetBoatData(boat:GetAttribute("BoatType"))
-		if config and config.Type ~= "Submarine" then
-			-- Surface boats shouldn't have massless primary parts
-			return false
-		end
-	end
+        if primaryPart.Massless and boat:GetAttribute("BoatType") then
+                local config = BoatConfig.GetBoatData(boat:GetAttribute("BoatType"))
+                if config and config.Type ~= "Submarine" then
+                        -- Surface boats shouldn't have massless primary parts
+                        return false
+                end
+        end
 
 	return true
 end

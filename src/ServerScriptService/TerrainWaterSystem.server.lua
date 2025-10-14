@@ -17,14 +17,13 @@ local WATER_LEVEL = WaterPhysics.GetWaterLevel()
 
 local playerStates = {}
 
-local BUOYANCY_FORCE_NAME = "WaterBuoyancyForce"
 local BUOYANCY_ATTACHMENT_NAME = "WaterBuoyancyAttachment"
-local WATER_DRAG_COEFFICIENT = 1.25 -- How quickly velocity bleeds off while submerged
-local MAX_HORIZONTAL_DRAG_ACCELERATION = 40
-local MAX_VERTICAL_DRAG_ACCELERATION = 30
-local SWIM_FORCE_COEFFICIENT = 3.5 -- How aggressively characters accelerate toward their desired velocity
-local MAX_HORIZONTAL_ACCELERATION = 60
-local MAX_VERTICAL_ACCELERATION = 40
+local SWIM_LINEAR_VELOCITY_NAME = "WaterSwimLinearVelocity"
+local SURFACE_HOLD_OFFSET = 1 -- Target depth below the water surface when idle
+local SURFACE_HOLD_STIFFNESS = 6 -- Controls how quickly characters return to the surface
+local SURFACE_HOLD_DAMPING = 3 -- Dampens oscillations while stabilising at the surface
+local MAX_VERTICAL_SPEED = 18
+local MAX_HORIZONTAL_SPEED = 24
 local SWIM_DESIRED_VELOCITY_ATTRIBUTE = "WaterSwimDesiredVelocity"
 
 local function ensureState(player)
@@ -73,78 +72,82 @@ local function isInsideShipInterior(character)
         return false
 end
 
-local function updateBuoyancy(character, state, enabled, desiredVelocity)
-        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
-        if not rootPart then
-                return
-        end
-
+local function getOrCreateAttachment(rootPart)
         local attachment = rootPart:FindFirstChild(BUOYANCY_ATTACHMENT_NAME)
-        local force = rootPart:FindFirstChild(BUOYANCY_FORCE_NAME)
-
-        if not enabled then
-                if force then
-                        force.Force = Vector3.zero
-                        force.Enabled = false
-                end
-                return
-        end
-
         if not attachment then
                 attachment = Instance.new("Attachment")
                 attachment.Name = BUOYANCY_ATTACHMENT_NAME
                 attachment.Parent = rootPart
         end
+        return attachment
+end
 
-        if not force then
-                force = Instance.new("VectorForce")
-                force.Name = BUOYANCY_FORCE_NAME
-                force.ApplyAtCenterOfMass = true
-                force.RelativeTo = Enum.ActuatorRelativeTo.World
-                force.Attachment0 = attachment
-                force.Parent = rootPart
+local function getOrCreateLinearVelocity(attachment)
+        local linearVelocity = attachment:FindFirstChild(SWIM_LINEAR_VELOCITY_NAME)
+        if not linearVelocity then
+                linearVelocity = Instance.new("LinearVelocity")
+                linearVelocity.Name = SWIM_LINEAR_VELOCITY_NAME
+                linearVelocity.RelativeTo = Enum.ActuatorRelativeTo.World
+                linearVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Vector
+                linearVelocity.Attachment0 = attachment
+                linearVelocity.MaxForce = math.huge
+                linearVelocity.Parent = attachment
+        end
+        return linearVelocity
+end
+
+local function updateSwimController(character, state, enabled, desiredVelocity, deltaTime)
+        local rootPart = character and character:FindFirstChild("HumanoidRootPart")
+        if not rootPart then
+                return
         end
 
-        local mass = rootPart.AssemblyMass
-        local velocity = rootPart.AssemblyLinearVelocity
-
-        local desired = Vector3.zero
-        if desiredVelocity and typeof(desiredVelocity) == "Vector3" then
-                desired = desiredVelocity
+        if not enabled then
+                local attachment = rootPart:FindFirstChild(BUOYANCY_ATTACHMENT_NAME)
+                if attachment then
+                        local linearVelocity = attachment:FindFirstChild(SWIM_LINEAR_VELOCITY_NAME)
+                        if linearVelocity then
+                                linearVelocity.VectorVelocity = Vector3.zero
+                                linearVelocity.Enabled = false
+                        end
+                end
+                return
         end
 
-        local horizontalVelocity = Vector3.new(velocity.X, 0, velocity.Z)
-        local verticalVelocity = velocity.Y
+        local attachment = getOrCreateAttachment(rootPart)
+        local linearVelocity = getOrCreateLinearVelocity(attachment)
 
-        local dragHorizontal = -horizontalVelocity * WATER_DRAG_COEFFICIENT
-        local dragHorizontalMagnitude = dragHorizontal.Magnitude
-        if dragHorizontalMagnitude > MAX_HORIZONTAL_DRAG_ACCELERATION then
-                dragHorizontal = dragHorizontal.Unit * MAX_HORIZONTAL_DRAG_ACCELERATION
+        local desired = typeof(desiredVelocity) == "Vector3" and desiredVelocity or Vector3.zero
+
+        local horizontalDesired = Vector3.new(desired.X, 0, desired.Z)
+        local horizontalMagnitude = horizontalDesired.Magnitude
+        local maxHorizontal = state.defaultSpeed or BASE_SWIM_SPEED
+        maxHorizontal = math.clamp(maxHorizontal, MIN_SWIM_SPEED, MAX_HORIZONTAL_SPEED)
+        if horizontalMagnitude > maxHorizontal then
+                horizontalDesired = horizontalDesired.Unit * maxHorizontal
         end
 
-        local dragVertical = math.clamp(-verticalVelocity * WATER_DRAG_COEFFICIENT, -MAX_VERTICAL_DRAG_ACCELERATION, MAX_VERTICAL_DRAG_ACCELERATION)
+        local currentVelocity = rootPart.AssemblyLinearVelocity
 
-        local desiredHorizontal = Vector3.new(desired.X, 0, desired.Z)
-        local desiredVertical = desired.Y
+        local verticalInput = desired.Y
+        local targetVertical = verticalInput
 
-        local relativeHorizontal = desiredHorizontal - horizontalVelocity
-        local movementHorizontal = relativeHorizontal * SWIM_FORCE_COEFFICIENT
-        local movementHorizontalMagnitude = movementHorizontal.Magnitude
-        if movementHorizontalMagnitude > MAX_HORIZONTAL_ACCELERATION then
-                movementHorizontal = movementHorizontal.Unit * MAX_HORIZONTAL_ACCELERATION
+        if math.abs(verticalInput) < 0.1 then
+                local targetSurfaceY = WATER_LEVEL - SURFACE_HOLD_OFFSET
+                local positionError = targetSurfaceY - rootPart.Position.Y
+                local damping = currentVelocity.Y * SURFACE_HOLD_DAMPING
+                targetVertical = math.clamp((positionError * SURFACE_HOLD_STIFFNESS) - damping, -MAX_VERTICAL_SPEED, MAX_VERTICAL_SPEED)
+        else
+                targetVertical = math.clamp(verticalInput, -MAX_VERTICAL_SPEED, MAX_VERTICAL_SPEED)
         end
 
-        local relativeVertical = desiredVertical - verticalVelocity
-        local movementVertical = math.clamp(relativeVertical * SWIM_FORCE_COEFFICIENT, -MAX_VERTICAL_ACCELERATION, MAX_VERTICAL_ACCELERATION)
+        local targetVelocity = Vector3.new(horizontalDesired.X, targetVertical, horizontalDesired.Z)
 
-        local totalHorizontal = dragHorizontal + movementHorizontal
-        local totalVertical = dragVertical + movementVertical
+        local blendAlpha = math.clamp((deltaTime or 0) * 8, 0, 1)
+        local finalVelocity = currentVelocity:Lerp(targetVelocity, blendAlpha)
 
-        local gravityAcceleration = Vector3.new(0, Workspace.Gravity, 0)
-        local correctiveAcceleration = Vector3.new(totalHorizontal.X, totalVertical, totalHorizontal.Z)
-
-        force.Force = (gravityAcceleration + correctiveAcceleration) * mass
-        force.Enabled = true
+        linearVelocity.VectorVelocity = finalVelocity
+        linearVelocity.Enabled = true
 end
 
 local function updateSwimmingSpeed(humanoid, depth, state)
@@ -260,7 +263,7 @@ local function processCharacter(player, deltaTime)
                 desiredVelocity = Vector3.zero
         end
 
-        updateBuoyancy(character, state, shouldSwim, desiredVelocity)
+        updateSwimController(character, state, shouldSwim, desiredVelocity, deltaTime)
 
         if humanoid:GetState() == Enum.HumanoidStateType.Swimming and rootUnderwater then
                 local depth = math.max(0, WATER_LEVEL - rootPart.Position.Y)

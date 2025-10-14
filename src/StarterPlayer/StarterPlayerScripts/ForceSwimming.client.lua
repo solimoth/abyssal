@@ -186,7 +186,8 @@ local function updateDesiredVelocity()
                 return
         end
 
-        if (desiredVelocity - lastDesiredVelocity).MagnitudeSquared < UPDATE_THRESHOLD_SQUARED then
+        local delta = desiredVelocity - lastDesiredVelocity
+        if delta:Dot(delta) < UPDATE_THRESHOLD_SQUARED then
                 return
         end
 

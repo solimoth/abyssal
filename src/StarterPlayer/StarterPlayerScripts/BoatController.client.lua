@@ -47,9 +47,6 @@ local WATER_LEVEL = 908.935
 local activeDiveTask = nil
 
 -- HUD elements
-local HUD_ENABLE_ATTRIBUTE = "BoatHudEnabled"
-local HUD_RUNTIME_ATTRIBUTE = "BoatHudRuntimeEnabled"
-
 local hudGui = nil
 local hudFrame = nil
 local hudElements = {}
@@ -64,10 +61,6 @@ local hudState = {
 }
 local hudFadeToken = 0
 local lastHudUpdate = 0
-
-local function IsTextObject(object)
-        return object and (object:IsA("TextLabel") or object:IsA("TextButton") or object:IsA("TextBox"))
-end
 
 -- ACCELERATION SYSTEM VARIABLES
 local currentSpeed = 0
@@ -100,94 +93,303 @@ local function EnsureHud()
         end
 
         if not playerGui then
-                hudGui = nil
-                hudFrame = nil
-                hudElements = {}
                 return false
-        end
-
-        if hudGui and not hudGui:IsDescendantOf(playerGui) then
-                hudGui = nil
-                hudFrame = nil
-                hudElements = {}
-        end
-
-        if hudGui then
-                local isEnabled = hudGui:GetAttribute(HUD_ENABLE_ATTRIBUTE) == true
-                local runtimeEnabled = hudGui:GetAttribute(HUD_RUNTIME_ATTRIBUTE) == true
-                if not (isEnabled and runtimeEnabled) then
-                        hudGui.Enabled = false
-                        hudGui = nil
-                        hudFrame = nil
-                        hudElements = {}
-                end
         end
 
         if not hudGui then
-                local candidate = playerGui:FindFirstChild("BoatHUD", true)
-                if candidate and candidate:IsA("ScreenGui") then
-                        local isEnabled = candidate:GetAttribute(HUD_ENABLE_ATTRIBUTE) == true
-                        local runtimeEnabled = candidate:GetAttribute(HUD_RUNTIME_ATTRIBUTE) == true
-                        if isEnabled and runtimeEnabled then
-                                hudGui = candidate
-                        else
-                                candidate.Enabled = false
-                                hudGui = nil
-                        end
-                end
+                hudGui = Instance.new("ScreenGui")
+                hudGui.Name = "BoatHUD"
+                hudGui.IgnoreGuiInset = true
+                hudGui.ResetOnSpawn = false
+                hudGui.DisplayOrder = 5
+                hudGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+                hudGui.Enabled = false
+
+                hudFrame = Instance.new("Frame")
+                hudFrame.Name = "Container"
+                hudFrame.AnchorPoint = Vector2.new(0.5, 1)
+                hudFrame.Position = UDim2.new(0.5, 0, 1, 30)
+                hudFrame.Size = UDim2.new(0, 360, 0, 160)
+                hudFrame.BackgroundColor3 = Color3.fromRGB(8, 14, 24)
+                hudFrame.BackgroundTransparency = 0.25
+                hudFrame.BorderSizePixel = 0
+                hudFrame.ZIndex = 2
+                hudFrame.Visible = false
+                hudFrame.Parent = hudGui
+
+                local shadow = Instance.new("ImageLabel")
+                shadow.Name = "Shadow"
+                shadow.AnchorPoint = Vector2.new(0.5, 1)
+                shadow.Position = UDim2.new(0.5, 0, 1, 12)
+                shadow.Size = UDim2.new(1.05, 0, 1.2, 18)
+                shadow.Image = "rbxassetid://1316045217"
+                shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
+                shadow.ImageTransparency = 0.65
+                shadow.ScaleType = Enum.ScaleType.Slice
+                shadow.SliceCenter = Rect.new(10, 10, 118, 118)
+                shadow.BackgroundTransparency = 1
+                shadow.ZIndex = 0
+                shadow.Parent = hudFrame
+
+                local corner = Instance.new("UICorner")
+                corner.CornerRadius = UDim.new(0, 18)
+                corner.Parent = hudFrame
+
+                local stroke = Instance.new("UIStroke")
+                stroke.Thickness = 1.5
+                stroke.Color = Color3.fromRGB(24, 86, 132)
+                stroke.Transparency = 0.2
+                stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+                stroke.Parent = hudFrame
+
+                local gradient = Instance.new("UIGradient")
+                gradient.Rotation = 90
+                gradient.Color = ColorSequence.new({
+                        ColorSequenceKeypoint.new(0, Color3.fromRGB(32, 94, 150)),
+                        ColorSequenceKeypoint.new(1, Color3.fromRGB(6, 12, 20)),
+                })
+                gradient.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0.05),
+                        NumberSequenceKeypoint.new(1, 0.45),
+                })
+                gradient.Parent = hudFrame
+
+                local header = Instance.new("TextLabel")
+                header.Name = "Header"
+                header.BackgroundTransparency = 1
+                header.Position = UDim2.new(0, 18, 0, 14)
+                header.Size = UDim2.new(0.45, 0, 0, 20)
+                header.Font = Enum.Font.GothamSemibold
+                header.Text = "NAVIGATION CONSOLE"
+                header.TextSize = 14
+                header.TextColor3 = Color3.fromRGB(198, 224, 255)
+                header.TextTransparency = 0.1
+                header.TextXAlignment = Enum.TextXAlignment.Left
+                header.Parent = hudFrame
+
+                local boatLabel = Instance.new("TextLabel")
+                boatLabel.Name = "BoatLabel"
+                boatLabel.BackgroundTransparency = 1
+                boatLabel.Position = UDim2.new(0, 18, 0, 36)
+                boatLabel.Size = UDim2.new(1, -36, 0, 22)
+                boatLabel.Font = Enum.Font.GothamBold
+                boatLabel.Text = ""
+                boatLabel.TextSize = 18
+                boatLabel.TextColor3 = Color3.fromRGB(205, 235, 255)
+                boatLabel.TextXAlignment = Enum.TextXAlignment.Left
+                boatLabel.Parent = hudFrame
+
+                local speedValue = Instance.new("TextLabel")
+                speedValue.Name = "SpeedValue"
+                speedValue.BackgroundTransparency = 1
+                speedValue.Position = UDim2.new(0, 18, 0, 62)
+                speedValue.Size = UDim2.new(0.55, 0, 0, 58)
+                speedValue.Font = Enum.Font.GothamBlack
+                speedValue.Text = "000"
+                speedValue.TextColor3 = Color3.fromRGB(255, 255, 255)
+                speedValue.TextTransparency = 0.1
+                speedValue.TextScaled = true
+                speedValue.TextXAlignment = Enum.TextXAlignment.Left
+                speedValue.Parent = hudFrame
+
+                local speedUnit = Instance.new("TextLabel")
+                speedUnit.Name = "SpeedUnit"
+                speedUnit.BackgroundTransparency = 1
+                speedUnit.Position = UDim2.new(0, 190, 0, 76)
+                speedUnit.Size = UDim2.new(0, 120, 0, 30)
+                speedUnit.Font = Enum.Font.GothamMedium
+                speedUnit.Text = "STUDS/SEC"
+                speedUnit.TextSize = 16
+                speedUnit.TextColor3 = Color3.fromRGB(160, 205, 255)
+                speedUnit.TextTransparency = 0.2
+                speedUnit.TextXAlignment = Enum.TextXAlignment.Left
+                speedUnit.Parent = hudFrame
+
+                local detailLabel = Instance.new("TextLabel")
+                detailLabel.Name = "DetailLabel"
+                detailLabel.BackgroundTransparency = 1
+                detailLabel.Position = UDim2.new(0, 18, 0, 116)
+                detailLabel.Size = UDim2.new(0.7, 0, 0, 20)
+                detailLabel.Font = Enum.Font.Gotham
+                detailLabel.Text = ""
+                detailLabel.TextColor3 = Color3.fromRGB(168, 208, 255)
+                detailLabel.TextSize = 14
+                detailLabel.TextTransparency = 0.15
+                detailLabel.TextXAlignment = Enum.TextXAlignment.Left
+                detailLabel.Parent = hudFrame
+
+                local cameraLabel = Instance.new("TextLabel")
+                cameraLabel.Name = "CameraLabel"
+                cameraLabel.BackgroundTransparency = 1
+                cameraLabel.Position = UDim2.new(0, 18, 1, -32)
+                cameraLabel.Size = UDim2.new(0.4, 0, 0, 18)
+                cameraLabel.Font = Enum.Font.GothamSemibold
+                cameraLabel.Text = "CAM: DEFAULT"
+                cameraLabel.TextSize = 12
+                cameraLabel.TextColor3 = Color3.fromRGB(190, 230, 255)
+                cameraLabel.TextTransparency = 0.1
+                cameraLabel.TextXAlignment = Enum.TextXAlignment.Left
+                cameraLabel.Parent = hudFrame
+
+                local statusLabel = Instance.new("TextLabel")
+                statusLabel.Name = "StatusLabel"
+                statusLabel.BackgroundTransparency = 1
+                statusLabel.Position = UDim2.new(1, -160, 0, 16)
+                statusLabel.Size = UDim2.new(0, 140, 0, 18)
+                statusLabel.Font = Enum.Font.GothamSemibold
+                statusLabel.Text = ""
+                statusLabel.TextSize = 13
+                statusLabel.TextColor3 = Color3.fromRGB(140, 225, 200)
+                statusLabel.TextTransparency = 0.15
+                statusLabel.TextXAlignment = Enum.TextXAlignment.Right
+                statusLabel.Parent = hudFrame
+
+                local speedMeter = Instance.new("Frame")
+                speedMeter.Name = "SpeedMeter"
+                speedMeter.BackgroundColor3 = Color3.fromRGB(14, 28, 44)
+                speedMeter.BackgroundTransparency = 0.2
+                speedMeter.BorderSizePixel = 0
+                speedMeter.AnchorPoint = Vector2.new(0.5, 1)
+                speedMeter.Position = UDim2.new(0.5, 0, 1, -58)
+                speedMeter.Size = UDim2.new(0.78, 0, 0, 16)
+                speedMeter.Parent = hudFrame
+
+                local speedMeterCorner = Instance.new("UICorner")
+                speedMeterCorner.CornerRadius = UDim.new(0, 8)
+                speedMeterCorner.Parent = speedMeter
+
+                local speedMeterStroke = Instance.new("UIStroke")
+                speedMeterStroke.Thickness = 1
+                speedMeterStroke.Color = Color3.fromRGB(40, 120, 190)
+                speedMeterStroke.Transparency = 0.45
+                speedMeterStroke.Parent = speedMeter
+
+                local speedFill = Instance.new("Frame")
+                speedFill.Name = "SpeedFill"
+                speedFill.AnchorPoint = Vector2.new(0, 0.5)
+                speedFill.Position = UDim2.new(0, 0, 0.5, 0)
+                speedFill.Size = UDim2.new(0, 0, 1, 0)
+                speedFill.BackgroundColor3 = Color3.fromRGB(60, 190, 255)
+                speedFill.BackgroundTransparency = 0
+                speedFill.BorderSizePixel = 0
+                speedFill.Parent = speedMeter
+
+                local speedFillCorner = Instance.new("UICorner")
+                speedFillCorner.CornerRadius = UDim.new(0, 8)
+                speedFillCorner.Parent = speedFill
+
+                local speedFillGradient = Instance.new("UIGradient")
+                speedFillGradient.Color = ColorSequence.new({
+                        ColorSequenceKeypoint.new(0, Color3.fromRGB(74, 232, 255)),
+                        ColorSequenceKeypoint.new(1, Color3.fromRGB(46, 146, 255)),
+                })
+                speedFillGradient.Parent = speedFill
+
+                local throttleContainer = Instance.new("Frame")
+                throttleContainer.Name = "ThrottleContainer"
+                throttleContainer.BackgroundTransparency = 1
+                throttleContainer.Position = UDim2.new(0.11, 0, 1, -34)
+                throttleContainer.Size = UDim2.new(0.78, 0, 0, 18)
+                throttleContainer.Parent = hudFrame
+
+                local throttleTrack = Instance.new("Frame")
+                throttleTrack.Name = "ThrottleTrack"
+                throttleTrack.AnchorPoint = Vector2.new(0.5, 0.5)
+                throttleTrack.Position = UDim2.new(0.5, 0, 0.5, 0)
+                throttleTrack.Size = UDim2.new(1, 0, 0, 6)
+                throttleTrack.BackgroundColor3 = Color3.fromRGB(20, 48, 66)
+                throttleTrack.BackgroundTransparency = 0.2
+                throttleTrack.BorderSizePixel = 0
+                throttleTrack.Parent = throttleContainer
+
+                local throttleCorner = Instance.new("UICorner")
+                throttleCorner.CornerRadius = UDim.new(0, 3)
+                throttleCorner.Parent = throttleTrack
+
+                local throttleIndicator = Instance.new("Frame")
+                throttleIndicator.Name = "ThrottleIndicator"
+                throttleIndicator.AnchorPoint = Vector2.new(0.5, 0.5)
+                throttleIndicator.Position = UDim2.new(0.5, 0, 0.5, 0)
+                throttleIndicator.Size = UDim2.new(0, 16, 0, 16)
+                throttleIndicator.BackgroundColor3 = Color3.fromRGB(72, 210, 170)
+                throttleIndicator.BorderSizePixel = 0
+                throttleIndicator.Parent = throttleContainer
+
+                local throttleIndicatorCorner = Instance.new("UICorner")
+                throttleIndicatorCorner.CornerRadius = UDim.new(1, 0)
+                throttleIndicatorCorner.Parent = throttleIndicator
+
+                local throttleStroke = Instance.new("UIStroke")
+                throttleStroke.Thickness = 1
+                throttleStroke.Color = Color3.fromRGB(12, 24, 34)
+                throttleStroke.Transparency = 0.2
+                throttleStroke.Parent = throttleIndicator
+
+                local depthContainer = Instance.new("Frame")
+                depthContainer.Name = "DepthContainer"
+                depthContainer.AnchorPoint = Vector2.new(1, 0)
+                depthContainer.Position = UDim2.new(1, -18, 0, 36)
+                depthContainer.Size = UDim2.new(0, 130, 0, 64)
+                depthContainer.BackgroundColor3 = Color3.fromRGB(10, 26, 38)
+                depthContainer.BackgroundTransparency = 0.2
+                depthContainer.BorderSizePixel = 0
+                depthContainer.Visible = false
+                depthContainer.Parent = hudFrame
+
+                local depthCorner = Instance.new("UICorner")
+                depthCorner.CornerRadius = UDim.new(0, 12)
+                depthCorner.Parent = depthContainer
+
+                local depthStroke = Instance.new("UIStroke")
+                depthStroke.Thickness = 1
+                depthStroke.Color = Color3.fromRGB(40, 110, 160)
+                depthStroke.Transparency = 0.35
+                depthStroke.Parent = depthContainer
+
+                local depthLabel = Instance.new("TextLabel")
+                depthLabel.Name = "DepthLabel"
+                depthLabel.BackgroundTransparency = 1
+                depthLabel.Size = UDim2.new(1, -16, 0, 20)
+                depthLabel.Position = UDim2.new(0, 8, 0, 10)
+                depthLabel.Font = Enum.Font.GothamSemibold
+                depthLabel.Text = "DEPTH"
+                depthLabel.TextSize = 13
+                depthLabel.TextColor3 = Color3.fromRGB(160, 210, 255)
+                depthLabel.TextXAlignment = Enum.TextXAlignment.Left
+                depthLabel.Parent = depthContainer
+
+                local depthValue = Instance.new("TextLabel")
+                depthValue.Name = "DepthValue"
+                depthValue.BackgroundTransparency = 1
+                depthValue.Size = UDim2.new(1, -16, 0, 34)
+                depthValue.Position = UDim2.new(0, 8, 0, 28)
+                depthValue.Font = Enum.Font.GothamBlack
+                depthValue.Text = "0.0"
+                depthValue.TextScaled = true
+                depthValue.TextColor3 = Color3.fromRGB(255, 255, 255)
+                depthValue.TextXAlignment = Enum.TextXAlignment.Left
+                depthValue.Parent = depthContainer
+
+                hudElements = {
+                        boatLabel = boatLabel,
+                        speedValue = speedValue,
+                        speedUnit = speedUnit,
+                        detailLabel = detailLabel,
+                        cameraLabel = cameraLabel,
+                        statusLabel = statusLabel,
+                        speedFill = speedFill,
+                        throttleIndicator = throttleIndicator,
+                        depthContainer = depthContainer,
+                        depthValue = depthValue,
+                }
         end
 
-        if hudGui then
-                if not hudFrame or not hudFrame.Parent then
-                        hudFrame = hudGui:FindFirstChild("Container", true)
-                end
-        end
-
-        if not (hudGui and hudFrame and hudFrame:IsA("GuiObject")) then
-                hudFrame = nil
-                hudElements = {}
-                return false
-        end
-
-        hudElements = {
-                boatLabel = hudFrame:FindFirstChild("BoatLabel", true),
-                speedValue = hudFrame:FindFirstChild("SpeedValue", true),
-                speedUnit = hudFrame:FindFirstChild("SpeedUnit", true),
-                detailLabel = hudFrame:FindFirstChild("DetailLabel", true),
-                cameraLabel = hudFrame:FindFirstChild("CameraLabel", true),
-                statusLabel = hudFrame:FindFirstChild("StatusLabel", true),
-        }
-
-        local speedMeter = hudFrame:FindFirstChild("SpeedMeter", true)
-        if speedMeter and speedMeter:IsA("GuiObject") then
-                hudElements.speedFill = speedMeter:FindFirstChild("SpeedFill", true)
-        end
-
-        local throttleContainer = hudFrame:FindFirstChild("ThrottleContainer", true)
-        if throttleContainer and throttleContainer:IsA("GuiObject") then
-                hudElements.throttleIndicator = throttleContainer:FindFirstChild("ThrottleIndicator", true)
-        end
-
-        local depthContainer = hudFrame:FindFirstChild("DepthContainer", true)
-        if depthContainer and depthContainer:IsA("GuiObject") then
-                hudElements.depthContainer = depthContainer
-                hudElements.depthValue = depthContainer:FindFirstChild("DepthValue", true)
-        end
-
+        hudGui.Parent = playerGui
         return true
 end
 
 local function ToggleHud(visible)
-        if not EnsureHud() then
-                return
-        end
-
-        if not (hudGui and hudFrame) then
-                return
-        end
-
-        if hudGui:GetAttribute(HUD_RUNTIME_ATTRIBUTE) ~= true then
-                hudGui.Enabled = false
+        if not hudGui or not hudFrame then
                 return
         end
 
@@ -233,7 +435,7 @@ local function ToggleHud(visible)
 end
 
 local function RefreshHudStaticInfo()
-        if not EnsureHud() then
+        if not EnsureHud() or not hudElements.boatLabel then
                 return
         end
 
@@ -244,30 +446,24 @@ local function RefreshHudStaticInfo()
                 end):gsub("^ ", ""))
                 or "Vessel"
 
-        local boatLabel = hudElements.boatLabel
-        if IsTextObject(boatLabel) then
-                boatLabel.Text = string.upper(displayName)
-        end
+        hudElements.boatLabel.Text = string.upper(displayName)
 
-        local statusLabel = hudElements.statusLabel
-        if IsTextObject(statusLabel) then
+        if hudElements.statusLabel then
                 local vesselType = boatConfig and boatConfig.Type or "Surface"
-                statusLabel.Text = string.upper(vesselType .. " MODE")
+                hudElements.statusLabel.Text = string.upper(vesselType .. " MODE")
         end
 
-        local detailLabel = hudElements.detailLabel
-        if IsTextObject(detailLabel) and boatType then
+        if hudElements.detailLabel and boatType then
                 local accelTime = BoatConfig.GetTimeToMaxSpeed(boatType)
-                detailLabel.Text = string.format("MAX %d  |  %.1fs TO MAX  |  %dT", math.floor(maxSpeed + 0.5), accelTime, boatWeight)
-        elseif IsTextObject(detailLabel) then
-                detailLabel.Text = string.format("MAX %d  |  %dT", math.floor(maxSpeed + 0.5), boatWeight)
+                hudElements.detailLabel.Text = string.format("MAX %d  |  %.1fs TO MAX  |  %dT", math.floor(maxSpeed + 0.5), accelTime, boatWeight)
+        elseif hudElements.detailLabel then
+                hudElements.detailLabel.Text = string.format("MAX %d  |  %dT", math.floor(maxSpeed + 0.5), boatWeight)
         end
 end
 
 local function UpdateCameraIndicator()
-        local cameraLabel = hudElements.cameraLabel
-        if IsTextObject(cameraLabel) then
-                cameraLabel.Text = string.format("CAM: %s", string.upper(cameraMode))
+        if hudElements.cameraLabel then
+                hudElements.cameraLabel.Text = string.format("CAM: %s", string.upper(cameraMode))
         end
 end
 
@@ -510,22 +706,19 @@ local function UpdateSpeedDisplay()
         local speedAbs = math.abs(currentSpeed)
         local speedPercent = (maxSpeed > 0) and math.clamp(speedAbs / maxSpeed, 0, 1) or 0
 
-        local speedValueLabel = hudElements.speedValue
-        if IsTextObject(speedValueLabel) then
-                speedValueLabel.Text = string.format("%03d", math.floor(speedAbs + 0.5))
+        if hudElements.speedValue then
+                hudElements.speedValue.Text = string.format("%03d", math.floor(speedAbs + 0.5))
         end
 
-        local speedUnitLabel = hudElements.speedUnit
-        if IsTextObject(speedUnitLabel) then
-                speedUnitLabel.Text = string.format("STUDS/SEC  •  %d%%", math.floor((speedPercent * 100) + 0.5))
+        if hudElements.speedUnit then
+                hudElements.speedUnit.Text = string.format("STUDS/SEC  •  %d%%", math.floor((speedPercent * 100) + 0.5))
         end
 
-        local speedFill = hudElements.speedFill
-        if speedFill and speedFill:IsA("GuiObject") and math.abs(speedPercent - hudState.speedPercent) > 0.01 then
+        if hudElements.speedFill and math.abs(speedPercent - hudState.speedPercent) > 0.01 then
                 if hudTweens.speed then
                         hudTweens.speed:Cancel()
                 end
-                hudTweens.speed = TweenService:Create(speedFill, TweenInfo.new(0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
+                hudTweens.speed = TweenService:Create(hudElements.speedFill, TweenInfo.new(0.18, Enum.EasingStyle.Sine, Enum.EasingDirection.Out), {
                         Size = UDim2.new(speedPercent, 0, 1, 0),
                 })
                 hudTweens.speed:Play()
@@ -533,15 +726,14 @@ local function UpdateSpeedDisplay()
         end
 
         local throttleValue = math.clamp(smoothedThrottle, -1, 1)
-        local throttleIndicator = hudElements.throttleIndicator
-        if throttleIndicator and throttleIndicator:IsA("GuiObject") and math.abs(throttleValue - hudState.throttleValue) > 0.01 then
+        if hudElements.throttleIndicator and math.abs(throttleValue - hudState.throttleValue) > 0.01 then
                 hudState.throttleValue = throttleValue
                 if hudTweens.throttle then
                         hudTweens.throttle:Cancel()
                 end
 
                 local throttleColor = throttleValue >= 0 and Color3.fromRGB(72, 210, 170) or Color3.fromRGB(255, 120, 120)
-                local throttleTween = TweenService:Create(throttleIndicator, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+                local throttleTween = TweenService:Create(hudElements.throttleIndicator, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
                         Position = UDim2.new(0.5 + 0.45 * throttleValue, 0, 0.5, 0),
                         BackgroundColor3 = throttleColor,
                 })
@@ -549,8 +741,7 @@ local function UpdateSpeedDisplay()
                 throttleTween:Play()
         end
 
-        local statusLabel = hudElements.statusLabel
-        if IsTextObject(statusLabel) then
+        if hudElements.statusLabel then
                 local throttlePercent = math.floor(math.abs(throttleValue) * 100 + 0.5)
                 local statusPrefix
                 if isSubmarine then
@@ -559,23 +750,21 @@ local function UpdateSpeedDisplay()
                         statusPrefix = throttleValue >= 0 and "AHEAD" or "ASTERN"
                 end
 
-                statusLabel.Text = string.format("%s • %d%% PWR", statusPrefix, throttlePercent)
+                hudElements.statusLabel.Text = string.format("%s • %d%% PWR", statusPrefix, throttlePercent)
         end
 
-        local depthContainer = hudElements.depthContainer
-        if depthContainer and depthContainer:IsA("GuiObject") then
-                depthContainer.Visible = isSubmarine
-                local depthValueLabel = hudElements.depthValue
-                if isSubmarine and IsTextObject(depthValueLabel) and currentBoat.PrimaryPart then
+        if hudElements.depthContainer then
+                hudElements.depthContainer.Visible = isSubmarine
+                if isSubmarine and currentBoat.PrimaryPart then
                         local depth = math.max(0, WATER_LEVEL - currentBoat.PrimaryPart.Position.Y)
-                        depthValueLabel.Text = string.format("%.1f", depth)
+                        hudElements.depthValue.Text = string.format("%.1f", depth)
 
                         if depth < 8 then
-                                depthValueLabel.TextColor3 = Color3.fromRGB(190, 245, 220)
+                                hudElements.depthValue.TextColor3 = Color3.fromRGB(190, 245, 220)
                         elseif depth < 40 then
-                                depthValueLabel.TextColor3 = Color3.fromRGB(120, 210, 255)
+                                hudElements.depthValue.TextColor3 = Color3.fromRGB(120, 210, 255)
                         else
-                                depthValueLabel.TextColor3 = Color3.fromRGB(255, 140, 140)
+                                hudElements.depthValue.TextColor3 = Color3.fromRGB(255, 140, 140)
                         end
                 end
         end
@@ -623,18 +812,16 @@ local function CleanupBoatSession()
         hudState.throttleValue = 0
         hudState.speedPercent = 0
 
-        local speedFill = hudElements.speedFill
-        if speedFill and speedFill:IsA("GuiObject") then
-                speedFill.Size = UDim2.new(0, 0, 1, 0)
+        if hudElements.speedFill then
+                hudElements.speedFill.Size = UDim2.new(0, 0, 1, 0)
         end
 
-        local throttleIndicator = hudElements.throttleIndicator
-        if throttleIndicator and throttleIndicator:IsA("GuiObject") then
-                throttleIndicator.Position = UDim2.new(0.5, 0, 0.5, 0)
-                throttleIndicator.BackgroundColor3 = Color3.fromRGB(72, 210, 170)
+        if hudElements.throttleIndicator then
+                hudElements.throttleIndicator.Position = UDim2.new(0.5, 0, 0.5, 0)
+                hudElements.throttleIndicator.BackgroundColor3 = Color3.fromRGB(72, 210, 170)
         end
 
-        if hudElements.depthContainer and hudElements.depthContainer:IsA("GuiObject") then
+        if hudElements.depthContainer then
                 hudElements.depthContainer.Visible = false
         end
 
@@ -698,18 +885,16 @@ local function OnCharacterSeated(active, seatPart)
                                                 hudState.speedPercent = 0
                                                 lastHudUpdate = 0
 
-                                                  local throttleIndicator = hudElements.throttleIndicator
-                                                  if throttleIndicator and throttleIndicator:IsA("GuiObject") then
-                                                          throttleIndicator.Position = UDim2.new(0.5, 0, 0.5, 0)
-                                                          throttleIndicator.BackgroundColor3 = Color3.fromRGB(72, 210, 170)
-                                                  end
+                                                if hudElements.throttleIndicator then
+                                                        hudElements.throttleIndicator.Position = UDim2.new(0.5, 0, 0.5, 0)
+                                                        hudElements.throttleIndicator.BackgroundColor3 = Color3.fromRGB(72, 210, 170)
+                                                end
 
-                                                  local speedFill = hudElements.speedFill
-                                                  if speedFill and speedFill:IsA("GuiObject") then
-                                                          speedFill.Size = UDim2.new(0, 0, 1, 0)
-                                                  end
+                                                if hudElements.speedFill then
+                                                        hudElements.speedFill.Size = UDim2.new(0, 0, 1, 0)
+                                                end
 
-                                                  RefreshHudStaticInfo()
+                                                RefreshHudStaticInfo()
                                                 UpdateCameraIndicator()
                                         end
 

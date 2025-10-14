@@ -20,8 +20,6 @@ local playerStates = {}
 local BUOYANCY_FORCE_NAME = "WaterBuoyancyForce"
 local BUOYANCY_ATTACHMENT_NAME = "WaterBuoyancyAttachment"
 local WATER_DRAG_COEFFICIENT = 4 -- How quickly velocity bleeds off while submerged
-local BOB_FORCE = 0.12 -- Upward/downward acceleration used to simulate gentle bobbing
-local BOB_FREQUENCY = 0.55
 local SWIM_FORCE_COEFFICIENT = 10 -- How aggressively characters accelerate toward their desired velocity
 local SWIM_DESIRED_VELOCITY_ATTRIBUTE = "WaterSwimDesiredVelocity"
 
@@ -34,7 +32,6 @@ local function ensureState(player)
                         defaultSpeed = nil,
                         isDrowning = false,
                         nextOxygenPrint = 0,
-                        bobOffset = math.random(),
                 }
                 playerStates[player] = state
         end
@@ -48,7 +45,6 @@ local function resetStateForCharacter(player)
         state.defaultSpeed = nil
         state.isDrowning = false
         state.nextOxygenPrint = 0
-        state.bobOffset = math.random()
 end
 
 local function isInsideShipInterior(character)
@@ -109,9 +105,6 @@ local function updateBuoyancy(character, state, enabled, desiredVelocity)
         local velocity = rootPart.AssemblyLinearVelocity
         local dragForce = -velocity * WATER_DRAG_COEFFICIENT * mass
 
-        local bobTime = os.clock() + (state and state.bobOffset or 0)
-        local bobAcceleration = math.sin(bobTime * BOB_FREQUENCY) * BOB_FORCE
-
         local desired = Vector3.zero
         if desiredVelocity and typeof(desiredVelocity) == "Vector3" then
                 desired = desiredVelocity
@@ -120,9 +113,7 @@ local function updateBuoyancy(character, state, enabled, desiredVelocity)
         local movementForce = (desired - velocity) * SWIM_FORCE_COEFFICIENT * mass
 
         local gravityForce = Vector3.new(0, Workspace.Gravity * mass, 0)
-        local bobbingForce = Vector3.new(0, bobAcceleration * mass, 0)
-
-        force.Force = gravityForce + bobbingForce + dragForce + movementForce
+        force.Force = gravityForce + dragForce + movementForce
         force.Enabled = true
 end
 

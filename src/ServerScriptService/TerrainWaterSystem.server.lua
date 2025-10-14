@@ -19,8 +19,12 @@ local playerStates = {}
 
 local BUOYANCY_FORCE_NAME = "WaterBuoyancyForce"
 local BUOYANCY_ATTACHMENT_NAME = "WaterBuoyancyAttachment"
-local WATER_DRAG_COEFFICIENT = 4 -- How quickly velocity bleeds off while submerged
-local SWIM_FORCE_COEFFICIENT = 10 -- How aggressively characters accelerate toward their desired velocity
+local WATER_DRAG_COEFFICIENT = 1.25 -- How quickly velocity bleeds off while submerged
+local MAX_HORIZONTAL_DRAG_ACCELERATION = 40
+local MAX_VERTICAL_DRAG_ACCELERATION = 30
+local SWIM_FORCE_COEFFICIENT = 3.5 -- How aggressively characters accelerate toward their desired velocity
+local MAX_HORIZONTAL_ACCELERATION = 60
+local MAX_VERTICAL_ACCELERATION = 40
 local SWIM_DESIRED_VELOCITY_ATTRIBUTE = "WaterSwimDesiredVelocity"
 
 local function ensureState(player)
@@ -103,17 +107,43 @@ local function updateBuoyancy(character, state, enabled, desiredVelocity)
 
         local mass = rootPart.AssemblyMass
         local velocity = rootPart.AssemblyLinearVelocity
-        local dragForce = -velocity * WATER_DRAG_COEFFICIENT * mass
 
         local desired = Vector3.zero
         if desiredVelocity and typeof(desiredVelocity) == "Vector3" then
                 desired = desiredVelocity
         end
 
-        local movementForce = (desired - velocity) * SWIM_FORCE_COEFFICIENT * mass
+        local horizontalVelocity = Vector3.new(velocity.X, 0, velocity.Z)
+        local verticalVelocity = velocity.Y
 
-        local gravityForce = Vector3.new(0, Workspace.Gravity * mass, 0)
-        force.Force = gravityForce + dragForce + movementForce
+        local dragHorizontal = -horizontalVelocity * WATER_DRAG_COEFFICIENT
+        local dragHorizontalMagnitude = dragHorizontal.Magnitude
+        if dragHorizontalMagnitude > MAX_HORIZONTAL_DRAG_ACCELERATION then
+                dragHorizontal = dragHorizontal.Unit * MAX_HORIZONTAL_DRAG_ACCELERATION
+        end
+
+        local dragVertical = math.clamp(-verticalVelocity * WATER_DRAG_COEFFICIENT, -MAX_VERTICAL_DRAG_ACCELERATION, MAX_VERTICAL_DRAG_ACCELERATION)
+
+        local desiredHorizontal = Vector3.new(desired.X, 0, desired.Z)
+        local desiredVertical = desired.Y
+
+        local relativeHorizontal = desiredHorizontal - horizontalVelocity
+        local movementHorizontal = relativeHorizontal * SWIM_FORCE_COEFFICIENT
+        local movementHorizontalMagnitude = movementHorizontal.Magnitude
+        if movementHorizontalMagnitude > MAX_HORIZONTAL_ACCELERATION then
+                movementHorizontal = movementHorizontal.Unit * MAX_HORIZONTAL_ACCELERATION
+        end
+
+        local relativeVertical = desiredVertical - verticalVelocity
+        local movementVertical = math.clamp(relativeVertical * SWIM_FORCE_COEFFICIENT, -MAX_VERTICAL_ACCELERATION, MAX_VERTICAL_ACCELERATION)
+
+        local totalHorizontal = dragHorizontal + movementHorizontal
+        local totalVertical = dragVertical + movementVertical
+
+        local gravityAcceleration = Vector3.new(0, Workspace.Gravity, 0)
+        local correctiveAcceleration = Vector3.new(totalHorizontal.X, totalVertical, totalHorizontal.Z)
+
+        force.Force = (gravityAcceleration + correctiveAcceleration) * mass
         force.Enabled = true
 end
 

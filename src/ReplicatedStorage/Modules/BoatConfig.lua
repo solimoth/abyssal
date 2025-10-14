@@ -135,15 +135,15 @@ BoatConfig.Boats = {
 		RepairCost = 15,
 	},
 
-	SpeedBoat = {
-		DisplayName = "Speed Boat",
-		Model = "SpeedBoat",
-		Type = "Surface",
+	MiniSub = {
+		DisplayName = "Mini-Sub",
+		Model = "MiniSub",
+		Type = "Submarine",
 
 		-- Fast movement but light weight
-		MaxSpeed = 45,
-		TurnSpeed = 3.0,
-		BaseAcceleration = 20,
+		MaxSpeed = 60,
+		TurnSpeed = 2.0,
+		BaseAcceleration = 10,
 		BaseDeceleration = 12,
 		Weight = 2,              -- Very light for quick acceleration
 

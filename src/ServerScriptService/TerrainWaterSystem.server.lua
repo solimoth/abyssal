@@ -48,7 +48,11 @@ local function isInsideShipInterior(character)
         end
 
         local regionSize = rootPart.Size + Vector3.new(4, 6, 4)
-        local parts = Workspace:GetPartBoundsInBox(rootPart.CFrame, regionSize)
+        local overlapParams = OverlapParams.new()
+        overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+        overlapParams.FilterDescendantsInstances = { character }
+
+        local parts = Workspace:GetPartBoundsInBox(rootPart.CFrame, regionSize, overlapParams)
 
         for _, part in ipairs(parts) do
                 if part:IsA("BasePart") and part.Name == "ShipInterior" then
@@ -68,6 +72,19 @@ local function updateSwimmingSpeed(humanoid, depth, state)
 
         if math.abs(humanoid.WalkSpeed - targetSpeed) > 0.1 then
                 humanoid.WalkSpeed = targetSpeed
+        end
+end
+
+local function ensureSwimming(humanoid)
+        local currentState = humanoid:GetState()
+        if currentState ~= Enum.HumanoidStateType.Swimming and currentState ~= Enum.HumanoidStateType.Dead then
+                humanoid:ChangeState(Enum.HumanoidStateType.Swimming)
+        end
+end
+
+local function ensureNotSwimming(humanoid)
+        if humanoid:GetState() == Enum.HumanoidStateType.Swimming then
+                humanoid:ChangeState(Enum.HumanoidStateType.Running)
         end
 end
 
@@ -143,13 +160,16 @@ local function processCharacter(player, deltaTime)
         end
 
         local insideShip = isInsideShipInterior(character)
-        local humanoidState = humanoid:GetState()
-        local isSwimming = humanoidState == Enum.HumanoidStateType.Swimming
-
         local rootUnderwater = WaterPhysics.IsUnderwater(rootPart.Position)
         local headUnderwater = WaterPhysics.IsUnderwater(head.Position)
 
-        if isSwimming and rootUnderwater then
+        if rootUnderwater and not insideShip then
+                ensureSwimming(humanoid)
+        else
+                ensureNotSwimming(humanoid)
+        end
+
+        if humanoid:GetState() == Enum.HumanoidStateType.Swimming and rootUnderwater then
                 local depth = math.max(0, WATER_LEVEL - rootPart.Position.Y)
                 updateSwimmingSpeed(humanoid, depth, state)
         else

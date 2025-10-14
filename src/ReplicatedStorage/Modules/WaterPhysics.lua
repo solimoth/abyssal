@@ -1,3 +1,4 @@
+local CollectionService = game:GetService("CollectionService")
 local Workspace = game:GetService("Workspace")
 
 local WaterPhysics = {}
@@ -12,22 +13,138 @@ local DEFAULT_WATER_LEVEL = 908.935
 -- position to ensure we find the closest body of water without having to know the
 -- exact top height ahead of time.
 local WATER_SURFACE_SEARCH_DISTANCE = 512
+local WATER_VOLUME_CACHE_DURATION = 1
+local WATER_HORIZONTAL_TOLERANCE = 0.5
+local WATER_VOLUME_TAGS = { "WaterVolume", "WaterRegion" }
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
 waterRaycastParams.FilterDescendantsInstances = {}
 waterRaycastParams.IgnoreWater = false
 
-local function findWaterSurface(position: Vector3)
-        local origin = position + Vector3.new(0, WATER_SURFACE_SEARCH_DISTANCE, 0)
-        local direction = Vector3.new(0, -WATER_SURFACE_SEARCH_DISTANCE * 2, 0)
-        local result = Workspace:Raycast(origin, direction, waterRaycastParams)
+local cachedWaterParts: { BasePart } = {}
+local cachedWaterUpdateTime = 0
 
-        if result and result.Material == Enum.Material.Water then
-                return result.Position.Y, result
+local function refreshWaterParts()
+    local now = os.clock()
+    if now - cachedWaterUpdateTime <= WATER_VOLUME_CACHE_DURATION then
+        return
+    end
+
+    table.clear(cachedWaterParts)
+    local seenParts: {[BasePart]: boolean} = {}
+
+    local function addWaterPartsFromFolder(folder: Instance?)
+        if not folder then
+            return
         end
 
-        return nil, nil
+        if folder:IsA("BasePart") and not seenParts[folder] then
+            seenParts[folder] = true
+            cachedWaterParts[#cachedWaterParts + 1] = folder
+        end
+
+        for _, descendant in ipairs(folder:GetDescendants()) do
+            if descendant:IsA("BasePart") and not seenParts[descendant] then
+                seenParts[descendant] = true
+                cachedWaterParts[#cachedWaterParts + 1] = descendant
+            end
+        end
+    end
+
+    local seenFolders: {[Instance]: boolean} = {}
+
+    local function tryAddFolder(parent: Instance?, name: string)
+        if not parent then
+            return
+        end
+
+        local folder = parent:FindFirstChild(name)
+        if folder and not seenFolders[folder] then
+            seenFolders[folder] = true
+            addWaterPartsFromFolder(folder)
+        end
+    end
+
+    tryAddFolder(Workspace, "Water")
+    tryAddFolder(Workspace, "WaterParts")
+    tryAddFolder(Workspace, "WaterVolumes")
+
+    local mechanics = Workspace:FindFirstChild("Mechanics")
+    tryAddFolder(mechanics, "Water")
+    tryAddFolder(mechanics, "WaterParts")
+    tryAddFolder(mechanics, "WaterVolumes")
+
+    local gameplay = Workspace:FindFirstChild("Gameplay")
+    if gameplay then
+        tryAddFolder(gameplay, "Water")
+        tryAddFolder(gameplay, "WaterParts")
+        tryAddFolder(gameplay, "WaterVolumes")
+
+        local gameplayMechanics = gameplay:FindFirstChild("Mechanics")
+        tryAddFolder(gameplayMechanics, "Water")
+        tryAddFolder(gameplayMechanics, "WaterParts")
+        tryAddFolder(gameplayMechanics, "WaterVolumes")
+    end
+
+    local misc = Workspace:FindFirstChild("Misc")
+    tryAddFolder(misc, "Water")
+    tryAddFolder(misc, "WaterParts")
+    tryAddFolder(misc, "WaterVolumes")
+
+    for _, tag in ipairs(WATER_VOLUME_TAGS) do
+        for _, instance in ipairs(CollectionService:GetTagged(tag)) do
+            addWaterPartsFromFolder(instance)
+        end
+    end
+
+    cachedWaterUpdateTime = now
+end
+
+local function findWaterSurfaceFromParts(position: Vector3): number?
+    refreshWaterParts()
+
+    local closestSurface: number? = nil
+    local closestDistance = math.huge
+
+    for _, part in ipairs(cachedWaterParts) do
+        if not part:IsDescendantOf(Workspace) then
+            continue
+        end
+
+        local halfSize = part.Size * 0.5
+        local localPosition = part.CFrame:PointToObjectSpace(position)
+        if math.abs(localPosition.X) > (halfSize.X + WATER_HORIZONTAL_TOLERANCE) then
+            continue
+        end
+        if math.abs(localPosition.Z) > (halfSize.Z + WATER_HORIZONTAL_TOLERANCE) then
+            continue
+        end
+
+        local topWorld = (part.CFrame * CFrame.new(0, halfSize.Y, 0)).Position
+        local bottomWorld = (part.CFrame * CFrame.new(0, -halfSize.Y, 0)).Position
+        local topY = math.max(topWorld.Y, bottomWorld.Y)
+
+        local distance = math.abs(position.Y - topY)
+        if distance < closestDistance then
+            closestSurface = topY
+            closestDistance = distance
+        end
+    end
+
+    return closestSurface
+end
+
+local function findWaterSurface(position: Vector3): number?
+    local origin = position + Vector3.new(0, WATER_SURFACE_SEARCH_DISTANCE, 0)
+    local direction = Vector3.new(0, -WATER_SURFACE_SEARCH_DISTANCE * 2, 0)
+    local result = Workspace:Raycast(origin, direction, waterRaycastParams)
+
+    if result and result.Material == Enum.Material.Water then
+        return result.Position.Y
+    end
+
+    return findWaterSurfaceFromParts(position)
 end
 
 function WaterPhysics.GetWaterLevel(position: Vector3?)
@@ -42,7 +159,7 @@ function WaterPhysics.GetWaterLevel(position: Vector3?)
 end
 
 function WaterPhysics.TryGetWaterSurface(position: Vector3)
-        return findWaterSurface(position)
+    return findWaterSurface(position)
 end
 
 function WaterPhysics.IsUnderwater(position: Vector3)

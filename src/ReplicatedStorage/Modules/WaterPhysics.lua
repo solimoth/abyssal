@@ -199,7 +199,11 @@ end
 
 -- Check if position is underwater
 function WaterPhysics.IsUnderwater(position)
-	return position.Y < WATER_LEVEL
+        return position.Y < WATER_LEVEL
+end
+
+function WaterPhysics.GetWaterLevel()
+        return WATER_LEVEL
 end
 
 -- Get water pressure at depth (for submarine damage)

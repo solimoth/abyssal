@@ -71,19 +71,6 @@ local function updateSwimmingSpeed(humanoid, depth, state)
         end
 end
 
-local function ensureSwimming(humanoid)
-        local currentState = humanoid:GetState()
-        if currentState ~= Enum.HumanoidStateType.Swimming and currentState ~= Enum.HumanoidStateType.Dead then
-                humanoid:ChangeState(Enum.HumanoidStateType.Swimming)
-        end
-end
-
-local function ensureNotSwimming(humanoid)
-        if humanoid:GetState() == Enum.HumanoidStateType.Swimming then
-                humanoid:ChangeState(Enum.HumanoidStateType.Running)
-        end
-end
-
 local function restoreSpeedIfNeeded(humanoid, state)
         if state.defaultSpeed and math.abs(humanoid.WalkSpeed - state.defaultSpeed) > 0.1 then
                 humanoid.WalkSpeed = state.defaultSpeed
@@ -156,16 +143,13 @@ local function processCharacter(player, deltaTime)
         end
 
         local insideShip = isInsideShipInterior(character)
+        local humanoidState = humanoid:GetState()
+        local isSwimming = humanoidState == Enum.HumanoidStateType.Swimming
+
         local rootUnderwater = WaterPhysics.IsUnderwater(rootPart.Position)
         local headUnderwater = WaterPhysics.IsUnderwater(head.Position)
 
-        if rootUnderwater and not insideShip then
-                ensureSwimming(humanoid)
-        else
-                ensureNotSwimming(humanoid)
-        end
-
-        if humanoid:GetState() == Enum.HumanoidStateType.Swimming and rootUnderwater then
+        if isSwimming and rootUnderwater then
                 local depth = math.max(0, WATER_LEVEL - rootPart.Position.Y)
                 updateSwimmingSpeed(humanoid, depth, state)
         else

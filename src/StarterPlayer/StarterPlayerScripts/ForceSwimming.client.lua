@@ -7,11 +7,16 @@ local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 
 local LOCAL_PLAYER = Players.LocalPlayer
 local REGION_PADDING = Vector3.new(4, 6, 4)
+local SWIM_DESIRED_VELOCITY_ATTRIBUTE = "WaterSwimDesiredVelocity"
+local UPDATE_THRESHOLD_SQUARED = 0.25 -- Only replicate desired velocity changes when they are noticeable
 
 local currentCharacter
 local humanoid
 local rootPart
 local head
+local controls
+
+local lastDesiredVelocity = Vector3.zero
 
 local characterConnections = {}
 
@@ -20,6 +25,12 @@ local function clearCharacterConnections()
                 connection:Disconnect()
         end
         table.clear(characterConnections)
+
+        if rootPart then
+                rootPart:SetAttribute(SWIM_DESIRED_VELOCITY_ATTRIBUTE, nil)
+        end
+
+        lastDesiredVelocity = Vector3.zero
 end
 
 local function setCharacterReferences(character)
@@ -52,6 +63,9 @@ local function setCharacterReferences(character)
 
         table.insert(characterConnections, character.ChildRemoved:Connect(function(child)
                 if child == rootPart then
+                        if rootPart then
+                                rootPart:SetAttribute(SWIM_DESIRED_VELOCITY_ATTRIBUTE, nil)
+                        end
                         rootPart = nil
                 elseif child == head then
                         head = nil
@@ -92,6 +106,10 @@ end
 
 local function forceSwimming()
         if not humanoid or not rootPart or humanoid.Health <= 0 then
+                if rootPart then
+                        rootPart:SetAttribute(SWIM_DESIRED_VELOCITY_ATTRIBUTE, nil)
+                end
+                lastDesiredVelocity = Vector3.zero
                 return
         end
 
@@ -110,6 +128,72 @@ local function forceSwimming()
         end
 end
 
+local function computeDesiredSwimVelocity()
+        if not humanoid or humanoid.Health <= 0 or humanoid:GetState() ~= Enum.HumanoidStateType.Swimming then
+                return Vector3.zero
+        end
+
+        if not rootPart then
+                return Vector3.zero
+        end
+
+        local camera = Workspace.CurrentCamera
+        if not camera then
+                return Vector3.zero
+        end
+
+        if not controls then
+                return Vector3.zero
+        end
+
+        local moveVector = controls:GetMoveVector()
+        if moveVector.Magnitude < 0.05 then
+                return Vector3.zero
+        end
+
+        local cameraCFrame = camera.CFrame
+        local forward = cameraCFrame.LookVector
+        local right = cameraCFrame.RightVector
+        local up = cameraCFrame.UpVector
+
+        local desiredDirection = (forward * moveVector.Z) + (right * moveVector.X) + (up * moveVector.Y)
+        if desiredDirection.Magnitude < 0.05 then
+                return Vector3.zero
+        end
+
+        desiredDirection = desiredDirection.Unit
+
+        local speed = humanoid.WalkSpeed
+        if speed <= 0 then
+                return Vector3.zero
+        end
+
+        return desiredDirection * speed
+end
+
+local function updateDesiredVelocity()
+        local desiredVelocity = computeDesiredSwimVelocity()
+
+        if not rootPart then
+                return
+        end
+
+        if desiredVelocity == Vector3.zero then
+                if lastDesiredVelocity ~= Vector3.zero then
+                        rootPart:SetAttribute(SWIM_DESIRED_VELOCITY_ATTRIBUTE, Vector3.zero)
+                        lastDesiredVelocity = Vector3.zero
+                end
+                return
+        end
+
+        if (desiredVelocity - lastDesiredVelocity).MagnitudeSquared < UPDATE_THRESHOLD_SQUARED then
+                return
+        end
+
+        rootPart:SetAttribute(SWIM_DESIRED_VELOCITY_ATTRIBUTE, desiredVelocity)
+        lastDesiredVelocity = desiredVelocity
+end
+
 LOCAL_PLAYER.CharacterAdded:Connect(setCharacterReferences)
 LOCAL_PLAYER.CharacterRemoving:Connect(function()
         clearCharacterConnections()
@@ -123,4 +207,13 @@ if LOCAL_PLAYER.Character then
         setCharacterReferences(LOCAL_PLAYER.Character)
 end
 
-RunService.Heartbeat:Connect(forceSwimming)
+task.defer(function()
+        local playerScripts = LOCAL_PLAYER:WaitForChild("PlayerScripts")
+        local playerModule = require(playerScripts:WaitForChild("PlayerModule"))
+        controls = playerModule:GetControls()
+end)
+
+RunService.Heartbeat:Connect(function()
+        forceSwimming()
+        updateDesiredVelocity()
+end)

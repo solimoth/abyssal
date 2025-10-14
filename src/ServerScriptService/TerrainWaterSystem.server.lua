@@ -19,9 +19,11 @@ local playerStates = {}
 
 local BUOYANCY_FORCE_NAME = "WaterBuoyancyForce"
 local BUOYANCY_ATTACHMENT_NAME = "WaterBuoyancyAttachment"
-local WATER_DRAG_COEFFICIENT = 6 -- How quickly velocity bleeds off while submerged
-local BOB_FORCE = 6 -- Upward/downward acceleration used to simulate gentle bobbing
-local BOB_FREQUENCY = 1.1
+local WATER_DRAG_COEFFICIENT = 4 -- How quickly velocity bleeds off while submerged
+local BOB_FORCE = 1.2 -- Upward/downward acceleration used to simulate gentle bobbing
+local BOB_FREQUENCY = 0.8
+local SWIM_FORCE_COEFFICIENT = 10 -- How aggressively characters accelerate toward their desired velocity
+local SWIM_DESIRED_VELOCITY_ATTRIBUTE = "WaterSwimDesiredVelocity"
 
 local function ensureState(player)
         local state = playerStates[player]
@@ -71,7 +73,7 @@ local function isInsideShipInterior(character)
         return false
 end
 
-local function updateBuoyancy(character, state, enabled)
+local function updateBuoyancy(character, state, enabled, desiredVelocity)
         local rootPart = character and character:FindFirstChild("HumanoidRootPart")
         if not rootPart then
                 return
@@ -107,13 +109,20 @@ local function updateBuoyancy(character, state, enabled)
         local velocity = rootPart.AssemblyLinearVelocity
         local dragForce = -velocity * WATER_DRAG_COEFFICIENT * mass
 
-        local bobTime = tick() + (state and state.bobOffset or 0)
+        local bobTime = os.clock() + (state and state.bobOffset or 0)
         local bobAcceleration = math.sin(bobTime * BOB_FREQUENCY) * BOB_FORCE
+
+        local desired = Vector3.zero
+        if desiredVelocity and typeof(desiredVelocity) == "Vector3" then
+                desired = desiredVelocity
+        end
+
+        local movementForce = (desired - velocity) * SWIM_FORCE_COEFFICIENT * mass
 
         local gravityForce = Vector3.new(0, Workspace.Gravity * mass, 0)
         local bobbingForce = Vector3.new(0, bobAcceleration * mass, 0)
 
-        force.Force = gravityForce + bobbingForce + dragForce
+        force.Force = gravityForce + bobbingForce + dragForce + movementForce
         force.Enabled = true
 end
 
@@ -225,7 +234,12 @@ local function processCharacter(player, deltaTime)
                 ensureNotSwimming(humanoid)
         end
 
-        updateBuoyancy(character, state, shouldSwim)
+        local desiredVelocity = rootPart:GetAttribute(SWIM_DESIRED_VELOCITY_ATTRIBUTE)
+        if not shouldSwim then
+                desiredVelocity = Vector3.zero
+        end
+
+        updateBuoyancy(character, state, shouldSwim, desiredVelocity)
 
         if humanoid:GetState() == Enum.HumanoidStateType.Swimming and rootUnderwater then
                 local depth = math.max(0, WATER_LEVEL - rootPart.Position.Y)

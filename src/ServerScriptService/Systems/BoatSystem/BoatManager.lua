@@ -32,6 +32,7 @@ local IDLE_THRESHOLD = 10
 local MEMORY_CHECK_INTERVAL = 30
 local MAX_UPDATE_DELTA = 0.1
 local PHYSICS_THROTTLE_DISTANCE = 500 -- NEW: Don't update physics for far boats
+local PASSIVE_WAVE_DISTANCE = 150 -- NEW: Range for passive wave simulation
 local MAX_CONTROL_RATE = 30 -- NEW: Realistic rate limit (30/sec)
 
 -- Memory management
@@ -566,65 +567,97 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 		return
 	end
 
-	local controlPart = BoatControllers[player]
-	if not controlPart or not controlPart.Parent then 
-		CleanupBoat(player)
-		return 
-	end
+        local controlPart = BoatControllers[player]
+        if not controlPart or not controlPart.Parent then
+                CleanupBoat(player)
+                return
+        end
 
-	local seat = boat:FindFirstChildOfClass("VehicleSeat")
-	if not seat then 
-		CleanupBoat(player)
-		return 
-	end
+        local seat = boat:FindFirstChildOfClass("VehicleSeat")
+        if not seat then
+                CleanupBoat(player)
+                return
+        end
 
-	local config = BoatConfig.GetBoatData(boat:GetAttribute("BoatType"))
-	if not config then return end
+        local config = BoatConfig.GetBoatData(boat:GetAttribute("BoatType"))
+        if not config then return end
 
-	local accelData = BoatAccelerationData[player]
-	if not accelData then 
-		InitializeBoatAcceleration(player, boat:GetAttribute("BoatType"))
-		accelData = BoatAccelerationData[player]
-		if not accelData then return end
-	end
+        local accelData = BoatAccelerationData[player]
+        if not accelData then
+                InitializeBoatAcceleration(player, boat:GetAttribute("BoatType"))
+                accelData = BoatAccelerationData[player]
+                if not accelData then return end
+        end
 
-	-- Performance: Check distance to nearest player for physics throttling
-	local shouldThrottle = true
-	for _, otherPlayer in pairs(Players:GetPlayers()) do
-		if otherPlayer.Character and otherPlayer.Character:FindFirstChild("HumanoidRootPart") then
-			local distance = (boat.PrimaryPart.Position - otherPlayer.Character.HumanoidRootPart.Position).Magnitude
-			if distance < PHYSICS_THROTTLE_DISTANCE then
-				shouldThrottle = false
-				break
-			end
-		end
-	end
+        local primaryPart = boat.PrimaryPart
+        if not primaryPart then
+                CleanupBoat(player)
+                return
+        end
 
-	-- Skip some physics updates for far boats
-	if shouldThrottle and math.random() > 0.3 then
-		return
-	end
+        -- Performance: Check distance to nearest player for physics throttling
+        local shouldThrottle = true
+        local nearestPlayerDistance = math.huge
+        for _, otherPlayer in pairs(Players:GetPlayers()) do
+                if otherPlayer.Character and otherPlayer.Character:FindFirstChild("HumanoidRootPart") then
+                        local distance = (primaryPart.Position - otherPlayer.Character.HumanoidRootPart.Position).Magnitude
+                        if distance < nearestPlayerDistance then
+                                nearestPlayerDistance = distance
+                        end
+                        if distance < PHYSICS_THROTTLE_DISTANCE then
+                                shouldThrottle = false
+                                if distance <= PASSIVE_WAVE_DISTANCE then
+                                        break
+                                end
+                        end
+                end
+        end
+
+        local isPlayerNearby = nearestPlayerDistance <= PASSIVE_WAVE_DISTANCE
+
+        -- Skip some physics updates for far boats
+        if shouldThrottle and math.random() > 0.3 then
+                return
+        end
 
 	-- Check activity
 	local lastActivity = BoatLastActivity[player] or tick()
 	local isIdle = (tick() - lastActivity) > IDLE_THRESHOLD
 
-	if isIdle and not seat.Occupant then
-		if boat.PrimaryPart then
-			local currentPos = controlPart.CFrame.Position
-			local boatPos = boat.PrimaryPart.CFrame.Position
-			if (currentPos - boatPos).Magnitude > 5 then
-				controlPart.CFrame = boat.PrimaryPart.CFrame
-			end
+        local waveBoatType = config.Type == "Submarine" and "Submarine" or "Surface"
 
-			-- Reset speeds when idle
-			BoatSpeeds[player] = 0
-			BoatTurnSpeeds[player] = 0
-		end
-		return
-	end
+        local function syncToBoatWithPassiveWaves()
+                local boatCFrame = primaryPart.CFrame
+                local targetCFrame = boatCFrame
 
-	local isSubmarine = config.Type == "Submarine"
+                if isPlayerNearby then
+                        local floatingCFrame, applied = WaterPhysics.ApplyFloatingPhysics(boatCFrame, waveBoatType, deltaTime)
+                        if applied then
+                                targetCFrame = floatingCFrame
+                        end
+                end
+
+                if (controlPart.CFrame.Position - boatCFrame.Position).Magnitude > 5 then
+                        targetCFrame = boatCFrame
+                end
+
+                controlPart.CFrame = targetCFrame
+
+                local bodyVel = primaryPart:FindFirstChild("BoatBodyVelocity")
+                if bodyVel then
+                        bodyVel.Velocity = Vector3.new(0, 0, 0)
+                end
+
+                BoatSpeeds[player] = 0
+                BoatTurnSpeeds[player] = 0
+        end
+
+        if isIdle and not seat.Occupant then
+                syncToBoatWithPassiveWaves()
+                return
+        end
+
+        local isSubmarine = config.Type == "Submarine"
 
 	-- Get inputs
 	local throttle = 0
@@ -651,21 +684,10 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 			pitch = BoatControls[player].pitch or 0
 			roll = BoatControls[player].roll or 0
 		end
-	else
-		if boat.PrimaryPart then
-			controlPart.CFrame = boat.PrimaryPart.CFrame
-
-			local bodyVel = boat.PrimaryPart:FindFirstChild("BoatBodyVelocity")
-			if bodyVel then
-				bodyVel.Velocity = Vector3.new(0, 0, 0)
-			end
-
-			-- Reset speeds when no driver
-			BoatSpeeds[player] = 0
-			BoatTurnSpeeds[player] = 0
-		end
-		return
-	end
+        else
+                syncToBoatWithPassiveWaves()
+                return
+        end
 
 	-- CALCULATE ACCELERATION
 	local currentSpeed = BoatSpeeds[player] or 0

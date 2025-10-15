@@ -11,6 +11,7 @@ local Camera = workspace.CurrentCamera
 
 local player = Players.LocalPlayer
 local BoatConfig = require(ReplicatedStorage.Modules.BoatConfig)
+local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 
 -- Variables
 local currentBoat = nil
@@ -43,7 +44,6 @@ local controlUpdateConnection = nil
 local lastControlUpdate = 0
 local CONTROL_UPDATE_RATE = 1/60
 local submarineMode = "surface"
-local WATER_LEVEL = 908.935
 local activeDiveTask = nil
 
 -- ACCELERATION SYSTEM VARIABLES
@@ -367,9 +367,10 @@ local function OnCharacterSeated(active, seatPart)
 				if isOwner then
 					isControlling = true
 
-					if isSubmarine and currentBoat.PrimaryPart then
-						local depth = WATER_LEVEL - currentBoat.PrimaryPart.Position.Y
-						submarineMode = depth > 8 and "dive" or "surface"
+                                        if isSubmarine and currentBoat.PrimaryPart then
+                                                local surfaceY = WaterPhysics.GetWaterLevel(currentBoat.PrimaryPart.Position)
+                                                local depth = surfaceY - currentBoat.PrimaryPart.Position.Y
+                                                submarineMode = depth > 8 and "dive" or "surface"
 					end
 
 					cameraMode = "Follow"
@@ -399,8 +400,9 @@ local function OnCharacterAdded(character)
 
 	task.spawn(function()
 		while character.Parent do
-			if isControlling and isSubmarine and currentBoat and currentBoat.PrimaryPart then
-				local depth = WATER_LEVEL - currentBoat.PrimaryPart.Position.Y
+                        if isControlling and isSubmarine and currentBoat and currentBoat.PrimaryPart then
+                                local surfaceY = WaterPhysics.GetWaterLevel(currentBoat.PrimaryPart.Position)
+                                local depth = surfaceY - currentBoat.PrimaryPart.Position.Y
 
 				if depth < 5 and submarineMode == "dive" and 
 					not activeDiveTask and 

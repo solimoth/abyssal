@@ -304,22 +304,24 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
                         local slopeForward = -(surfaceNormal.X * forwardXZ.X + surfaceNormal.Z * forwardXZ.Z) / upDot
                         local slopeRight = -(surfaceNormal.X * rightXZ.X + surfaceNormal.Z * rightXZ.Z) / upDot
 
-                        local basePitch = applyAngularDeadzone(math.atan(math.clamp(slopeForward, -4, 4)))
-                        local baseRoll = applyAngularDeadzone(math.atan(math.clamp(slopeRight, -4, 4)))
+					local basePitch = applyAngularDeadzone(math.atan(math.clamp(slopeForward, -4, 4)))
+					local baseRoll = applyAngularDeadzone(math.atan(math.clamp(slopeRight, -4, 4)))
 
-                        targetPitch = math.clamp(-basePitch * BOAT_PITCH_GAIN * intensityScale, -BOAT_MAX_PITCH, BOAT_MAX_PITCH)
-                        targetRoll = math.clamp(-baseRoll * BOAT_ROLL_GAIN * intensityScale, -BOAT_MAX_ROLL, BOAT_MAX_ROLL)
+					local rawPitch = -basePitch * BOAT_PITCH_GAIN
+					local rawRoll = -baseRoll * BOAT_ROLL_GAIN
 
-                        local maxAngle = math.max(math.abs(targetPitch) / BOAT_MAX_PITCH, math.abs(targetRoll) / BOAT_MAX_ROLL)
-                        local slopeScale = 0
-                        if BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH > 0 then
-                                slopeScale = math.max(
-                                        math.min(1, math.abs(basePitch) / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH),
-                                        math.min(1, math.abs(baseRoll) / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH)
-                                )
-                        end
+					local slopeScale = 1
+					if BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH > 0 then
+						local slopeMagnitude = math.max(math.abs(basePitch), math.abs(baseRoll))
+						slopeScale = math.clamp(slopeMagnitude / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH, 0, 1)
+					end
 
-                        leanStrength = math.clamp(math.max(maxAngle, slopeScale * intensityScale), 0, 1)
+					local intensitySlopeScale = intensityScale * slopeScale
+					local combinedScale = math.max(intensitySlopeScale, intensityScale * intensityScale)
+					leanStrength = math.clamp(combinedScale, 0, 1)
+
+					targetPitch = math.clamp(rawPitch * leanStrength, -BOAT_MAX_PITCH, BOAT_MAX_PITCH)
+					targetRoll = math.clamp(rawRoll * leanStrength, -BOAT_MAX_ROLL, BOAT_MAX_ROLL)
                 end
         else
                 surfaceY = WaterPhysics.TryGetWaterSurface(position)

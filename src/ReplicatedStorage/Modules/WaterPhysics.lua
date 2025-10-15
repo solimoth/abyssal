@@ -31,6 +31,9 @@ local BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH = math.rad(18)
 local BOAT_MIN_LEAN_THRESHOLD = 0.05
 local BOAT_INTENSITY_POWER = 2
 local BOAT_SLOPE_DEADZONE = math.rad(1.5)
+local BOAT_LEAN_CALM_INTENSITY_THRESHOLD = 0.9
+local BOAT_LEAN_CALM_INTENSITY_EXPONENT = 2.5
+local BOAT_LEAN_CALM_RESIDUAL_SCALE = 0.035
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -271,6 +274,7 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
         local leanStrength = 0
         local intensity = 0
         local intensityScale = 0
+        local leanIntensityScale = 0
         local targetPitch = 0
         local targetRoll = 0
 
@@ -279,6 +283,15 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
                 surfaceNormal = surfaceSample.Normal
                 intensity = math.clamp(surfaceSample.Intensity or 0, 0, 1)
                 intensityScale = intensity ^ BOAT_INTENSITY_POWER
+
+                if intensity > BOAT_LEAN_CALM_INTENSITY_THRESHOLD then
+                        local normalized = (intensity - BOAT_LEAN_CALM_INTENSITY_THRESHOLD)
+                                / math.max(1 - BOAT_LEAN_CALM_INTENSITY_THRESHOLD, 1e-3)
+                        leanIntensityScale = math.clamp(normalized, 0, 1) ^ BOAT_LEAN_CALM_INTENSITY_EXPONENT
+                elseif BOAT_LEAN_CALM_INTENSITY_THRESHOLD > 0 then
+                        local calmNormalized = intensity / BOAT_LEAN_CALM_INTENSITY_THRESHOLD
+                        leanIntensityScale = math.clamp(calmNormalized, 0, 1) * BOAT_LEAN_CALM_RESIDUAL_SCALE
+                end
 
                 if surfaceNormal.Magnitude > 1e-3 and intensity > 0 then
                         surfaceNormal = surfaceNormal.Unit
@@ -310,18 +323,17 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
 					local rawPitch = -basePitch * BOAT_PITCH_GAIN
 					local rawRoll = -baseRoll * BOAT_ROLL_GAIN
 
-					local slopeScale = 1
-					if BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH > 0 then
-						local slopeMagnitude = math.max(math.abs(basePitch), math.abs(baseRoll))
-						slopeScale = math.clamp(slopeMagnitude / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH, 0, 1)
-					end
+                                        local slopeScale = 1
+                                        if BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH > 0 then
+                                                local slopeMagnitude = math.max(math.abs(basePitch), math.abs(baseRoll))
+                                                slopeScale = math.clamp(slopeMagnitude / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH, 0, 1)
+                                        end
 
-					local intensitySlopeScale = intensityScale * slopeScale
-					local combinedScale = math.max(intensitySlopeScale, intensityScale * intensityScale)
-					leanStrength = math.clamp(combinedScale, 0, 1)
+                                        local intensitySlopeScale = leanIntensityScale * slopeScale
+                                        leanStrength = math.clamp(intensitySlopeScale, 0, 1)
 
-					targetPitch = math.clamp(rawPitch * leanStrength, -BOAT_MAX_PITCH, BOAT_MAX_PITCH)
-					targetRoll = math.clamp(rawRoll * leanStrength, -BOAT_MAX_ROLL, BOAT_MAX_ROLL)
+                                        targetPitch = math.clamp(rawPitch * leanStrength, -BOAT_MAX_PITCH, BOAT_MAX_PITCH)
+                                        targetRoll = math.clamp(rawRoll * leanStrength, -BOAT_MAX_ROLL, BOAT_MAX_ROLL)
                 end
         else
                 surfaceY = WaterPhysics.TryGetWaterSurface(position)
@@ -356,8 +368,9 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
                 * CFrame.Angles(0, currentYaw, 0)
                 * CFrame.Angles(targetPitch, 0, 0)
                 * CFrame.Angles(0, 0, targetRoll)
+        local responsivenessDriver = math.max(leanStrength, leanIntensityScale, intensityScale * 0.1, 0.05)
         local responsivenessScale = BOAT_LEAN_RESPONSIVENESS_MIN_SCALE
-                + (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * math.max(intensityScale, leanStrength)
+                + (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * responsivenessDriver
         local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS * responsivenessScale, 0, 1)
         local blendedOrientation = currentCFrame:Lerp(targetOrientation, alpha)
         local rotation = blendedOrientation - blendedOrientation.Position

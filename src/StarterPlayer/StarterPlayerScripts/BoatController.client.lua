@@ -33,6 +33,12 @@ local cameraRotation = 0
 local cameraSmoothness = 0.2
 local cameraDistance = 35
 local targetCameraDistance = 35
+local firstPersonCameraPart = nil
+local isCharacterHiddenForSubmarine = false
+local characterVisibilityAddedConnection = nil
+local characterVisibilityRemovedConnection = nil
+local characterPartTransparencyConnections = {}
+local hiddenCharacter = nil
 
 -- Submarine controls
 local submarineControls = {
@@ -272,12 +278,42 @@ local function SendControlUpdate(deltaTime)
 end
 
 -- ENHANCED CAMERA WITH SPEED-BASED EFFECTS
-local function UpdateBoatCamera()
-	if not currentBoat or not currentBoat.PrimaryPart or not isControlling then 
-		return 
-	end
+local function ResolveFirstPersonCameraPart()
+        if not currentBoat then
+                firstPersonCameraPart = nil
+                return
+        end
 
-	local boatPart = currentBoat.PrimaryPart
+        local cameraAnchor = currentBoat:FindFirstChild("FirstPersonCameraAngle", true)
+        if cameraAnchor and (cameraAnchor:IsA("BasePart") or cameraAnchor:IsA("Attachment") or cameraAnchor:IsA("CFrameValue")) then
+                firstPersonCameraPart = cameraAnchor
+        else
+                firstPersonCameraPart = nil
+        end
+end
+
+local function getFirstPersonCameraCFrame()
+        if not firstPersonCameraPart then
+                return nil
+        end
+
+        if firstPersonCameraPart:IsA("BasePart") then
+                return firstPersonCameraPart.CFrame
+        elseif firstPersonCameraPart:IsA("Attachment") then
+                return firstPersonCameraPart.WorldCFrame
+        elseif firstPersonCameraPart:IsA("CFrameValue") then
+                return firstPersonCameraPart.Value
+        end
+
+        return nil
+end
+
+local function UpdateBoatCamera()
+        if not currentBoat or not currentBoat.PrimaryPart or not isControlling then
+                return
+        end
+
+        local boatPart = currentBoat.PrimaryPart
 
 	if cameraMode == "Follow" then
 		-- Dynamic camera based on actual speed (not velocity)
@@ -324,10 +360,20 @@ local function UpdateBoatCamera()
 		Camera.CameraType = Enum.CameraType.Scriptable
 		Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, 0.12)
 
-	elseif cameraMode == "FirstPerson" and isSubmarine then
-		Camera.CameraType = Enum.CameraType.Scriptable
-		local offset = boatPart.CFrame * CFrame.new(0, 2, -8)
-		Camera.CFrame = Camera.CFrame:Lerp(offset, 0.3)
+        elseif cameraMode == "FirstPerson" and isSubmarine then
+                Camera.CameraType = Enum.CameraType.Scriptable
+
+                if not firstPersonCameraPart or not firstPersonCameraPart.Parent then
+                        ResolveFirstPersonCameraPart()
+                end
+
+                local targetCFrame = getFirstPersonCameraCFrame()
+                if not targetCFrame then
+                        targetCFrame = boatPart.CFrame * CFrame.new(0, 2, -8)
+                end
+
+                Camera.CFrame = Camera.CFrame:Lerp(targetCFrame, 0.25)
+                Camera.FieldOfView = 70
 
 	elseif cameraMode == "Chase" then
 		local offset = boatPart.CFrame * CFrame.new(0, 10, 25)
@@ -344,11 +390,15 @@ local function UpdateBoatCamera()
 	end
 
 	-- Adjust FOV based on actual speed for effect
-	if Camera.CameraType == Enum.CameraType.Scriptable then
-		local speedFactor = math.abs(currentSpeed) / maxSpeed
-		local targetFOV = 70 + (speedFactor * 20) -- Max +20 FOV at max speed
-		Camera.FieldOfView = Camera.FieldOfView + (targetFOV - Camera.FieldOfView) * 0.1
-	end
+        if Camera.CameraType == Enum.CameraType.Scriptable then
+                if cameraMode == "FirstPerson" and isSubmarine then
+                        Camera.FieldOfView = 70
+                else
+                        local speedFactor = math.abs(currentSpeed) / maxSpeed
+                        local targetFOV = 70 + (speedFactor * 20) -- Max +20 FOV at max speed
+                        Camera.FieldOfView = Camera.FieldOfView + (targetFOV - Camera.FieldOfView) * 0.1
+                end
+        end
 end
 
 -- Display speed info (optional UI element)
@@ -364,6 +414,119 @@ local function UpdateSpeedDisplay()
 end
 
 -- Cleanup
+local function disconnectVisibilityTracking()
+        if characterVisibilityAddedConnection then
+                characterVisibilityAddedConnection:Disconnect()
+                characterVisibilityAddedConnection = nil
+        end
+
+        if characterVisibilityRemovedConnection then
+                characterVisibilityRemovedConnection:Disconnect()
+                characterVisibilityRemovedConnection = nil
+        end
+
+        for part, connection in pairs(characterPartTransparencyConnections) do
+                if connection then
+                        connection:Disconnect()
+                end
+                characterPartTransparencyConnections[part] = nil
+        end
+end
+
+local function trackPartTransparency(part, hidden)
+        if not part:IsA("BasePart") then
+                return
+        end
+
+        local existingConnection = characterPartTransparencyConnections[part]
+        if existingConnection then
+                existingConnection:Disconnect()
+                characterPartTransparencyConnections[part] = nil
+        end
+
+        if hidden then
+                part.LocalTransparencyModifier = 1
+                characterPartTransparencyConnections[part] = part:GetPropertyChangedSignal("LocalTransparencyModifier")
+                        :Connect(function()
+                                if not isCharacterHiddenForSubmarine then
+                                        local connection = characterPartTransparencyConnections[part]
+                                        if connection then
+                                                connection:Disconnect()
+                                        end
+                                        characterPartTransparencyConnections[part] = nil
+                                        return
+                                end
+
+                                if hiddenCharacter and hiddenCharacter.Parent and part:IsDescendantOf(hiddenCharacter) then
+                                        if part.LocalTransparencyModifier < 1 then
+                                                part.LocalTransparencyModifier = 1
+                                        end
+                                else
+                                        local connection = characterPartTransparencyConnections[part]
+                                        if connection then
+                                                connection:Disconnect()
+                                        end
+                                        characterPartTransparencyConnections[part] = nil
+                                end
+                        end)
+        else
+                part.LocalTransparencyModifier = 0
+        end
+end
+
+local function applyCharacterVisibility(character, hidden)
+	for _, descendant in character:GetDescendants() do
+		trackPartTransparency(descendant, hidden)
+	end
+end
+
+local function SetLocalCharacterVisibility(hidden)
+	local character = player.Character
+	if not character then
+		disconnectVisibilityTracking()
+		isCharacterHiddenForSubmarine = hidden
+		hiddenCharacter = nil
+		return
+	end
+
+	if hiddenCharacter and hiddenCharacter ~= character then
+		applyCharacterVisibility(hiddenCharacter, false)
+		disconnectVisibilityTracking()
+	end
+
+	if isCharacterHiddenForSubmarine == hidden and hiddenCharacter == character then
+		return
+	end
+
+	if hidden then
+		applyCharacterVisibility(character, true)
+
+		if characterVisibilityAddedConnection then
+			characterVisibilityAddedConnection:Disconnect()
+		end
+		characterVisibilityAddedConnection = character.DescendantAdded:Connect(function(descendant)
+			trackPartTransparency(descendant, true)
+		end)
+
+		if characterVisibilityRemovedConnection then
+			characterVisibilityRemovedConnection:Disconnect()
+		end
+		characterVisibilityRemovedConnection = character.DescendantRemoving:Connect(function(descendant)
+			local connection = characterPartTransparencyConnections[descendant]
+			if connection then
+				connection:Disconnect()
+				characterPartTransparencyConnections[descendant] = nil
+			end
+		end)
+	else
+		applyCharacterVisibility(character, false)
+		disconnectVisibilityTracking()
+	end
+
+	isCharacterHiddenForSubmarine = hidden
+	hiddenCharacter = hidden and character or nil
+end
+
 local function CleanupBoatSession()
         if activeDiveTask then
                 task.cancel(activeDiveTask)
@@ -405,6 +568,11 @@ local function CleanupBoatSession()
         targetCameraDistance = 35
         controlSendAccumulator = CONTROL_UPDATE_INTERVAL
         lastSentControls = nil
+        firstPersonCameraPart = nil
+
+        if isCharacterHiddenForSubmarine then
+                SetLocalCharacterVisibility(false)
+        end
 end
 
 -- Seat handler
@@ -436,22 +604,28 @@ local function OnCharacterSeated(active, seatPart)
 				if isOwner then
 					isControlling = true
 
-                                        if isSubmarine and currentBoat.PrimaryPart then
-                                                local surfaceY = WaterPhysics.GetWaterLevel(currentBoat.PrimaryPart.Position)
-                                                local depth = surfaceY - currentBoat.PrimaryPart.Position.Y
-                                                submarineMode = depth > 8 and "dive" or "surface"
+					if isSubmarine and currentBoat.PrimaryPart then
+						ResolveFirstPersonCameraPart()
+						local surfaceY = WaterPhysics.GetWaterLevel(currentBoat.PrimaryPart.Position)
+						local depth = surfaceY - currentBoat.PrimaryPart.Position.Y
+						submarineMode = depth > 8 and "dive" or "surface"
 					end
 
-					cameraMode = "Follow"
+					cameraMode = isSubmarine and "FirstPerson" or "Follow"
 					cameraConnection = RunService.RenderStepped:Connect(UpdateBoatCamera)
-                                        controlUpdateConnection = RunService.Heartbeat:Connect(function(deltaTime)
-                                                SendControlUpdate(deltaTime)
-                                                UpdateSpeedDisplay()
-                                        end)
+					controlUpdateConnection = RunService.Heartbeat:Connect(function(deltaTime)
+						SendControlUpdate(deltaTime)
+						UpdateSpeedDisplay()
+					end)
 
-					print(string.format("Controlling %s (Weight: %d, Max Speed: %d)", 
+					print(string.format("Controlling %s (Weight: %d, Max Speed: %d)",
 						boatType or "Unknown", boatWeight, maxSpeed))
-					print("C - Camera | G - Dive (submarines)")
+					if isSubmarine then
+						print("Submarine camera locked to first person view")
+						SetLocalCharacterVisibility(true)
+					else
+						print("C - Camera | G - Dive (submarines)")
+					end
 				else
 					print("Passenger in " .. (boatType or "Unknown"))
 				end
@@ -465,6 +639,12 @@ local function OnCharacterAdded(character)
 	local humanoid = character:WaitForChild("Humanoid", 5)
 	if humanoid then
 		humanoid.Seated:Connect(OnCharacterSeated)
+	end
+
+	if isCharacterHiddenForSubmarine then
+		SetLocalCharacterVisibility(true)
+	else
+		SetLocalCharacterVisibility(false)
 	end
 
 	task.spawn(function()
@@ -574,18 +754,23 @@ local function OnInputBegan(input, gameProcessed)
 	end
 
 	-- Camera mode (C key)
-	if input.KeyCode == Enum.KeyCode.C and isControlling then
-		local now = tick()
-		if now - lastInputTime < INPUT_COOLDOWN then return end
-		lastInputTime = now
+        if input.KeyCode == Enum.KeyCode.C and isControlling then
+                local now = tick()
+                if now - lastInputTime < INPUT_COOLDOWN then return end
+                lastInputTime = now
 
-		local modes = isSubmarine and 
-			{"Default", "Follow", "Chase", "FirstPerson", "Cinematic"} or
-			{"Default", "Follow", "Chase", "Cinematic"}
+                if isSubmarine then
+                        cameraMode = "FirstPerson"
+                        cameraSmoothness = 0.2
+                        print("Submarine cameras are currently limited to first person view")
+                        return
+                end
 
-		local currentIndex = table.find(modes, cameraMode) or 1
-		currentIndex = currentIndex % #modes + 1
-		cameraMode = modes[currentIndex]
+                local modes = {"Default", "Follow", "Chase", "Cinematic"}
+
+                local currentIndex = table.find(modes, cameraMode) or 1
+                currentIndex = currentIndex % #modes + 1
+                cameraMode = modes[currentIndex]
 
 		if cameraMode == "Follow" then
 			cameraSmoothness = 0.2

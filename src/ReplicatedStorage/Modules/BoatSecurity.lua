@@ -24,6 +24,7 @@ local PlayerData = {}
 local RemoteRateLimits = {}
 local BoatPositionHistory = {}
 local LastValidPositions = {}
+local SafeTeleportAllowance = {}
 
 -- Initialize player data
 local function InitializePlayer(player)
@@ -49,10 +50,11 @@ end
 
 -- Clean up player data
 function BoatSecurity.CleanupPlayer(player)
-	PlayerData[player] = nil
-	RemoteRateLimits[player] = nil
-	BoatPositionHistory[player] = nil
-	LastValidPositions[player] = nil
+        PlayerData[player] = nil
+        RemoteRateLimits[player] = nil
+        BoatPositionHistory[player] = nil
+        LastValidPositions[player] = nil
+        SafeTeleportAllowance[player] = nil
 end
 
 -- Check if player can spawn a boat
@@ -215,6 +217,26 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
         local data = PlayerData[player]
         local currentTime = tick()
 
+        local teleportAllowance = SafeTeleportAllowance[player]
+        if teleportAllowance then
+                if currentTime <= teleportAllowance.expires then
+                        SafeTeleportAllowance[player] = nil
+
+                        LastValidPositions[player] = teleportAllowance.position or newPosition
+                        BoatPositionHistory[player] = {
+                                {
+                                        position = newPosition,
+                                        time = currentTime,
+                                        distance = 0,
+                                },
+                        }
+
+                        return true, "Teleport allowance", false
+                else
+                        SafeTeleportAllowance[player] = nil
+                end
+        end
+
         if not boat or not boat.PrimaryPart then
                 return false, "Invalid boat", false
         end
@@ -314,6 +336,15 @@ end
 
 function BoatSecurity.GetLastValidPosition(player)
         return LastValidPositions[player]
+end
+
+function BoatSecurity.RegisterSafeTeleport(player, targetPosition, duration)
+        InitializePlayer(player)
+
+        SafeTeleportAllowance[player] = {
+                expires = tick() + (duration or 2),
+                position = targetPosition,
+        }
 end
 
 -- Check for suspicious boat modifications

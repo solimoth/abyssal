@@ -33,6 +33,46 @@ function GerstnerWave.WaveInfo.new(direction: Vector2?, waveLength: number?, ste
     }
 end
 
+local function sanitizeDirection(direction: Vector2?): Vector2
+    if not direction or direction.Magnitude < 1e-3 then
+        return v2.new(1, 0)
+    end
+    return direction.Unit
+end
+
+local function computeSteepness(amplitude: number, waveLength: number, suppliedSteepness: number?): number
+    local k = twoPi / waveLength
+    if suppliedSteepness then
+        return math.clamp(suppliedSteepness, 0, 1.2)
+    end
+    return math.clamp(amplitude * k, 0, 1.2)
+end
+
+function GerstnerWave.WaveInfo.fromConfig(entry: { [string]: any }): WaveInfo
+    local waveLength = entry.Wavelength or entry.WaveLength or 64
+    local amplitude = entry.Amplitude or entry.Height or 1
+    local speed = entry.Speed or entry.PhaseSpeed
+    local gravity = entry.Gravity
+    local steepness = computeSteepness(amplitude, waveLength, entry.Steepness)
+    gravity = gravity or (speed and (speed * speed * ((2 * math.pi) / waveLength))) or Workspace.Gravity
+
+    return GerstnerWave.WaveInfo.new(
+        sanitizeDirection(entry.Direction),
+        waveLength,
+        steepness,
+        gravity
+    )
+end
+
+function GerstnerWave.BuildWaveInfos(waveConfig: { [number]: { [string]: any } }?): { WaveInfo }
+    local waves = waveConfig or {}
+    local infos = table.create(#waves)
+    for _, entry in ipairs(waves) do
+        infos[#infos + 1] = GerstnerWave.WaveInfo.fromConfig(entry)
+    end
+    return infos
+end
+
 function GerstnerWave.System:CalculateWave(info: WaveInfo): (number, number, number, Vector2, number)
     local waveLength = info.WaveLength
     local gravity = info.Gravity

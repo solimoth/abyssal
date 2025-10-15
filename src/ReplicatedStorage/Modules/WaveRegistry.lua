@@ -9,18 +9,18 @@ local WaveRegistry = {}
 local activeField: any? = nil
 
 function WaveRegistry.SetActiveField(field)
-        activeField = field
+    activeField = field
 end
 
 function WaveRegistry.GetActiveField()
-        return activeField
+    return activeField
 end
 
 function WaveRegistry.Sample(position: Vector3): number?
-        if activeField then
-                return activeField:GetHeight(position)
-        end
-        return nil
+    if activeField then
+        return activeField:GetHeight(position)
+    end
+    return nil
 end
 
 return WaveRegistry

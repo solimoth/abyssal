@@ -1,7 +1,8 @@
 --!strict
 -- WaveConfig.lua
--- Central configuration for the dynamic wave surface built on editable meshes.
--- Adjust these values to tune visual fidelity and performance.
+-- Central configuration for the dynamic wave surface. Physics run on the server
+-- while visuals are rendered locally by StarterPlayerScripts/WaveRenderer.
+-- Adjust these values to tune fidelity and performance.
 
 local WaveConfig = {
     -- Base height (world Y) of the simulated water surface.

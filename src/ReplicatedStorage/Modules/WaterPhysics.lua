@@ -1,13 +1,17 @@
 local CollectionService = game:GetService("CollectionService")
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local WaterPhysics = {}
+
+local WaveRegistry = require(ReplicatedStorage.Modules.WaveRegistry)
+local WaveConfig = require(ReplicatedStorage.Modules.WaveConfig)
 
 -- The legacy system expected a fixed water level for the map. We keep a default so
 -- downstream systems that rely on a reference plane continue to function even when
 -- a water surface cannot be located with raycasts (for example while inside sealed
 -- interiors). The value can be configured through TerrainWaterSystem if required.
-local DEFAULT_WATER_LEVEL = 908.935
+local DEFAULT_WATER_LEVEL = WaveConfig.SeaLevel or 908.935
 
 -- When sampling for the water surface we cast a ray both above and below the target
 -- position to ensure we find the closest body of water without having to know the
@@ -16,6 +20,15 @@ local WATER_SURFACE_SEARCH_DISTANCE = 512
 local WATER_VOLUME_CACHE_DURATION = 1
 local WATER_HORIZONTAL_TOLERANCE = 0.5
 local WATER_VOLUME_TAGS = { "WaterVolume", "WaterRegion" }
+local BOAT_LEAN_RESPONSIVENESS = 4
+local BOAT_LEAN_RESPONSIVENESS_MIN_SCALE = 0.35
+local BOAT_LEAN_RESPONSIVENESS_MAX_SCALE = 1
+local BOAT_MAX_ROLL = math.rad(22)
+local BOAT_MAX_PITCH = math.rad(15)
+local BOAT_ROLL_GAIN = 1.15
+local BOAT_PITCH_GAIN = 1
+local BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH = math.rad(18)
+local BOAT_MIN_LEAN_THRESHOLD = 0.05
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -135,7 +148,20 @@ local function findWaterSurfaceFromParts(position: Vector3): number?
     return closestSurface
 end
 
+local function sampleDynamicSurface(position: Vector3): number?
+    local height = WaveRegistry.Sample(position)
+    if height then
+        return height
+    end
+    return nil
+end
+
 local function findWaterSurface(position: Vector3): number?
+    local dynamicHeight = sampleDynamicSurface(position)
+    if dynamicHeight then
+        return dynamicHeight
+    end
+
     local origin = position + Vector3.new(0, WATER_SURFACE_SEARCH_DISTANCE, 0)
     local direction = Vector3.new(0, -WATER_SURFACE_SEARCH_DISTANCE * 2, 0)
     local result = Workspace:Raycast(origin, direction, waterRaycastParams)
@@ -227,7 +253,57 @@ end
 
 function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: string, deltaTime: number)
         local position = currentCFrame.Position
-        local surfaceY = WaterPhysics.TryGetWaterSurface(position)
+        local surfaceSample = WaveRegistry.SampleSurface(position)
+        local surfaceY
+        local surfaceNormal = Vector3.yAxis
+        local leanStrength = 0
+        local intensity = 0
+        local targetPitch = 0
+        local targetRoll = 0
+
+        if surfaceSample then
+                surfaceY = surfaceSample.Height
+                surfaceNormal = surfaceSample.Normal
+                intensity = math.clamp(surfaceSample.Intensity or 0, 0, 1)
+
+                if surfaceNormal.Magnitude > 1e-3 and intensity > 0 then
+                        surfaceNormal = surfaceNormal.Unit
+
+                        local upDot = math.clamp(surfaceNormal:Dot(Vector3.yAxis), 0.01, 1)
+                        local forward = currentCFrame.LookVector
+                        local right = currentCFrame.RightVector
+
+                        local forwardXZ = Vector3.new(forward.X, 0, forward.Z)
+                        if forwardXZ.Magnitude < 1e-3 then
+                                forwardXZ = Vector3.new(0, 0, -1)
+                        else
+                                forwardXZ = forwardXZ.Unit
+                        end
+
+                        local rightXZ = Vector3.new(right.X, 0, right.Z)
+                        if rightXZ.Magnitude < 1e-3 then
+                                rightXZ = Vector3.new(1, 0, 0)
+                        else
+                                rightXZ = rightXZ.Unit
+                        end
+
+                        local slopeForward = -(surfaceNormal.X * forwardXZ.X + surfaceNormal.Z * forwardXZ.Z) / upDot
+                        local slopeRight = -(surfaceNormal.X * rightXZ.X + surfaceNormal.Z * rightXZ.Z) / upDot
+
+                        local basePitch = math.atan(math.clamp(slopeForward, -4, 4))
+                        local baseRoll = math.atan(math.clamp(slopeRight, -4, 4))
+
+                        targetPitch = math.clamp(-basePitch * BOAT_PITCH_GAIN * intensity, -BOAT_MAX_PITCH, BOAT_MAX_PITCH)
+                        targetRoll = math.clamp(-baseRoll * BOAT_ROLL_GAIN * intensity, -BOAT_MAX_ROLL, BOAT_MAX_ROLL)
+
+                        local maxAngle = math.max(math.abs(targetPitch) / BOAT_MAX_PITCH, math.abs(targetRoll) / BOAT_MAX_ROLL)
+                        local slopeScale = math.min(1, math.abs(basePitch) / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH)
+                        slopeScale = math.max(slopeScale, math.min(1, math.abs(baseRoll) / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH))
+                        leanStrength = math.clamp(math.max(maxAngle, slopeScale * intensity), 0, 1)
+                end
+        else
+                surfaceY = WaterPhysics.TryGetWaterSurface(position)
+        end
 
         if not surfaceY then
                 return currentCFrame, false
@@ -247,9 +323,25 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
         local newY = position.Y + (buoyancySpeed * deltaTime)
 
         local _, currentYaw, _ = currentCFrame:ToOrientation()
-        local newCFrame = CFrame.new(position.X, newY, position.Z) * CFrame.Angles(0, currentYaw, 0)
+        local basePosition = Vector3.new(position.X, newY, position.Z)
 
-        return newCFrame, true
+        if leanStrength <= BOAT_MIN_LEAN_THRESHOLD then
+                local newCFrame = CFrame.new(basePosition) * CFrame.Angles(0, currentYaw, 0)
+                return newCFrame, true
+        end
+
+        local targetOrientation = CFrame.new(basePosition)
+                * CFrame.Angles(0, currentYaw, 0)
+                * CFrame.Angles(targetPitch, 0, 0)
+                * CFrame.Angles(0, 0, targetRoll)
+        local responsivenessScale = BOAT_LEAN_RESPONSIVENESS_MIN_SCALE
+                + (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * math.max(intensity, leanStrength)
+        local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS * responsivenessScale, 0, 1)
+        local blendedOrientation = currentCFrame:Lerp(targetOrientation, alpha)
+        local rotation = blendedOrientation - blendedOrientation.Position
+
+        local finalCFrame = CFrame.new(basePosition) * rotation
+        return finalCFrame, true
 end
 
 return WaterPhysics

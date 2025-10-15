@@ -13,7 +13,6 @@ local player = Players.LocalPlayer
 local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 
 -- Water effect settings
-local WATER_LEVEL = 908.935
 local UNDERWATER_FOG_COLOR = Color3.fromRGB(10, 50, 80)
 local SURFACE_FOG_COLOR = Lighting.FogColor
 local UNDERWATER_FOG_START = 10
@@ -149,7 +148,8 @@ local function UpdateUnderwaterEffects()
 		Lighting.FogEnd = UNDERWATER_FOG_START + (UNDERWATER_FOG_END * visibility)
 
 		-- Adjust color based on depth
-		local depth = WATER_LEVEL - position.Y
+                local surfaceY = WaterPhysics.GetWaterLevel(position)
+                local depth = surfaceY - position.Y
 		local deepColor = Color3.fromRGB(5, 20, 40)
 		local shallowColor = Color3.fromRGB(10, 50, 80)
 		local depthRatio = math.clamp(depth / 200, 0, 1)
@@ -244,14 +244,15 @@ local function UpdateWaterEffects()
 	end
 
 	-- Update wave sounds volume based on distance to water
-	if not isUnderwater and waterSounds.waves then
-		local character = player.Character
-		if character and character.PrimaryPart then
-			local distanceToWater = math.abs(character.PrimaryPart.Position.Y - WATER_LEVEL)
-			local volume = math.clamp(1 - (distanceToWater / 50), 0, 0.5)
-			waterSounds.waves.Volume = volume
-		end
-	end
+        if not isUnderwater and waterSounds.waves then
+                local character = player.Character
+                if character and character.PrimaryPart then
+                        local surfaceY = WaterPhysics.GetWaterLevel(character.PrimaryPart.Position)
+                        local distanceToWater = math.abs(character.PrimaryPart.Position.Y - surfaceY)
+                        local volume = math.clamp(1 - (distanceToWater / 50), 0, 0.5)
+                        waterSounds.waves.Volume = volume
+                end
+        end
 end
 
 -- Initialize

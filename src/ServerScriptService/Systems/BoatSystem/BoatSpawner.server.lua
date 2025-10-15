@@ -8,9 +8,9 @@ local CollectionService = game:GetService("CollectionService")
 
 local BoatConfig = require(ReplicatedStorage.Modules.BoatConfig)
 local BoatManager = require(script.Parent.BoatManager)
+local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 
 -- Constants
-local WATER_LEVEL = 908.935
 local SPAWN_ZONE_COLOR = Color3.fromRGB(0, 162, 255)
 local SPAWN_ZONE_TRANSPARENCY = 0.8
 
@@ -42,7 +42,8 @@ local function GetRandomSpawnPosition(spawnZone)
 	local localOffset = Vector3.new(randomX, 0, randomZ)
 	local worldPosition = zoneCFrame:PointToWorldSpace(localOffset)
 
-	return Vector3.new(worldPosition.X, WATER_LEVEL + 2, worldPosition.Z)
+        local surfaceY = WaterPhysics.GetWaterLevel(worldPosition)
+        return Vector3.new(worldPosition.X, surfaceY + 2, worldPosition.Z)
 end
 
 -- Optimized position checking using OverlapParams
@@ -209,12 +210,13 @@ function OnDockPromptTriggered(player, dock, spawnButton)
 			directionFromButton = Vector3.new(directionFromButton.X, 0, directionFromButton.Z).Unit
 
 			local spawnCFrame = CFrame.lookAt(spawnPosition, spawnPosition + directionFromButton)
-		else
-			-- Fallback: Use the old offset system if no spawn zone exists
-			local spawnOffset = dock:GetAttribute("SpawnOffset") or Vector3.new(0, 0, -30)
-			spawnPosition = spawnButton.Position + spawnOffset
-			spawnPosition = Vector3.new(spawnPosition.X, WATER_LEVEL + 2, spawnPosition.Z)
-		end
+                else
+                        -- Fallback: Use the old offset system if no spawn zone exists
+                        local spawnOffset = dock:GetAttribute("SpawnOffset") or Vector3.new(0, 0, -30)
+                        spawnPosition = spawnButton.Position + spawnOffset
+                        local surfaceY = WaterPhysics.GetWaterLevel(spawnPosition)
+                        spawnPosition = Vector3.new(spawnPosition.X, surfaceY + 2, spawnPosition.Z)
+                end
 
 		-- Get the selected boat type from the client
 		local boatType = "StarterRaft"
@@ -299,7 +301,9 @@ end)
 InitializeExistingDocks()
 
 -- Export the water level for other scripts to use
-_G.WATER_LEVEL = WATER_LEVEL
+_G.GetWaterLevel = function(position)
+        return WaterPhysics.GetWaterLevel(position)
+end
 
 print("Boat Spawner system initialized (optimized)")
 print("Docks should have: SpawnButton part and BoatSpawnZone part")

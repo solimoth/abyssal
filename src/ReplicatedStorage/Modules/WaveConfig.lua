@@ -45,6 +45,14 @@ local WaveConfig = {
     -- Rate at which the tiled surface recentres towards the active focus point.
     RecenterResponsiveness = 6,
 
+    -- Optional land-zone attenuation. Place invisible parts named "LandZone"
+    -- (or adjust the name below) around islands to calm the surrounding water.
+    -- Waves inside the zone fade towards LandZoneAttenuation and blend back to
+    -- full strength over LandZoneFadeDistance studs.
+    LandZoneName = "LandZone",
+    LandZoneAttenuation = 0.35,
+    LandZoneFadeDistance = 80,
+
     -- CollectionService tags used to identify high-priority focus objects such
     -- as ships, submarines, or floating debris.
     FocusTags = {

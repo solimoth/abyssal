@@ -20,6 +20,7 @@ local WATER_SURFACE_SEARCH_DISTANCE = 512
 local WATER_VOLUME_CACHE_DURATION = 1
 local WATER_HORIZONTAL_TOLERANCE = 0.5
 local WATER_VOLUME_TAGS = { "WaterVolume", "WaterRegion" }
+local BOAT_LEAN_RESPONSIVENESS = 4
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -244,7 +245,18 @@ end
 
 function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: string, deltaTime: number)
         local position = currentCFrame.Position
-        local surfaceY = WaterPhysics.TryGetWaterSurface(position)
+        local surfaceSample = WaveRegistry.SampleSurface(position)
+        local surfaceY
+        local surfaceNormal = Vector3.yAxis
+        local leanStrength = 0
+
+        if surfaceSample then
+                surfaceY = surfaceSample.Height
+                surfaceNormal = surfaceSample.Normal
+                leanStrength = math.clamp(surfaceSample.Intensity or 0, 0, 1)
+        else
+                surfaceY = WaterPhysics.TryGetWaterSurface(position)
+        end
 
         if not surfaceY then
                 return currentCFrame, false
@@ -264,9 +276,41 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
         local newY = position.Y + (buoyancySpeed * deltaTime)
 
         local _, currentYaw, _ = currentCFrame:ToOrientation()
-        local newCFrame = CFrame.new(position.X, newY, position.Z) * CFrame.Angles(0, currentYaw, 0)
+        local basePosition = Vector3.new(position.X, newY, position.Z)
 
-        return newCFrame, true
+        if leanStrength <= 0 then
+                local newCFrame = CFrame.new(basePosition) * CFrame.Angles(0, currentYaw, 0)
+                return newCFrame, true
+        end
+
+        surfaceNormal = surfaceNormal.Magnitude > 1e-3 and surfaceNormal.Unit or Vector3.yAxis
+        if leanStrength < 1 then
+                local blendedNormal = surfaceNormal:Lerp(Vector3.yAxis, 1 - leanStrength)
+                if blendedNormal.Magnitude > 1e-3 then
+                        surfaceNormal = blendedNormal.Unit
+                else
+                        surfaceNormal = Vector3.yAxis
+                end
+        end
+
+        local forward = currentCFrame.LookVector
+        forward = forward - surfaceNormal * forward:Dot(surfaceNormal)
+        if forward.Magnitude < 1e-3 then
+                local right = currentCFrame.RightVector
+                forward = right - surfaceNormal * right:Dot(surfaceNormal)
+        end
+        if forward.Magnitude < 1e-3 then
+                forward = Vector3.zAxis
+        end
+        forward = forward.Unit
+
+        local targetOrientation = CFrame.lookAt(basePosition, basePosition + forward, surfaceNormal)
+        local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS, 0, 1)
+        local blendedOrientation = currentCFrame:Lerp(targetOrientation, alpha)
+        local rotation = blendedOrientation - blendedOrientation.Position
+
+        local finalCFrame = CFrame.new(basePosition) * rotation
+        return finalCFrame, true
 end
 
 return WaterPhysics

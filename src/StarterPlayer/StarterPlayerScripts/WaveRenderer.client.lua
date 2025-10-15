@@ -68,6 +68,14 @@ local function attributeMaterial(name: string, fallback: Enum.Material): Enum.Ma
     return fallback
 end
 
+local function attributeString(name: string, fallback: string): string
+    local value = container:GetAttribute(name)
+    if typeof(value) == "string" and value ~= "" then
+        return value
+    end
+    return fallback
+end
+
 local gridWidth = math.max(2, math.floor(attributeNumber("GridWidth", WaveConfig.GridWidth or 100)))
 local gridHeight = math.max(2, math.floor(attributeNumber("GridHeight", WaveConfig.GridHeight or 100)))
 local spacing = attributeNumber("GridSpacing", WaveConfig.GridSpacing or 20)
@@ -82,6 +90,9 @@ local material = attributeMaterial("MaterialName", WaveConfig.Material or Enum.M
 local color = attributeColor("Color", WaveConfig.Color or Color3.fromRGB(30, 120, 150))
 local transparency = attributeNumber("Transparency", WaveConfig.Transparency or 0.2)
 local reflectance = attributeNumber("Reflectance", WaveConfig.Reflectance or 0)
+local landZoneName = attributeString("LandZoneName", WaveConfig.LandZoneName or "LandZone")
+local landZoneAttenuation = math.clamp(attributeNumber("LandZoneAttenuation", WaveConfig.LandZoneAttenuation or 1), 0, 1)
+local landZoneFadeDistance = math.max(0, attributeNumber("LandZoneFadeDistance", WaveConfig.LandZoneFadeDistance or 0))
 
 local tileSizeX = spacing * (gridWidth - 1)
 local tileSizeZ = spacing * (gridHeight - 1)
@@ -207,6 +218,64 @@ end
 
 local reapplyClock = 0
 
+local landZones: { [BasePart]: boolean } = {}
+
+local function registerLandZone(instance: Instance)
+    if instance:IsA("BasePart") and instance.Name == landZoneName then
+        landZones[instance] = true
+    end
+end
+
+local function unregisterLandZone(instance: Instance)
+    if landZones[instance] then
+        landZones[instance] = nil
+    end
+end
+
+local function rescanLandZones()
+    table.clear(landZones)
+    for _, descendant in ipairs(Workspace:GetDescendants()) do
+        registerLandZone(descendant)
+    end
+end
+
+rescanLandZones()
+
+Workspace.DescendantAdded:Connect(registerLandZone)
+Workspace.DescendantRemoving:Connect(unregisterLandZone)
+
+local function landZoneMultiplier(worldPosition: Vector3): number
+    if landZoneAttenuation >= 0.999 or not next(landZones) then
+        return 1
+    end
+
+    local best = 1
+    for part in pairs(landZones) do
+        if part.Parent then
+            local halfSize = part.Size * 0.5
+            local localPos = part.CFrame:PointToObjectSpace(worldPosition)
+            local dx = math.max(math.abs(localPos.X) - halfSize.X, 0)
+            local dz = math.max(math.abs(localPos.Z) - halfSize.Z, 0)
+            local distanceOutside = math.sqrt((dx * dx) + (dz * dz))
+
+            if distanceOutside <= landZoneFadeDistance then
+                local t = landZoneFadeDistance > 0 and math.clamp(distanceOutside / landZoneFadeDistance, 0, 1) or 0
+                local multiplier = landZoneAttenuation + (1 - landZoneAttenuation) * t
+                if multiplier < best then
+                    best = multiplier
+                    if best <= landZoneAttenuation then
+                        break
+                    end
+                end
+            end
+        else
+            landZones[part] = nil
+        end
+    end
+
+    return best
+end
+
 local function getSharedFocus(): Vector2?
     local fx = container:GetAttribute("FocusX")
     local fz = container:GetAttribute("FocusZ")
@@ -247,9 +316,13 @@ local function updateTile(tile, runTime, scaledChoppiness, scaledIntensity)
             local worldPosition = (originCF * CFrame.new(vx, 0, vz)).Position
             local transform = GerstnerWave:GetTransform(waves, Vector2.new(worldPosition.X, worldPosition.Z), runTime)
 
-            local offsetX = vx + (transform.X * scaledChoppiness)
-            local offsetY = math.max(0, transform.Y * scaledIntensity)
-            local offsetZ = vz + (transform.Z * scaledChoppiness)
+            local zoneMultiplier = landZoneMultiplier(worldPosition)
+            local localIntensity = scaledIntensity * zoneMultiplier
+            local localChoppiness = scaledChoppiness * zoneMultiplier
+
+            local offsetX = vx + (transform.X * localChoppiness)
+            local offsetY = math.max(0, transform.Y * localIntensity)
+            local offsetZ = vz + (transform.Z * localChoppiness)
 
             editable:SetPosition(row[x], Vector3.new(offsetX, offsetY, offsetZ))
         end
@@ -260,6 +333,14 @@ RunService.Heartbeat:Connect(function(dt)
     seaLevel = attributeNumber("SeaLevel", seaLevel)
     targetIntensity = math.max(0, attributeNumber("WaveIntensity", targetIntensity))
     intensityResponsiveness = math.max(0, attributeNumber("IntensityResponsiveness", intensityResponsiveness))
+    landZoneAttenuation = math.clamp(attributeNumber("LandZoneAttenuation", landZoneAttenuation), 0, 1)
+    landZoneFadeDistance = math.max(0, attributeNumber("LandZoneFadeDistance", landZoneFadeDistance))
+
+    local updatedLandZoneName = attributeString("LandZoneName", landZoneName)
+    if updatedLandZoneName ~= landZoneName then
+        landZoneName = updatedLandZoneName
+        rescanLandZones()
+    end
 
     if intensity ~= targetIntensity then
         local alpha = intensityResponsiveness > 0 and math.clamp(dt * intensityResponsiveness, 0, 1) or 1

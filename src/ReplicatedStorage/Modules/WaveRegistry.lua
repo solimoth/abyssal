@@ -23,4 +23,11 @@ function WaveRegistry.Sample(position: Vector3): number?
     return nil
 end
 
+function WaveRegistry.SampleSurface(position: Vector3)
+    if activeField and activeField.GetSurface then
+        return activeField:GetSurface(position)
+    end
+    return nil
+end
+
 return WaveRegistry

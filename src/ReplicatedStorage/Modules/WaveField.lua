@@ -37,6 +37,12 @@ export type WaveField = {
     gridWidth: number,
     gridHeight: number,
     tileRadius: number,
+    landZoneName: string,
+    landZoneAttenuation: number,
+    landZoneFadeDistance: number,
+    landZones: { [BasePart]: boolean },
+    landZoneAddedConn: RBXScriptConnection?,
+    landZoneRemovingConn: RBXScriptConnection?,
 }
 
 local WaveField = {}
@@ -83,6 +89,11 @@ function WaveField.new(config: any): WaveField
     self.tileSizeX = self.spacing * (self.gridWidth - 1)
     self.tileSizeZ = self.spacing * (self.gridHeight - 1)
 
+    self.landZoneName = config.LandZoneName or "LandZone"
+    self.landZoneAttenuation = math.clamp(config.LandZoneAttenuation or 1, 0, 1)
+    self.landZoneFadeDistance = math.max(0, config.LandZoneFadeDistance or 0)
+    self.landZones = {}
+
     self.focusPosition = Vector3.new(0, self.seaLevel, 0)
     self.lastFocusX = self.focusPosition.X
     self.lastFocusZ = self.focusPosition.Z
@@ -108,8 +119,28 @@ function WaveField.new(config: any): WaveField
     folder:SetAttribute("Color", config.Color or Color3.fromRGB(30, 120, 150))
     folder:SetAttribute("Transparency", config.Transparency or 0.2)
     folder:SetAttribute("Reflectance", config.Reflectance or 0)
+    folder:SetAttribute("LandZoneName", self.landZoneName)
+    folder:SetAttribute("LandZoneAttenuation", self.landZoneAttenuation)
+    folder:SetAttribute("LandZoneFadeDistance", self.landZoneFadeDistance)
     folder.Parent = Workspace
     self.folder = folder
+
+    local function registerLandZone(instance: Instance)
+        if instance:IsA("BasePart") and instance.Name == self.landZoneName then
+            self.landZones[instance] = true
+        end
+    end
+
+    for _, descendant in ipairs(Workspace:GetDescendants()) do
+        registerLandZone(descendant)
+    end
+
+    self.landZoneAddedConn = Workspace.DescendantAdded:Connect(registerLandZone)
+    self.landZoneRemovingConn = Workspace.DescendantRemoving:Connect(function(instance)
+        if self.landZones[instance] then
+            self.landZones[instance] = nil
+        end
+    end)
 
     WaveRegistry.SetActiveField(self)
 
@@ -206,9 +237,8 @@ function WaveField:Step(dt: number)
 end
 
 function WaveField:GetHeight(position: Vector3): number
-    local transform = GerstnerWave:GetTransform(self.waveInfos, Vector2.new(position.X, position.Z), self.time)
-    local scaledHeight = math.max(0, transform.Y * self.intensity)
-    return self.seaLevel + scaledHeight
+    local surface = self:GetSurface(position)
+    return surface.Height
 end
 
 function WaveField:SetTargetIntensity(intensity: number)
@@ -217,6 +247,73 @@ end
 
 function WaveField:GetIntensity(): number
     return self.intensity
+end
+
+function WaveField:_computeLandZoneAttenuation(position: Vector3): number
+    if self.landZoneAttenuation >= 0.999 or not next(self.landZones) then
+        return 1
+    end
+
+    local best = 1
+    for part in pairs(self.landZones) do
+        if typeof(part) ~= "Instance" then
+            continue
+        end
+
+        if part.Parent then
+            local halfSize = part.Size * 0.5
+            local localPos = part.CFrame:PointToObjectSpace(position)
+            local dx = math.max(math.abs(localPos.X) - halfSize.X, 0)
+            local dz = math.max(math.abs(localPos.Z) - halfSize.Z, 0)
+            local distanceOutside = math.sqrt((dx * dx) + (dz * dz))
+
+            if distanceOutside <= self.landZoneFadeDistance then
+                local t = self.landZoneFadeDistance > 0 and math.clamp(distanceOutside / self.landZoneFadeDistance, 0, 1) or 0
+                local multiplier = self.landZoneAttenuation + (1 - self.landZoneAttenuation) * t
+                if multiplier < best then
+                    best = multiplier
+                    if best <= self.landZoneAttenuation then
+                        break
+                    end
+                end
+            end
+        else
+            self.landZones[part] = nil
+        end
+    end
+
+    return best
+end
+
+function WaveField:_getLocalIntensity(position: Vector3): number
+    local attenuation = self:_computeLandZoneAttenuation(position)
+    return math.max(0, self.intensity * attenuation)
+end
+
+function WaveField:GetSurface(position: Vector3)
+    local baseTransform, tangent, binormal = GerstnerWave:GetHeightAndNormal(self.waveInfos, Vector2.new(position.X, position.Z), self.time)
+    local localIntensity = self:_getLocalIntensity(position)
+
+    local scaledX = baseTransform.X * localIntensity
+    local scaledY = math.max(0, baseTransform.Y * localIntensity)
+    local scaledZ = baseTransform.Z * localIntensity
+
+    local tangentScaled = tangent * localIntensity
+    local binormalScaled = binormal * localIntensity
+
+    local normal = tangentScaled:Cross(binormalScaled)
+    if normal.Magnitude < 1e-3 then
+        normal = Vector3.yAxis
+    else
+        normal = normal.Unit
+    end
+
+    return {
+        Height = self.seaLevel + scaledY,
+        Normal = normal,
+        Intensity = localIntensity,
+        Displacement = Vector3.new(scaledX, scaledY, scaledZ),
+    }
 end
 
 function WaveField:SetTimeScale(timeScale: number)
@@ -233,6 +330,16 @@ end
 function WaveField:Destroy()
     if WaveRegistry.GetActiveField() == self then
         WaveRegistry.SetActiveField(nil)
+    end
+
+    if self.landZoneAddedConn then
+        self.landZoneAddedConn:Disconnect()
+        self.landZoneAddedConn = nil
+    end
+
+    if self.landZoneRemovingConn then
+        self.landZoneRemovingConn:Disconnect()
+        self.landZoneRemovingConn = nil
     end
 
     if self.folder then

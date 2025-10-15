@@ -39,11 +39,14 @@ local function createEditablePlane(part: MeshPart, resolution: number, size: num
         local step = size / resolution
 
         local baseVertices = table.create((resolution + 1) * (resolution + 1))
-        if not part.CreateEditableMesh then
-                error("EditableMesh is not supported on this MeshPart; ensure the Editable Mesh feature is enabled")
+        local mesh: EditableMesh
+        local ok, err = pcall(function()
+                mesh = Instance.new("EditableMesh")
+        end)
+        if not ok or mesh == nil then
+                error(string.format("EditableMesh is not supported in this experience: %s", err or "unknown error"))
         end
-
-        local mesh = part:CreateEditableMesh()
+        mesh.Parent = part
         mesh.Name = "WaveEditableMesh"
 
         local vertexIds = {}
@@ -70,9 +73,6 @@ local function createEditablePlane(part: MeshPart, resolution: number, size: num
                         mesh:AddTriangle(vertexIds[i1], vertexIds[i2], vertexIds[i3])
                 end
         end
-
-        mesh.Parent = part
-
         return mesh, vertexIds, baseVertices
 end
 

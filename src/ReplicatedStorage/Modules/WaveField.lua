@@ -1,420 +1,363 @@
 --!strict
 -- WaveField.lua
--- Creates and animates a tiled deformable ocean surface. The module exposes
--- helpers for sampling the surface height so that physics systems stay in sync
--- with the rendered geometry.
+-- Generates and animates an editable-mesh ocean surface. A limited number of
+-- tiles slide underneath the active ships/players so the water feels infinite
+-- while keeping performance requirements light enough for server simulation.
 
+local AssetService = game:GetService("AssetService")
 local CollectionService = game:GetService("CollectionService")
-local Workspace = game:GetService("Workspace")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
+local GerstnerWave = require(ReplicatedStorage.Modules.GerstnerWave)
 local WaveRegistry = require(ReplicatedStorage.Modules.WaveRegistry)
 
-type WaveCell = {
-        Part: BasePart,
-        VertexIndices: { number },
-}
-
 export type WaveTile = {
-        Container: Folder,
-        Cells: { WaveCell },
-        BaseVertices: { Vector3 },
-        DeformedVertices: { Vector3 },
-        Stride: number,
-        GridIndex: Vector2,
-        Center: Vector2,
+    Part: MeshPart,
+    Editable: EditableMesh,
+    Vertices: { { number } },
+    OriginCF: CFrame,
+    GridOffset: Vector2,
 }
 
 local WaveField = {}
 WaveField.__index = WaveField
 
-local function unitVector2(direction: Vector2): Vector2
-        if direction.Magnitude < 1e-4 then
-                return Vector2.new(1, 0)
-        end
-        return direction.Unit
-end
-
-local function tileKey(x: number, z: number): string
-        return string.format("%d:%d", x, z)
-end
-
-local function createTileGeometry(resolution: number, size: number, thickness: number, parent: Instance)
-        local halfSize = size * 0.5
-        local step = size / resolution
-        local stride = resolution + 1
-
-        local baseVertices = table.create(stride * stride)
-        local deformedVertices = table.create(stride * stride)
-
-        local index = 1
-        for z = 0, resolution do
-                local offsetZ = -halfSize + (z * step)
-                for x = 0, resolution do
-                        local offsetX = -halfSize + (x * step)
-                        baseVertices[index] = Vector3.new(offsetX, 0, offsetZ)
-                        deformedVertices[index] = baseVertices[index]
-                        index += 1
-                end
-        end
-
-        local container = Instance.new("Folder")
-        container.Name = "WaveTile"
-
-        local cells = table.create(resolution * resolution)
-        local cellIndex = 1
-        for z = 0, resolution - 1 do
-                for x = 0, resolution - 1 do
-                        local i0 = (z * stride) + x + 1
-                        local i1 = i0 + 1
-                        local i2 = i0 + stride
-                        local i3 = i2 + 1
-
-                        local part = Instance.new("Part")
-                        part.Anchored = true
-                        part.CanCollide = false
-                        part.CanTouch = false
-                        part.CanQuery = false
-                        part.CastShadow = false
-                        part.Material = Enum.Material.Water
-                        part.Color = Color3.fromRGB(10, 55, 102)
-                        part.Transparency = 0.2
-                        part.Reflectance = 0.05
-                        part.Size = Vector3.new(step, thickness, step)
-                        part.Name = string.format("WaveCell_%d_%d", x, z)
-                        part.Parent = container
-
-                        cells[cellIndex] = {
-                                Part = part,
-                                VertexIndices = { i0, i1, i2, i3 },
-                        }
-                        cellIndex += 1
-                end
-        end
-
-        container.Parent = parent
-
-        return container, cells, baseVertices, deformedVertices, stride
+local function roundTo(value: number, snap: number): number
+    if snap == 0 then
+        return value
+    end
+    return math.floor(value / snap + 0.5) * snap
 end
 
 local function resolveWorldPosition(instance: Instance): Vector3?
-        if instance:IsA("BasePart") then
-                return instance.Position
-        elseif instance:IsA("Model") then
-                local primary = instance.PrimaryPart
-                if primary then
-                        return primary.Position
-                end
-
-                for _, descendant in instance:GetDescendants() do
-                        if descendant:IsA("BasePart") then
-                                return descendant.Position
-                        end
-                end
+    if instance:IsA("BasePart") then
+        return instance.Position
+    elseif instance:IsA("Model") then
+        local primary = instance.PrimaryPart
+        if primary then
+            return primary.Position
         end
-        return nil
+
+        for _, descendant in ipairs(instance:GetDescendants()) do
+            if descendant:IsA("BasePart") then
+                return descendant.Position
+            end
+        end
+    end
+
+    return nil
+end
+
+local ContentLib: any = (getfenv() :: any).Content
+
+local function applyEditableToPart(editable: EditableMesh, part: MeshPart)
+    if not AssetService.CreateMeshPartAsync then
+        error("CreateMeshPartAsync is unavailable; editable mesh baking is not supported in this experience")
+    end
+
+    local content
+    if ContentLib and ContentLib.fromObject then
+        content = ContentLib.fromObject(editable)
+    else
+        error("Content.fromObject is unavailable; update your experience to the latest engine version")
+    end
+
+    local ok, meshPart = pcall(function()
+        return AssetService:CreateMeshPartAsync(content)
+    end)
+
+    if ok and meshPart then
+        part:ApplyMesh(meshPart)
+        part.Size = meshPart.Size
+        part.Anchored = true
+        part.CanCollide = false
+        part.CanTouch = false
+        part.CanQuery = false
+        meshPart:Destroy()
+    else
+        warn("Failed to bake editable mesh:", meshPart)
+    end
+end
+
+local function buildEditableGrid(gridWidth: number, gridHeight: number, spacing: number)
+    local editable = AssetService:CreateEditableMesh()
+    local vertices = table.create(gridHeight)
+
+    local halfX = spacing * (gridWidth - 1) * 0.5
+    local halfZ = spacing * (gridHeight - 1) * 0.5
+
+    for y = 1, gridHeight do
+        local row = table.create(gridWidth)
+        local vz = (spacing * (y - 1)) - halfZ
+        for x = 1, gridWidth do
+            local vx = (spacing * (x - 1)) - halfX
+            row[x] = editable:AddVertex(Vector3.new(vx, 0, vz))
+        end
+        vertices[y] = row
+    end
+
+    for y = 1, gridHeight - 1 do
+        for x = 1, gridWidth - 1 do
+            local v1 = vertices[y][x]
+            local v2 = vertices[y + 1][x]
+            local v3 = vertices[y][x + 1]
+            local v4 = vertices[y + 1][x + 1]
+
+            editable:AddTriangle(v1, v2, v3)
+            editable:AddTriangle(v2, v4, v3)
+        end
+    end
+
+    return editable, vertices
+end
+
+local function createTile(folder: Folder, gridWidth: number, gridHeight: number, spacing: number, material: Enum.Material, color: Color3, transparency: number, reflectance: number, seaLevel: number, gridOffset: Vector2): WaveTile
+    local editable, vertices = buildEditableGrid(gridWidth, gridHeight, spacing)
+
+    local part = Instance.new("MeshPart")
+    part.Name = string.format("WaveTile_%d_%d", gridOffset.X, gridOffset.Y)
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanTouch = false
+    part.CanQuery = false
+    part.CastShadow = false
+    part.Material = material
+    part.Color = color
+    part.Transparency = transparency
+    part.Reflectance = reflectance
+    part.Parent = folder
+
+    applyEditableToPart(editable, part)
+
+    part.CFrame = CFrame.new(0, seaLevel, 0)
+
+    return {
+        Part = part,
+        Editable = editable,
+        Vertices = vertices,
+        OriginCF = part.CFrame,
+        GridOffset = gridOffset,
+    }
+end
+
+local function convertWaveDefinition(entry: {[string]: any}): GerstnerWave.WaveInfo
+    local direction = entry.Direction or Vector2.new(1, 0)
+    if direction.Magnitude < 1e-3 then
+        direction = Vector2.new(1, 0)
+    else
+        direction = direction.Unit
+    end
+
+    local wavelength = entry.Wavelength or entry.WaveLength or 64
+    local amplitude = entry.Amplitude or entry.Height or 1
+    local speed = entry.Speed or entry.PhaseSpeed
+    local steepness = entry.Steepness
+    local gravity = entry.Gravity
+
+    local k = (2 * math.pi) / wavelength
+
+    if not steepness then
+        steepness = amplitude * k
+    end
+
+    steepness = math.clamp(steepness, 0, 1.2)
+
+    if not gravity then
+        if speed then
+            gravity = speed * speed * k
+        else
+            gravity = Workspace.Gravity
+        end
+    end
+
+    return GerstnerWave.WaveInfo.new(direction, wavelength, steepness, gravity)
 end
 
 function WaveField.new(config)
-        local self = setmetatable({}, WaveField)
+    local self = setmetatable({}, WaveField)
 
-        self.config = config
-        self.seaLevel = config.SeaLevel or 0
-        self.tileSize = config.TileSize or 128
-        self.resolution = math.max(2, math.floor(config.Resolution or 16))
-        self.tileRadius = math.max(1, math.floor(config.TileRadius or 1))
-        self.choppiness = math.clamp(config.Choppiness or 0, 0, 1)
-        self.waves = config.Waves or {}
-        self.focusTags = config.FocusTags or {}
-        self.followCamera = config.FollowCamera ~= false
-        self.recenterResponsiveness = config.RecenterResponsiveness or 4
-        self.tileThickness = math.max(0.1, config.TileThickness or 0.5)
-        self.minCellSize = math.max(0.01, config.MinCellSize or 0.05)
+    self.config = config
+    self.seaLevel = config.SeaLevel or 0
+    self.gridWidth = math.max(2, math.floor(config.GridWidth or 64))
+    self.gridHeight = math.max(2, math.floor(config.GridHeight or 64))
+    self.spacing = config.GridSpacing or 16
+    self.tileRadius = math.max(0, math.floor(config.TileRadius or 0))
+    self.reapplyInterval = math.max(1 / 60, config.ReapplyInterval or (1 / 20))
+    self.choppiness = math.clamp(config.Choppiness or 0, 0, 1)
+    self.recenterResponsiveness = math.max(0, config.RecenterResponsiveness or 6)
+    self.focusTags = config.FocusTags or {}
+    self.followPlayers = config.FollowPlayers ~= false
 
-        self.folder = Instance.new("Folder")
-        self.folder.Name = config.ContainerName or "DynamicWaveSurface"
-        self.folder.Parent = Workspace
+    self.tileSizeX = self.spacing * (self.gridWidth - 1)
+    self.tileSizeZ = self.spacing * (self.gridHeight - 1)
 
-        self.tiles = {}
-        self.tilePool = {}
-        self.time = 0
-        self.focusPosition = Vector3.new(0, self.seaLevel, 0)
+    self.folder = Instance.new("Folder")
+    self.folder.Name = config.ContainerName or "DynamicWaveSurface"
+    self.folder.Parent = Workspace
 
-        self:_populateInitialTiles()
-        WaveRegistry.SetActiveField(self)
+    self.waveInfos = table.create(#(config.Waves or {}))
+    for _, entry in ipairs(config.Waves or {}) do
+        self.waveInfos[#self.waveInfos + 1] = convertWaveDefinition(entry)
+    end
 
-        return self
+    self.tiles = {}
+    self.focusPosition = Vector3.new(0, self.seaLevel, 0)
+    self.time = 0
+    self.reapplyClock = self.reapplyInterval
+
+    local material = config.Material or Enum.Material.Water
+    local color = config.Color or Color3.fromRGB(30, 120, 150)
+    local transparency = config.Transparency or 0.2
+    local reflectance = config.Reflectance or 0
+
+    for z = -self.tileRadius, self.tileRadius do
+        for x = -self.tileRadius, self.tileRadius do
+            local gridOffset = Vector2.new(x, z)
+            local tile = createTile(self.folder, self.gridWidth, self.gridHeight, self.spacing, material, color, transparency, reflectance, self.seaLevel, gridOffset)
+            table.insert(self.tiles, tile)
+        end
+    end
+
+    if #self.tiles == 0 then
+        local tile = createTile(self.folder, self.gridWidth, self.gridHeight, self.spacing, material, color, transparency, reflectance, self.seaLevel, Vector2.zero)
+        table.insert(self.tiles, tile)
+    end
+
+    WaveRegistry.SetActiveField(self)
+
+    return self
 end
 
-function WaveField:_createTile(): WaveTile
-        local container, cells, baseVertices, deformedVertices, stride = createTileGeometry(
-                self.resolution,
-                self.tileSize,
-                self.tileThickness,
-                self.folder
-        )
+function WaveField:_getFocusPosition(): Vector3
+    local bestPosition: Vector3? = nil
+    local closestDistance = math.huge
 
-        if self.config.PhysicalMaterial then
-                for _, cell in ipairs(cells) do
-                        cell.Part.CustomPhysicalProperties = self.config.PhysicalMaterial
+    local origin = self.focusPosition
+
+    for _, tag in ipairs(self.focusTags) do
+        for _, instance in ipairs(CollectionService:GetTagged(tag)) do
+            if not instance:IsDescendantOf(Workspace) then
+                continue
+            end
+
+            local worldPos = resolveWorldPosition(instance)
+            if worldPos then
+                local distance = (worldPos - origin).Magnitude
+                if distance < closestDistance then
+                    closestDistance = distance
+                    bestPosition = worldPos
                 end
+            end
         end
+    end
 
-        return {
-                Container = container,
-                Cells = cells,
-                BaseVertices = baseVertices,
-                DeformedVertices = deformedVertices,
-                Stride = stride,
-                GridIndex = Vector2.zero,
-                Center = Vector2.zero,
-        }
-end
-
-function WaveField:_obtainTile(): WaveTile
-        local tile = table.remove(self.tilePool)
-        if tile then
-                return tile
-        end
-        return self:_createTile()
-end
-
-function WaveField:_assignTile(tile: WaveTile, cellX: number, cellZ: number, key: string)
-        local centerX = (cellX + 0.5) * self.tileSize
-        local centerZ = (cellZ + 0.5) * self.tileSize
-
-        tile.Container.Parent = self.folder
-        tile.GridIndex = Vector2.new(cellX, cellZ)
-        tile.Center = Vector2.new(centerX, centerZ)
-        tile.Container.Name = string.format("WaveTile_%d_%d", cellX, cellZ)
-
-        self:_resetTile(tile)
-
-        self.tiles[key] = tile
-end
-
-function WaveField:_populateInitialTiles()
-        local baseCellX = 0
-        local baseCellZ = 0
-        for dz = -self.tileRadius, self.tileRadius do
-                for dx = -self.tileRadius, self.tileRadius do
-                        local cellX = baseCellX + dx
-                        local cellZ = baseCellZ + dz
-                        local tile = self:_obtainTile()
-                        self:_assignTile(tile, cellX, cellZ, tileKey(cellX, cellZ))
+    if self.followPlayers then
+        for _, player in ipairs(Players:GetPlayers()) do
+            local character = player.Character
+            if character then
+                local hrp = character:FindFirstChild("HumanoidRootPart")
+                local worldPos = hrp and hrp.Position or resolveWorldPosition(character)
+                if worldPos then
+                    local distance = (worldPos - origin).Magnitude
+                    if distance < closestDistance then
+                        closestDistance = distance
+                        bestPosition = worldPos
+                    end
                 end
+            end
         end
+    end
+
+    if not bestPosition then
+        return Vector3.new(origin.X, self.seaLevel, origin.Z)
+    end
+
+    return Vector3.new(bestPosition.X, self.seaLevel, bestPosition.Z)
 end
 
-function WaveField:_computeFocusPosition(): Vector3
-        local accumulator = Vector3.zero
-        local count = 0
+function WaveField:_updateTileDeformation(tile: WaveTile)
+    local editable = tile.Editable
+    local vertices = tile.Vertices
+    local originCF = tile.OriginCF
 
-        for _, tag in ipairs(self.focusTags) do
-                for _, instance in ipairs(CollectionService:GetTagged(tag)) do
-                        local position = resolveWorldPosition(instance)
-                        if position then
-                                accumulator += position
-                                count += 1
-                        end
-                end
+    for y = 1, self.gridHeight do
+        local row = vertices[y]
+        local vz = (self.spacing * (y - 1)) - (self.tileSizeZ * 0.5)
+        for x = 1, self.gridWidth do
+            local vx = (self.spacing * (x - 1)) - (self.tileSizeX * 0.5)
+            local worldPosition = (originCF * CFrame.new(vx, 0, vz)).Position
+            local transform = GerstnerWave:GetTransform(self.waveInfos, Vector2.new(worldPosition.X, worldPosition.Z), self.time)
+
+            local offsetX = vx + (transform.X * self.choppiness)
+            local offsetY = transform.Y
+            local offsetZ = vz + (transform.Z * self.choppiness)
+
+            editable:SetPosition(row[x], Vector3.new(offsetX, offsetY, offsetZ))
         end
-
-        if count == 0 and self.followCamera then
-                local camera = Workspace.CurrentCamera
-                if camera then
-                        accumulator = camera.CFrame.Position
-                        count = 1
-                end
-        end
-
-        if count == 0 then
-                return self.focusPosition
-        end
-
-        local average = accumulator / count
-        return Vector3.new(average.X, self.seaLevel, average.Z)
+    end
 end
 
-function WaveField:_updateTilePositions(targetFocus: Vector3)
-        local tileSize = self.tileSize
-        local baseCellX = math.floor(targetFocus.X / tileSize + 0.5)
-        local baseCellZ = math.floor(targetFocus.Z / tileSize + 0.5)
-
-        local requiredOrder = {}
-        local requiredCells: {[string]: {cellX: number, cellZ: number, tile: WaveTile?}} = {}
-
-        for dz = -self.tileRadius, self.tileRadius do
-                for dx = -self.tileRadius, self.tileRadius do
-                        local cellX = baseCellX + dx
-                        local cellZ = baseCellZ + dz
-                        local key = tileKey(cellX, cellZ)
-                        requiredOrder[#requiredOrder + 1] = key
-                        requiredCells[key] = { cellX = cellX, cellZ = cellZ }
-                end
-        end
-
-        for key, tile in pairs(self.tiles) do
-                local cell = requiredCells[key]
-                if cell then
-                        cell.tile = tile
-                else
-                        tile.Container.Parent = nil
-                        self.tilePool[#self.tilePool + 1] = tile
-                end
-                self.tiles[key] = nil
-        end
-
-        for _, key in ipairs(requiredOrder) do
-                local cell = requiredCells[key]
-                local tile = cell.tile or self:_obtainTile()
-                self:_assignTile(tile, cell.cellX, cell.cellZ, key)
-        end
-end
-
-function WaveField:_evaluateWaves(x: number, z: number, time: number)
-        local height = self.seaLevel
-        local offsetX = 0
-        local offsetZ = 0
-
-        for _, wave in ipairs(self.waves) do
-                local direction = unitVector2(wave.Direction or Vector2.new(1, 0))
-                local amplitude = wave.Amplitude or 0
-                local wavelength = wave.Wavelength or 1
-                local speed = wave.Speed or 0
-
-                local frequency = (2 * math.pi) / wavelength
-                local phase = (direction.X * x + direction.Y * z) * frequency + (time * speed * frequency)
-
-                local sinValue = math.sin(phase)
-                local cosValue = math.cos(phase)
-
-                height += sinValue * amplitude
-
-                if self.choppiness > 0 then
-                        local chop = amplitude * self.choppiness
-                        offsetX += direction.X * cosValue * chop
-                        offsetZ += direction.Y * cosValue * chop
-                end
-        end
-
-        return height, offsetX, offsetZ
-end
-
-function WaveField:GetHeight(position: Vector3): number
-        local height = self:_evaluateWaves(position.X, position.Z, self.time)
-        return height
-end
-
-function WaveField:_updateTileGeometry(tile: WaveTile)
-        local baseVertices = tile.BaseVertices
-        local deformedVertices = tile.DeformedVertices
-        local center = tile.Center
-
-        for index = 1, #baseVertices do
-                local base = baseVertices[index]
-                local worldX = center.X + base.X
-                local worldZ = center.Y + base.Z
-                local height, offsetX, offsetZ = self:_evaluateWaves(worldX, worldZ, self.time)
-                local localY = height - self.seaLevel
-                local localX = base.X + offsetX
-                local localZ = base.Z + offsetZ
-
-                deformedVertices[index] = Vector3.new(localX, localY, localZ)
-        end
-
-        self:_applyDeformation(tile)
+function WaveField:_applyEditableMeshes()
+    for _, tile in ipairs(self.tiles) do
+        applyEditableToPart(tile.Editable, tile.Part)
+        tile.Part.CFrame = tile.OriginCF
+    end
 end
 
 function WaveField:Step(dt: number)
-        self.time += dt
+    self.time += dt
 
-        local targetFocus = self:_computeFocusPosition()
-        local alpha = math.clamp(self.recenterResponsiveness * dt, 0, 1)
+    local targetFocus = self:_getFocusPosition()
+    if self.recenterResponsiveness > 0 then
+        local alpha = math.clamp(dt * self.recenterResponsiveness, 0, 1)
         self.focusPosition = self.focusPosition:Lerp(targetFocus, alpha)
+    else
+        self.focusPosition = targetFocus
+    end
 
-        self:_updateTilePositions(self.focusPosition)
+    local originX = roundTo(self.focusPosition.X, self.tileSizeX)
+    local originZ = roundTo(self.focusPosition.Z, self.tileSizeZ)
 
-        for _, tile in pairs(self.tiles) do
-                self:_updateTileGeometry(tile)
-        end
+    for _, tile in ipairs(self.tiles) do
+        local offset = tile.GridOffset
+        local tileOriginX = originX + (offset.X * self.tileSizeX)
+        local tileOriginZ = originZ + (offset.Y * self.tileSizeZ)
+        local originCF = CFrame.new(tileOriginX, self.seaLevel, tileOriginZ)
+
+        tile.OriginCF = originCF
+        tile.Part.CFrame = originCF
+        self:_updateTileDeformation(tile)
+    end
+
+    self.reapplyClock -= dt
+    if self.reapplyClock <= 0 then
+        self.reapplyClock = self.reapplyInterval
+        self:_applyEditableMeshes()
+    end
+end
+
+function WaveField:GetHeight(position: Vector3): number
+    local transform = GerstnerWave:GetTransform(self.waveInfos, Vector2.new(position.X, position.Z), self.time)
+    return self.seaLevel + transform.Y
 end
 
 function WaveField:Destroy()
-        if WaveRegistry.GetActiveField() == self then
-                WaveRegistry.SetActiveField(nil)
-        end
+    if WaveRegistry.GetActiveField() == self then
+        WaveRegistry.SetActiveField(nil)
+    end
 
-        for key, tile in pairs(self.tiles) do
-                tile.Container:Destroy()
-                self.tiles[key] = nil
-        end
+    for _, tile in ipairs(self.tiles) do
+        tile.Part:Destroy()
+        tile.Editable:Destroy()
+    end
 
-        for index = #self.tilePool, 1, -1 do
-                local tile = self.tilePool[index]
-                self.tilePool[index] = nil
-                tile.Container:Destroy()
-        end
+    table.clear(self.tiles)
 
-        if self.folder then
-                self.folder:Destroy()
-                self.folder = nil
-        end
-end
-
-function WaveField:_resetTile(tile: WaveTile)
-        local baseVertices = tile.BaseVertices
-        local deformedVertices = tile.DeformedVertices
-        for index = 1, #baseVertices do
-                local base = baseVertices[index]
-                deformedVertices[index] = Vector3.new(base.X, 0, base.Z)
-        end
-        self:_applyDeformation(tile)
-end
-
-function WaveField:_applyDeformation(tile: WaveTile)
-        local deformedVertices = tile.DeformedVertices
-        local offset = Vector3.new(tile.Center.X, self.seaLevel, tile.Center.Y)
-
-        for _, cell in ipairs(tile.Cells) do
-                local indices = cell.VertexIndices
-                local v0 = deformedVertices[indices[1]]
-                local v1 = deformedVertices[indices[2]]
-                local v2 = deformedVertices[indices[3]]
-                local v3 = deformedVertices[indices[4]]
-
-                local p0 = offset + v0
-                local p1 = offset + v1
-                local p2 = offset + v2
-                local p3 = offset + v3
-
-                local xVector = p1 - p0
-                local zVector = p2 - p0
-                local xMagnitude = math.max(xVector.Magnitude, self.minCellSize)
-                local zMagnitude = math.max(zVector.Magnitude, self.minCellSize)
-
-                local xDir = xVector.Magnitude > 1e-5 and xVector.Unit or Vector3.new(1, 0, 0)
-                local zDir = zVector.Magnitude > 1e-5 and zVector.Unit or Vector3.new(0, 0, 1)
-                local yDir = xDir:Cross(zDir)
-                if yDir.Magnitude < 1e-5 then
-                        yDir = Vector3.new(0, 1, 0)
-                        zDir = yDir:Cross(xDir)
-                        if zDir.Magnitude < 1e-5 then
-                                zDir = Vector3.new(0, 0, 1)
-                        else
-                                zDir = zDir.Unit
-                        end
-                else
-                        yDir = yDir.Unit
-                        zDir = yDir:Cross(xDir).Unit
-                end
-
-                local origin = (p0 + p1 + p2 + p3) * 0.25
-                local cframe = CFrame.fromMatrix(origin, xDir, yDir, zDir)
-                local part = cell.Part
-                part.CFrame = cframe
-                part.Size = Vector3.new(xMagnitude, self.tileThickness, zMagnitude)
-        end
+    if self.folder.Parent then
+        self.folder:Destroy()
+    end
 end
 
 return WaveField

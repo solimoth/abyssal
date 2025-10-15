@@ -10,6 +10,7 @@ local GerstnerWave = { WaveInfo = {}, System = {} }
 
 local twoPi = 2 * math.pi
 local sqrt = math.sqrt
+local abs = math.abs
 local cos = math.cos
 local sin = math.sin
 local atan2 = math.atan2
@@ -22,6 +23,9 @@ export type WaveInfo = {
     WaveLength: number,
     Steepness: number,
     Gravity: number,
+    _k: number?,
+    _c: number?,
+    _A: number?,
 }
 
 function GerstnerWave.WaveInfo.new(direction: Vector2?, waveLength: number?, steepness: number?, gravity: number?): WaveInfo
@@ -74,16 +78,25 @@ function GerstnerWave.BuildWaveInfos(waveConfig: { [number]: { [string]: any } }
 end
 
 function GerstnerWave.System:CalculateWave(info: WaveInfo): (number, number, number, Vector2, number)
-    local waveLength = info.WaveLength
-    local gravity = info.Gravity
-    local steepness = info.Steepness
-    local direction = info.Direction
+    local k = info._k
+    local c = info._c
+    local A = info._A
 
-    local k = twoPi / waveLength
-    local c = sqrt(math.abs(gravity) / k)
-    local A = steepness / k
+    if not (k and c and A) then
+        local waveLength = info.WaveLength
+        local gravity = info.Gravity
+        local steepness = info.Steepness
 
-    return k, c, A, direction, steepness
+        k = twoPi / waveLength
+        c = sqrt(abs(gravity) / k)
+        A = steepness / k
+
+        info._k = k
+        info._c = c
+        info._A = A
+    end
+
+    return k, c, A, info.Direction, info.Steepness
 end
 
 function GerstnerWave.System:CalculateTransform(position: Vector2, runTime: number, calcNormals: boolean, k: number, c: number, A: number, dir: Vector2, steepness: number)

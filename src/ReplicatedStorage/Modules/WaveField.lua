@@ -346,6 +346,8 @@ function WaveField:Destroy()
         self.folder:Destroy()
         self.folder = nil
     end
+
+    table.clear(self.landZones)
 end
 
 return WaveField

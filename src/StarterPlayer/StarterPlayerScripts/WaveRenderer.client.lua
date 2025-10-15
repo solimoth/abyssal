@@ -154,23 +154,30 @@ local function buildEditableGrid()
 
     for y = 1, gridHeight do
         local row = table.create(gridWidth)
-        local vz = (spacing * (y - 1)) - halfZ
+        local localZ = (spacing * (y - 1)) - halfZ
         for x = 1, gridWidth do
-            local vx = (spacing * (x - 1)) - halfX
-            row[x] = editable:AddVertex(Vector3.new(vx, 0, vz))
+            local localX = (spacing * (x - 1)) - halfX
+            local vertexId = editable:AddVertex(Vector3.new(localX, 0, localZ))
+            row[x] = {
+                Id = vertexId,
+                OffsetX = localX,
+                OffsetZ = localZ,
+            }
         end
         vertices[y] = row
     end
 
     for y = 1, gridHeight - 1 do
+        local row = vertices[y]
+        local nextRow = vertices[y + 1]
         for x = 1, gridWidth - 1 do
-            local v1 = vertices[y][x]
-            local v2 = vertices[y + 1][x]
-            local v3 = vertices[y][x + 1]
-            local v4 = vertices[y + 1][x + 1]
+            local current = row[x]
+            local below = nextRow[x]
+            local right = row[x + 1]
+            local belowRight = nextRow[x + 1]
 
-            editable:AddTriangle(v1, v2, v3)
-            editable:AddTriangle(v2, v4, v3)
+            editable:AddTriangle(current.Id, below.Id, right.Id)
+            editable:AddTriangle(below.Id, belowRight.Id, right.Id)
         end
     end
 
@@ -201,7 +208,6 @@ local function createTile(gridOffset: Vector2)
         Vertices = vertices,
         GridOffset = gridOffset,
         OriginCF = part.CFrame,
-        SeaY = seaLevel,
     }
 end
 
@@ -241,8 +247,8 @@ end
 
 rescanLandZones()
 
-Workspace.DescendantAdded:Connect(registerLandZone)
-Workspace.DescendantRemoving:Connect(unregisterLandZone)
+local descendantAddedConn = Workspace.DescendantAdded:Connect(registerLandZone)
+local descendantRemovingConn = Workspace.DescendantRemoving:Connect(unregisterLandZone)
 
 local function landZoneMultiplier(worldPosition: Vector3): number
     if landZoneAttenuation >= 0.999 or not next(landZones) then
@@ -302,34 +308,43 @@ local function getFallbackFocus(): Vector2
     return Vector2.zero
 end
 
-local function updateTile(tile, runTime, scaledChoppiness, scaledIntensity)
+local function updateTile(tile, runTime, scaledChoppiness, globalIntensity)
     local editable = tile.Editable
     local vertices = tile.Vertices
     local originCF = tile.OriginCF
 
+    local originPos = originCF.Position
+    local tileOriginX = originPos.X
+    local tileOriginZ = originPos.Z
+    local tileSeaLevel = originPos.Y
+
     for y = 1, gridHeight do
         local row = vertices[y]
-        local vz = (spacing * (y - 1)) - (tileSizeZ * 0.5)
         for x = 1, gridWidth do
-            local vx = (spacing * (x - 1)) - (tileSizeX * 0.5)
+            local vertex = row[x]
+            local baseX = vertex.OffsetX
+            local baseZ = vertex.OffsetZ
 
-            local worldPosition = (originCF * CFrame.new(vx, 0, vz)).Position
-            local transform = GerstnerWave:GetTransform(waves, Vector2.new(worldPosition.X, worldPosition.Z), runTime)
+            local worldX = tileOriginX + baseX
+            local worldZ = tileOriginZ + baseZ
+            local transform = GerstnerWave:GetTransform(waves, Vector2.new(worldX, worldZ), runTime)
 
-            local zoneMultiplier = landZoneMultiplier(worldPosition)
-            local localIntensity = scaledIntensity * zoneMultiplier
+            local zoneMultiplier = landZoneMultiplier(Vector3.new(worldX, tileSeaLevel, worldZ))
+            local localIntensity = globalIntensity * zoneMultiplier
             local localChoppiness = scaledChoppiness * zoneMultiplier
 
-            local offsetX = vx + (transform.X * localChoppiness)
+            local offsetX = baseX + (transform.X * localChoppiness)
             local offsetY = math.max(0, transform.Y * localIntensity)
-            local offsetZ = vz + (transform.Z * localChoppiness)
+            local offsetZ = baseZ + (transform.Z * localChoppiness)
 
-            editable:SetPosition(row[x], Vector3.new(offsetX, offsetY, offsetZ))
+            editable:SetPosition(vertex.Id, Vector3.new(offsetX, offsetY, offsetZ))
         end
     end
 end
 
-RunService.Heartbeat:Connect(function(dt)
+local heartbeatConn
+
+heartbeatConn = RunService.Heartbeat:Connect(function(dt)
     seaLevel = attributeNumber("SeaLevel", seaLevel)
     targetIntensity = math.max(0, attributeNumber("WaveIntensity", targetIntensity))
     intensityResponsiveness = math.max(0, attributeNumber("IntensityResponsiveness", intensityResponsiveness))
@@ -377,3 +392,37 @@ RunService.Heartbeat:Connect(function(dt)
         end
     end
 end)
+
+local function cleanup()
+    if heartbeatConn then
+        heartbeatConn:Disconnect()
+        heartbeatConn = nil
+    end
+
+    if descendantAddedConn then
+        descendantAddedConn:Disconnect()
+        descendantAddedConn = nil
+    end
+
+    if descendantRemovingConn then
+        descendantRemovingConn:Disconnect()
+        descendantRemovingConn = nil
+    end
+
+    for _, tile in ipairs(tiles) do
+        if tile.Editable then
+            tile.Editable:Destroy()
+            tile.Editable = nil
+        end
+
+        if tile.Part then
+            tile.Part:Destroy()
+            tile.Part = nil
+        end
+    end
+
+    table.clear(tiles)
+    table.clear(landZones)
+end
+
+script.Destroying:Connect(cleanup)

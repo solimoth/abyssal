@@ -39,10 +39,12 @@ local MemoryCheckTimer = 0
 local BOAT_CLEANUP_QUEUE = {}
 
 -- Constants
-local SPAWN_HEIGHT_OFFSET = 2
 local SPAWN_DISTANCE = 20
-local WATER_LEVEL = 908.935
 local MAX_SPAWN_DISTANCE = 200 -- NEW: Limit spawn distance from player
+
+local function getWaterLevel(position: Vector3?): number
+        return WaterPhysics.GetWaterLevel(position)
+end
 
 -- Module table
 local BoatManager = {}
@@ -376,11 +378,12 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 		end
 	end
 
-	if config.Type == "Submarine" then
-		spawnPosition = Vector3.new(spawnPosition.X, WATER_LEVEL - 1, spawnPosition.Z)
-	else
-		spawnPosition = Vector3.new(spawnPosition.X, WATER_LEVEL + 2, spawnPosition.Z)
-	end
+        local waterLevel = getWaterLevel(spawnPosition)
+        if config.Type == "Submarine" then
+                spawnPosition = Vector3.new(spawnPosition.X, waterLevel - 1, spawnPosition.Z)
+        else
+                spawnPosition = Vector3.new(spawnPosition.X, waterLevel + 2, spawnPosition.Z)
+        end
 
 	local desiredYaw = math.atan2(spawnDirection.X, -spawnDirection.Z)
 	boat:SetPrimaryPartCFrame(CFrame.new(spawnPosition) * CFrame.Angles(0, desiredYaw, 0))

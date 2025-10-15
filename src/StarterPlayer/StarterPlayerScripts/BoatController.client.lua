@@ -11,6 +11,7 @@ local Camera = workspace.CurrentCamera
 
 local player = Players.LocalPlayer
 local BoatConfig = require(ReplicatedStorage.Modules.BoatConfig)
+local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 
 -- Variables
 local currentBoat = nil
@@ -40,10 +41,12 @@ local submarineControls = {
 	roll = 0
 }
 local controlUpdateConnection = nil
-local lastControlUpdate = 0
-local CONTROL_UPDATE_RATE = 1/60
+local CONTROL_SEND_RATE = 20 -- throttle remote updates to stay well under security limits
+local CONTROL_UPDATE_INTERVAL = 1 / CONTROL_SEND_RATE
+local CONTROL_EARLY_INTERVAL = CONTROL_UPDATE_INTERVAL * 0.75
+local CONTROL_DELTA_EPSILON = 0.02
+local SPEED_DELTA_EPSILON = 0.5
 local submarineMode = "surface"
-local WATER_LEVEL = 908.935
 local activeDiveTask = nil
 
 -- ACCELERATION SYSTEM VARIABLES
@@ -114,35 +117,89 @@ local function UpdateAccelerationValues()
 end
 
 -- ENHANCED CONTROL SENDING WITH ACCELERATION
-local function SendControlUpdate()
-	if not currentSeat or not isControlling then return end
+local controlSendAccumulator = CONTROL_UPDATE_INTERVAL
+local lastSentControls = nil
 
-	local now = tick()
-	if now - lastControlUpdate < CONTROL_UPDATE_RATE then
-		return
-	end
-	lastControlUpdate = now
+local function shouldSendControls(controls)
+        if not lastSentControls then
+                return true
+        end
 
-	-- Get raw input
-	local targetThrottle = currentSeat.ThrottleFloat
-	local targetSteer = currentSeat.SteerFloat
+        if controlSendAccumulator >= CONTROL_UPDATE_INTERVAL then
+                return true
+        end
 
-	-- Calculate target speeds based on input
-	targetSpeed = targetThrottle * maxSpeed
-	targetTurnSpeed = targetSteer * (boatConfig and boatConfig.TurnSpeed or 2)
+        if controlSendAccumulator >= CONTROL_EARLY_INTERVAL then
+                if math.abs(controls.throttle - lastSentControls.throttle) > CONTROL_DELTA_EPSILON then
+                        return true
+                end
 
-	-- Apply acceleration/deceleration
-	local deltaTime = CONTROL_UPDATE_RATE
+                if math.abs(controls.steer - lastSentControls.steer) > CONTROL_DELTA_EPSILON then
+                        return true
+                end
 
-	if math.abs(targetSpeed) > math.abs(currentSpeed) then
-		-- Accelerating
-		local speedDiff = targetSpeed - currentSpeed
-		local speedChange = math.sign(speedDiff) * accelerationRate * deltaTime
+                if math.abs((controls.ascend or 0) - (lastSentControls.ascend or 0)) > CONTROL_DELTA_EPSILON then
+                        return true
+                end
 
-		if math.abs(speedChange) > math.abs(speedDiff) then
-			currentSpeed = targetSpeed
-		else
-			currentSpeed = currentSpeed + speedChange
+                if math.abs((controls.pitch or 0) - (lastSentControls.pitch or 0)) > CONTROL_DELTA_EPSILON then
+                        return true
+                end
+
+                if math.abs((controls.roll or 0) - (lastSentControls.roll or 0)) > CONTROL_DELTA_EPSILON then
+                        return true
+                end
+
+                if math.abs(controls.currentSpeed - lastSentControls.currentSpeed) > SPEED_DELTA_EPSILON then
+                        return true
+                end
+
+                if controls.mode ~= lastSentControls.mode then
+                        return true
+                end
+        end
+
+        return false
+end
+
+local function snapshotControls(controls)
+        lastSentControls = {
+                throttle = controls.throttle,
+                steer = controls.steer,
+                currentSpeed = controls.currentSpeed,
+                ascend = controls.ascend,
+                pitch = controls.pitch,
+                roll = controls.roll,
+                mode = controls.mode,
+        }
+end
+
+local function SendControlUpdate(deltaTime)
+        if not currentSeat or not isControlling then return end
+
+        deltaTime = math.max(deltaTime or CONTROL_UPDATE_INTERVAL, 0)
+        controlSendAccumulator += deltaTime
+
+        local now = tick()
+
+        -- Get raw input
+        local targetThrottle = currentSeat.ThrottleFloat
+        local targetSteer = currentSeat.SteerFloat
+
+        -- Calculate target speeds based on input
+        targetSpeed = targetThrottle * maxSpeed
+        targetTurnSpeed = targetSteer * (boatConfig and boatConfig.TurnSpeed or 2)
+
+        -- Apply acceleration/deceleration
+        if math.abs(targetSpeed) > math.abs(currentSpeed) then
+                -- Accelerating
+                local speedDiff = targetSpeed - currentSpeed
+                local speedChange = math.sign(speedDiff) * accelerationRate * deltaTime
+
+                if math.abs(speedChange) > math.abs(speedDiff) then
+                        currentSpeed = targetSpeed
+                else
+                        currentSpeed = currentSpeed + speedChange
 		end
 	else
 		-- Decelerating or maintaining
@@ -199,9 +256,19 @@ local function SendControlUpdate()
 		controls.mode = submarineMode
 	end
 
-	if math.abs(controls.throttle) <= 1 and math.abs(controls.steer) <= 1 then
-		ReplicatedStorage.Remotes.BoatRemotes.UpdateBoatControl:FireServer(controls)
-	end
+        if math.abs(controls.throttle) <= 1 and math.abs(controls.steer) <= 1 then
+                if shouldSendControls(controls) then
+                        ReplicatedStorage.Remotes.BoatRemotes.UpdateBoatControl:FireServer(controls)
+
+                        if controlSendAccumulator >= CONTROL_UPDATE_INTERVAL then
+                                controlSendAccumulator = controlSendAccumulator - CONTROL_UPDATE_INTERVAL
+                        else
+                                controlSendAccumulator = 0
+                        end
+
+                        snapshotControls(controls)
+                end
+        end
 end
 
 -- ENHANCED CAMERA WITH SPEED-BASED EFFECTS
@@ -298,10 +365,10 @@ end
 
 -- Cleanup
 local function CleanupBoatSession()
-	if activeDiveTask then
-		task.cancel(activeDiveTask)
-		activeDiveTask = nil
-	end
+        if activeDiveTask then
+                task.cancel(activeDiveTask)
+                activeDiveTask = nil
+        end
 
 	if cameraConnection then
 		cameraConnection:Disconnect()
@@ -324,18 +391,20 @@ local function CleanupBoatSession()
 	currentTurnSpeed = 0
 	targetTurnSpeed = 0
 	currentPitchSpeed = 0
-	targetPitchSpeed = 0
-	currentRollSpeed = 0
-	targetRollSpeed = 0
-	isControlling = false
-	currentBoat = nil
-	currentSeat = nil
-	boatConfig = nil
-	isSubmarine = false
-	cameraMode = "Default"
-	submarineMode = "surface"
-	cameraDistance = 35
-	targetCameraDistance = 35
+        targetPitchSpeed = 0
+        currentRollSpeed = 0
+        targetRollSpeed = 0
+        isControlling = false
+        currentBoat = nil
+        currentSeat = nil
+        boatConfig = nil
+        isSubmarine = false
+        cameraMode = "Default"
+        submarineMode = "surface"
+        cameraDistance = 35
+        targetCameraDistance = 35
+        controlSendAccumulator = CONTROL_UPDATE_INTERVAL
+        lastSentControls = nil
 end
 
 -- Seat handler
@@ -367,17 +436,18 @@ local function OnCharacterSeated(active, seatPart)
 				if isOwner then
 					isControlling = true
 
-					if isSubmarine and currentBoat.PrimaryPart then
-						local depth = WATER_LEVEL - currentBoat.PrimaryPart.Position.Y
-						submarineMode = depth > 8 and "dive" or "surface"
+                                        if isSubmarine and currentBoat.PrimaryPart then
+                                                local surfaceY = WaterPhysics.GetWaterLevel(currentBoat.PrimaryPart.Position)
+                                                local depth = surfaceY - currentBoat.PrimaryPart.Position.Y
+                                                submarineMode = depth > 8 and "dive" or "surface"
 					end
 
 					cameraMode = "Follow"
 					cameraConnection = RunService.RenderStepped:Connect(UpdateBoatCamera)
-					controlUpdateConnection = RunService.Heartbeat:Connect(function()
-						SendControlUpdate()
-						UpdateSpeedDisplay()
-					end)
+                                        controlUpdateConnection = RunService.Heartbeat:Connect(function(deltaTime)
+                                                SendControlUpdate(deltaTime)
+                                                UpdateSpeedDisplay()
+                                        end)
 
 					print(string.format("Controlling %s (Weight: %d, Max Speed: %d)", 
 						boatType or "Unknown", boatWeight, maxSpeed))
@@ -399,8 +469,9 @@ local function OnCharacterAdded(character)
 
 	task.spawn(function()
 		while character.Parent do
-			if isControlling and isSubmarine and currentBoat and currentBoat.PrimaryPart then
-				local depth = WATER_LEVEL - currentBoat.PrimaryPart.Position.Y
+                        if isControlling and isSubmarine and currentBoat and currentBoat.PrimaryPart then
+                                local surfaceY = WaterPhysics.GetWaterLevel(currentBoat.PrimaryPart.Position)
+                                local depth = surfaceY - currentBoat.PrimaryPart.Position.Y
 
 				if depth < 5 and submarineMode == "dive" and 
 					not activeDiveTask and 

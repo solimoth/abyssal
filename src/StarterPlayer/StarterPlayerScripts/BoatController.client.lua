@@ -34,6 +34,9 @@ local cameraSmoothness = 0.2
 local cameraDistance = 35
 local targetCameraDistance = 35
 local firstPersonCameraPart = nil
+local isCharacterHiddenForSubmarine = false
+local characterVisibilityConnection = nil
+local hiddenCharacter = nil
 
 -- Submarine controls
 local submarineControls = {
@@ -409,6 +412,41 @@ local function UpdateSpeedDisplay()
 end
 
 -- Cleanup
+local function SetLocalCharacterVisibility(hidden)
+	local character = player.Character
+	if isCharacterHiddenForSubmarine == hidden and hiddenCharacter == character then
+		return
+	end
+
+	if not character then
+		isCharacterHiddenForSubmarine = hidden
+		hiddenCharacter = nil
+		return
+	end
+
+	for _, descendant in character:GetDescendants() do
+		if descendant:IsA("BasePart") then
+			descendant.LocalTransparencyModifier = hidden and 1 or 0
+		end
+	end
+
+	if characterVisibilityConnection then
+		characterVisibilityConnection:Disconnect()
+		characterVisibilityConnection = nil
+	end
+
+	if hidden then
+		characterVisibilityConnection = character.DescendantAdded:Connect(function(descendant)
+			if descendant:IsA("BasePart") then
+				descendant.LocalTransparencyModifier = 1
+			end
+		end)
+	end
+
+	isCharacterHiddenForSubmarine = hidden
+	hiddenCharacter = hidden and character or nil
+end
+
 local function CleanupBoatSession()
         if activeDiveTask then
                 task.cancel(activeDiveTask)
@@ -451,6 +489,10 @@ local function CleanupBoatSession()
         controlSendAccumulator = CONTROL_UPDATE_INTERVAL
         lastSentControls = nil
         firstPersonCameraPart = nil
+
+        if isCharacterHiddenForSubmarine then
+                SetLocalCharacterVisibility(false)
+        end
 end
 
 -- Seat handler
@@ -500,6 +542,7 @@ local function OnCharacterSeated(active, seatPart)
 						boatType or "Unknown", boatWeight, maxSpeed))
 					if isSubmarine then
 						print("Submarine camera locked to first person view")
+						SetLocalCharacterVisibility(true)
 					else
 						print("C - Camera | G - Dive (submarines)")
 					end
@@ -516,6 +559,12 @@ local function OnCharacterAdded(character)
 	local humanoid = character:WaitForChild("Humanoid", 5)
 	if humanoid then
 		humanoid.Seated:Connect(OnCharacterSeated)
+	end
+
+	if isCharacterHiddenForSubmarine then
+		SetLocalCharacterVisibility(true)
+	else
+		SetLocalCharacterVisibility(false)
 	end
 
 	task.spawn(function()

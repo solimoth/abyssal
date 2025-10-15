@@ -34,12 +34,16 @@ local function tileKey(x: number, z: number): string
         return string.format("%d:%d", x, z)
 end
 
-local function createEditablePlane(resolution: number, size: number)
+local function createEditablePlane(part: MeshPart, resolution: number, size: number)
         local halfSize = size * 0.5
         local step = size / resolution
 
         local baseVertices = table.create((resolution + 1) * (resolution + 1))
-        local mesh = Instance.new("EditableMesh")
+        if not part.CreateEditableMesh then
+                error("EditableMesh is not supported on this MeshPart; ensure the Editable Mesh feature is enabled")
+        end
+
+        local mesh = part:CreateEditableMesh()
         mesh.Name = "WaveEditableMesh"
 
         local vertexIds = {}
@@ -66,6 +70,8 @@ local function createEditablePlane(resolution: number, size: number)
                         mesh:AddTriangle(vertexIds[i1], vertexIds[i2], vertexIds[i3])
                 end
         end
+
+        mesh.Parent = part
 
         return mesh, vertexIds, baseVertices
 end
@@ -119,8 +125,6 @@ function WaveField.new(config)
 end
 
 function WaveField:_createTile(): WaveTile
-        local mesh, vertexIds, baseVertices = createEditablePlane(self.resolution, self.tileSize)
-
         local part = Instance.new("MeshPart")
         part.Name = "WaveTile"
         part.Anchored = true
@@ -136,7 +140,7 @@ function WaveField:_createTile(): WaveTile
         if self.config.PhysicalMaterial then
                 part.CustomPhysicalProperties = self.config.PhysicalMaterial
         end
-        mesh.Parent = part
+        local mesh, vertexIds, baseVertices = createEditablePlane(part, self.resolution, self.tileSize)
         mesh:ApplyToBasePart(part)
 
         return {

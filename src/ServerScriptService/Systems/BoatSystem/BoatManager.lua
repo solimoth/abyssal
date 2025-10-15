@@ -7,6 +7,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
+local TweenService = game:GetService("TweenService")
 
 local BoatConfig = require(ReplicatedStorage.Modules.BoatConfig)
 local BoatSecurity = require(ReplicatedStorage.Modules.BoatSecurity)
@@ -46,6 +47,29 @@ local SUB_HEALTH_WARNING_STEP = 10
 local SUB_DEPTH_WARNING_COOLDOWN = 3
 local SUB_SAFE_RECOVERY_COOLDOWN = 2
 
+local SUB_SHAKE_START_RATIO = 0.9
+local SUB_SHAKE_MAX_OFFSET = 0.85
+local SUB_SHAKE_MAX_ANGLE = math.rad(5)
+local SUB_SPEED_MIN_MULTIPLIER = 0.25
+local SUB_ACCEL_MIN_MULTIPLIER = 0.35
+local SUB_CONTROL_MIN_MULTIPLIER = 0.4
+local SUB_LEAK_THRESHOLD = 0.7
+local SUB_LEAK_MAX_RATE = 140
+local SUB_LEAK_OFFSET_INTERVAL = 0.8
+local SUB_WARNING_LIGHT_THRESHOLD = 0.55
+local SUB_WARNING_LIGHT_COLOR = Color3.fromRGB(255, 105, 64)
+local SUB_WARNING_LIGHT_BASE_RANGE = 10
+local SUB_WARNING_LIGHT_MAX_RANGE = 20
+local SUB_WARNING_LIGHT_MIN_BRIGHTNESS = 2.5
+local SUB_WARNING_LIGHT_MAX_BRIGHTNESS = 10
+local SUB_WARNING_LIGHT_PULSE_SPEED = 6
+local SUB_IMPL_DEBRIS_MAX_COUNT = 40
+local SUB_IMPL_DEBRIS_LIFETIME = 6
+local SUB_IMPL_DEBRIS_MIN_SPEED = 35
+local SUB_IMPL_DEBRIS_MAX_SPEED = 80
+local SUB_IMPL_DEBRIS_MAX_ANGULAR = math.rad(160)
+local SUB_IMPL_DEBRIS_FADE_TIME = 3.5
+
 -- Memory management
 local MemoryCheckTimer = 0
 local BOAT_CLEANUP_QUEUE = {}
@@ -80,18 +104,22 @@ end
 
 -- Initialize acceleration data for a boat
 local function InitializeBoatAcceleration(player, boatType)
-	local config = BoatConfig.GetBoatData(boatType)
-	if not config then return end
+        local config = BoatConfig.GetBoatData(boatType)
+        if not config then return end
 
-	BoatSpeeds[player] = 0
-	BoatTurnSpeeds[player] = 0
-	BoatAccelerationData[player] = {
-		maxSpeed = config.MaxSpeed or 25,
-		weight = config.Weight or 3,
-		accelerationRate = BoatConfig.GetAcceleration(boatType),
-		decelerationRate = BoatConfig.GetDeceleration(boatType),
-		turnAccelerationRate = 3 * (1.5 - (config.Weight / 10))
-	}
+        BoatSpeeds[player] = 0
+        BoatTurnSpeeds[player] = 0
+        BoatAccelerationData[player] = {
+                baseMaxSpeed = config.MaxSpeed or 25,
+                maxSpeed = config.MaxSpeed or 25,
+                weight = config.Weight or 3,
+                accelerationRate = BoatConfig.GetAcceleration(boatType),
+                baseAccelerationRate = BoatConfig.GetAcceleration(boatType),
+                decelerationRate = BoatConfig.GetDeceleration(boatType),
+                baseDecelerationRate = BoatConfig.GetDeceleration(boatType),
+                turnAccelerationRate = 3 * (1.5 - (config.Weight / 10)),
+                baseTurnAccelerationRate = 3 * (1.5 - (config.Weight / 10))
+        }
 end
 
 -- Helper function to restore original CanCollide states
@@ -303,6 +331,39 @@ local function CleanupBoat(player)
 end
 
 -- Process cleanup queue
+local function UpdateSubmarineStressMetrics(state)
+        if not state then
+                return 1, 1, 1, 0
+        end
+
+        local integrityRatio = 1
+        if state.maxHealth > 0 then
+                integrityRatio = math.clamp(state.health / state.maxHealth, 0, 1)
+        end
+
+        local speedMultiplier = SUB_SPEED_MIN_MULTIPLIER + (1 - SUB_SPEED_MIN_MULTIPLIER) * integrityRatio
+        if integrityRatio >= 0.995 then
+                speedMultiplier = 1
+        end
+
+        local accelMultiplier = SUB_ACCEL_MIN_MULTIPLIER + (1 - SUB_ACCEL_MIN_MULTIPLIER) * integrityRatio
+        if integrityRatio >= 0.995 then
+                accelMultiplier = 1
+        end
+
+        local shakeIntensity = 0
+        if integrityRatio < SUB_SHAKE_START_RATIO then
+                shakeIntensity = math.clamp((SUB_SHAKE_START_RATIO - integrityRatio) / SUB_SHAKE_START_RATIO, 0, 1)
+        end
+
+        state.integrityRatio = integrityRatio
+        state.speedMultiplier = speedMultiplier
+        state.accelMultiplier = accelMultiplier
+        state.shakeIntensity = shakeIntensity
+
+        return integrityRatio, speedMultiplier, accelMultiplier, shakeIntensity
+end
+
 local function GetOrCreateSubmarineState(player, config)
         local state = SubmarineStates[player]
         local maxHealth = (config and config.MaxHealth) or (state and state.maxHealth) or 100
@@ -318,7 +379,13 @@ local function GetOrCreateSubmarineState(player, config)
                         lastSafeMessageTime = 0,
                         isImploding = false,
                         lastDepth = 0,
+                        integrityRatio = 1,
+                        speedMultiplier = 1,
+                        accelMultiplier = 1,
+                        shakeIntensity = 0,
                 }
+                state.shakeRandom = Random.new()
+                state.warningPhase = math.random()
                 SubmarineStates[player] = state
         else
                 if state.maxHealth ~= maxHealth then
@@ -327,7 +394,195 @@ local function GetOrCreateSubmarineState(player, config)
                 end
         end
 
+        UpdateSubmarineStressMetrics(state)
         return state
+end
+
+local function ApplySubmarineStressEffects(player, boat, config, targetCFrame, deltaTime)
+        local state = SubmarineStates[player]
+        if not state or state.isImploding or not boat or not boat.PrimaryPart then
+                return targetCFrame
+        end
+
+        local integrityRatio = state.integrityRatio or 1
+        local primaryPart = boat.PrimaryPart
+
+        if state.shakeIntensity and state.shakeIntensity > 0 then
+                local randomGen = state.shakeRandom or Random.new()
+                state.shakeRandom = randomGen
+
+                local offsetMagnitude = SUB_SHAKE_MAX_OFFSET * state.shakeIntensity
+                local angleMagnitude = SUB_SHAKE_MAX_ANGLE * state.shakeIntensity
+
+                local offset = Vector3.new(
+                        randomGen:NextNumber(-offsetMagnitude, offsetMagnitude),
+                        randomGen:NextNumber(-offsetMagnitude, offsetMagnitude),
+                        randomGen:NextNumber(-offsetMagnitude, offsetMagnitude)
+                )
+
+                local rotX = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
+                local rotY = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
+                local rotZ = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
+
+                targetCFrame = targetCFrame * CFrame.new(offset) * CFrame.Angles(rotX, rotY, rotZ)
+        end
+
+        if integrityRatio < SUB_LEAK_THRESHOLD then
+                local attachment = state.damageAttachment
+                if not attachment or attachment.Parent ~= primaryPart then
+                        attachment = Instance.new("Attachment")
+                        attachment.Name = "HullLeakAttachment"
+                        attachment.Position = Vector3.new(0, -primaryPart.Size.Y * 0.4, 0)
+                        attachment.Parent = primaryPart
+                        state.damageAttachment = attachment
+                end
+
+                if (tick() - (state.lastLeakOffsetTime or 0)) > SUB_LEAK_OFFSET_INTERVAL then
+                        state.lastLeakOffsetTime = tick()
+                        local randomGen = state.shakeRandom or Random.new()
+                        local offset = Vector3.new(
+                                randomGen:NextNumber(-primaryPart.Size.X * 0.45, primaryPart.Size.X * 0.45),
+                                randomGen:NextNumber(-primaryPart.Size.Y * 0.45, primaryPart.Size.Y * 0.2),
+                                randomGen:NextNumber(-primaryPart.Size.Z * 0.45, primaryPart.Size.Z * 0.45)
+                        )
+                        attachment.Position = offset
+                end
+
+                local emitter = state.damageEmitter
+                if not emitter or emitter.Parent ~= attachment then
+                        emitter = Instance.new("ParticleEmitter")
+                        emitter.Name = "HullLeakBubbles"
+                        emitter.Rate = 0
+                        emitter.Speed = NumberRange.new(5, 9)
+                        emitter.Lifetime = NumberRange.new(0.8, 1.4)
+                        emitter.Size = NumberSequence.new({
+                                NumberSequenceKeypoint.new(0, 0.4),
+                                NumberSequenceKeypoint.new(0.5, 0.9),
+                                NumberSequenceKeypoint.new(1, 0.3)
+                        })
+                        emitter.Transparency = NumberSequence.new({
+                                NumberSequenceKeypoint.new(0, 0),
+                                NumberSequenceKeypoint.new(1, 1)
+                        })
+                        emitter.Color = ColorSequence.new(Color3.fromRGB(214, 238, 255))
+                        emitter.Acceleration = Vector3.new(0, 14, 0)
+                        emitter.SpreadAngle = Vector2.new(45, 45)
+                        emitter.Parent = attachment
+                        state.damageEmitter = emitter
+                end
+
+                local emissionRate = math.clamp(30 + (1 - integrityRatio) * SUB_LEAK_MAX_RATE, 20, SUB_LEAK_MAX_RATE)
+                state.damageEmitter.Rate = emissionRate
+                state.damageEmitter.Enabled = emissionRate > 0
+        elseif state.damageEmitter then
+                state.damageEmitter.Rate = 0
+                state.damageEmitter.Enabled = false
+        end
+
+        if integrityRatio < SUB_WARNING_LIGHT_THRESHOLD then
+                local light = state.warningLight
+                if not light or light.Parent ~= primaryPart then
+                        light = Instance.new("PointLight")
+                        light.Name = "HullWarningLight"
+                        light.Color = SUB_WARNING_LIGHT_COLOR
+                        light.Shadows = false
+                        light.Range = SUB_WARNING_LIGHT_BASE_RANGE
+                        light.Brightness = SUB_WARNING_LIGHT_MIN_BRIGHTNESS
+                        light.Enabled = true
+                        light.Parent = primaryPart
+                        state.warningLight = light
+                end
+
+                local pulse = 0.5 + 0.5 * math.sin((tick() * SUB_WARNING_LIGHT_PULSE_SPEED) + (state.warningPhase or 0))
+                local intensityFactor = (1 - integrityRatio)
+                light.Enabled = true
+                light.Range = SUB_WARNING_LIGHT_BASE_RANGE + intensityFactor * (SUB_WARNING_LIGHT_MAX_RANGE - SUB_WARNING_LIGHT_BASE_RANGE)
+                light.Brightness = SUB_WARNING_LIGHT_MIN_BRIGHTNESS
+                        + pulse * (SUB_WARNING_LIGHT_MAX_BRIGHTNESS - SUB_WARNING_LIGHT_MIN_BRIGHTNESS) * intensityFactor
+        elseif state.warningLight then
+                state.warningLight.Enabled = false
+        end
+
+        return targetCFrame
+end
+
+local function CreateSubmarineImplosionDebris(boat, primaryPart)
+        if not boat or not primaryPart then
+                return
+        end
+
+        local randomGen = Random.new()
+        local created = 0
+
+        for _, desc in ipairs(boat:GetDescendants()) do
+                if created >= SUB_IMPL_DEBRIS_MAX_COUNT then
+                        break
+                end
+
+                if desc:IsA("BasePart") and desc.Transparency < 1 and desc.Size.Magnitude > 0 then
+                        local success, debrisPart = pcall(function()
+                                return desc:Clone()
+                        end)
+
+                        if success and debrisPart and debrisPart:IsA("BasePart") then
+                                created += 1
+
+                                debrisPart.Name = desc.Name .. "_Debris"
+                                debrisPart.Anchored = false
+                                debrisPart.CanCollide = false
+                                debrisPart.CanTouch = false
+                                debrisPart.CanQuery = false
+                                debrisPart.Massless = false
+                                debrisPart.CFrame = desc.CFrame
+                                debrisPart.Parent = workspace
+                                debrisPart:BreakJoints()
+
+                                for _, child in ipairs(debrisPart:GetDescendants()) do
+                                        if child:IsA("Weld") or child:IsA("Motor6D") or child:IsA("Constraint") or child:IsA("BodyMover") then
+                                                child:Destroy()
+                                        elseif child:IsA("ParticleEmitter") then
+                                                child.Enabled = false
+                                                child.Rate = 0
+                                        elseif child:IsA("Light") then
+                                                child.Enabled = false
+                                        end
+                                end
+
+                                local direction = (debrisPart.Position - primaryPart.Position)
+                                if direction.Magnitude < 0.001 then
+                                        direction = Vector3.new(
+                                                randomGen:NextNumber(-1, 1),
+                                                randomGen:NextNumber(-1, 1),
+                                                randomGen:NextNumber(-1, 1)
+                                        )
+                                end
+                                direction = direction.Unit
+
+                                local speed = randomGen:NextNumber(SUB_IMPL_DEBRIS_MIN_SPEED, SUB_IMPL_DEBRIS_MAX_SPEED)
+                                local angular = SUB_IMPL_DEBRIS_MAX_ANGULAR
+
+                                debrisPart.AssemblyLinearVelocity = direction * speed
+                                debrisPart.AssemblyAngularVelocity = Vector3.new(
+                                        randomGen:NextNumber(-angular, angular),
+                                        randomGen:NextNumber(-angular, angular),
+                                        randomGen:NextNumber(-angular, angular)
+                                )
+
+                                if TweenService then
+                                        local fadeTween = TweenService:Create(
+                                                debrisPart,
+                                                TweenInfo.new(SUB_IMPL_DEBRIS_FADE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+                                                {Transparency = 1}
+                                        )
+                                        fadeTween:Play()
+                                end
+
+                                Debris:AddItem(debrisPart, SUB_IMPL_DEBRIS_LIFETIME)
+                        elseif debrisPart then
+                                debrisPart:Destroy()
+                        end
+                end
+        end
 end
 
 local function TriggerSubmarineImplosion(player, boat, config)
@@ -402,6 +657,25 @@ local function TriggerSubmarineImplosion(player, boat, config)
                 implosionFlash.Position = primaryPart.Position
                 implosionFlash.Visible = true
                 implosionFlash.Parent = workspace
+
+                CreateSubmarineImplosionDebris(boat, primaryPart)
+
+                if state.damageEmitter then
+                        state.damageEmitter.Rate = 0
+                        state.damageEmitter.Enabled = false
+                end
+                if state.warningLight then
+                        state.warningLight.Enabled = false
+                end
+
+                for _, desc in ipairs(boat:GetDescendants()) do
+                        if desc:IsA("BasePart") then
+                                desc.CanCollide = false
+                                desc.Transparency = 1
+                        elseif desc:IsA("ParticleEmitter") then
+                                desc.Rate = 0
+                        end
+                end
         end
 
         task.defer(function()
@@ -445,6 +719,7 @@ local function ApplySubmarineDepthDamage(player, boat, config, targetPosition, d
                         end
                 end
 
+                UpdateSubmarineStressMetrics(state)
                 return false
         end
 
@@ -471,6 +746,7 @@ local function ApplySubmarineDepthDamage(player, boat, config, targetPosition, d
                 state.lastHealthPercentPrint = currentPercent
         end
 
+        UpdateSubmarineStressMetrics(state)
         if state.health <= 0 then
                 TriggerSubmarineImplosion(player, boat, config)
                 return true
@@ -868,6 +1144,10 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
                         targetCFrame = boatCFrame
                 end
 
+                if config.Type == "Submarine" then
+                        targetCFrame = ApplySubmarineStressEffects(player, boat, config, targetCFrame, deltaTime)
+                end
+
                 controlPart.CFrame = targetCFrame
 
                 local bodyVel = primaryPart:FindFirstChild("BoatBodyVelocity")
@@ -885,11 +1165,20 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
         end
 
         local isSubmarine = config.Type == "Submarine"
+        local stressState
+        local integrityRatio = 1
+        local stressSpeedMultiplier = 1
+        local stressAccelMultiplier = 1
 
-	-- Get inputs
-	local throttle = 0
-	local steer = 0
-	local ascend = 0
+        if isSubmarine then
+                stressState = GetOrCreateSubmarineState(player, config)
+                integrityRatio, stressSpeedMultiplier, stressAccelMultiplier = UpdateSubmarineStressMetrics(stressState)
+        end
+
+        -- Get inputs
+        local throttle = 0
+        local steer = 0
+        local ascend = 0
 	local pitch = 0
 	local roll = 0
 	local hasDriver = false
@@ -920,69 +1209,124 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 	local currentSpeed = BoatSpeeds[player] or 0
 	local currentTurnSpeed = BoatTurnSpeeds[player] or 0
 
-	local targetSpeed = throttle * accelData.maxSpeed
-	local targetTurnSpeed = steer * config.TurnSpeed
+        if isSubmarine then
+                local baseMaxSpeed = accelData.baseMaxSpeed or accelData.maxSpeed
+                accelData.maxSpeed = baseMaxSpeed * stressSpeedMultiplier
+        end
 
-	-- Apply acceleration/deceleration
-	if math.abs(targetSpeed) > math.abs(currentSpeed) then
-		-- Accelerating
-		local speedDiff = targetSpeed - currentSpeed
-		local speedChange = math.sign(speedDiff) * accelData.accelerationRate * deltaTime
+        local targetSpeed = throttle * accelData.maxSpeed
 
-		if math.abs(speedChange) > math.abs(speedDiff) then
-			currentSpeed = targetSpeed
-		else
-			currentSpeed = currentSpeed + speedChange
-		end
-	else
-		-- Decelerating
-		local speedDiff = targetSpeed - currentSpeed
-		local speedChange = math.sign(speedDiff) * accelData.decelerationRate * deltaTime
+        local baseTurnSpeed = config.TurnSpeed or 0
+        if isSubmarine then
+                baseTurnSpeed = baseTurnSpeed * stressSpeedMultiplier
+        end
+        local targetTurnSpeed = steer * baseTurnSpeed
 
-		if math.abs(speedChange) > math.abs(speedDiff) then
-			currentSpeed = targetSpeed
-		else
-			currentSpeed = currentSpeed + speedChange
-		end
-	end
+        local accelerationRate = accelData.baseAccelerationRate or accelData.accelerationRate
+        local decelerationRate = accelData.baseDecelerationRate or accelData.decelerationRate
+        local turnAccelerationRate = accelData.baseTurnAccelerationRate or accelData.turnAccelerationRate
 
-	-- Apply turn acceleration
-	local turnDiff = targetTurnSpeed - currentTurnSpeed
-	local turnChange = math.sign(turnDiff) * accelData.turnAccelerationRate * deltaTime
+        if isSubmarine then
+                accelerationRate = accelerationRate * stressAccelMultiplier
+                decelerationRate = decelerationRate * math.max(stressAccelMultiplier, 0.5)
+                turnAccelerationRate = turnAccelerationRate * math.max(stressAccelMultiplier, 0.6)
+        end
 
-	if math.abs(turnChange) > math.abs(turnDiff) then
-		currentTurnSpeed = targetTurnSpeed
-	else
-		currentTurnSpeed = currentTurnSpeed + turnChange
-	end
+        -- Apply acceleration/deceleration
+        if math.abs(targetSpeed) > math.abs(currentSpeed) then
+                -- Accelerating
+                local speedDiff = targetSpeed - currentSpeed
+                local speedChange = math.sign(speedDiff) * accelerationRate * deltaTime
 
-	-- Store updated speeds
-	BoatSpeeds[player] = currentSpeed
-	BoatTurnSpeeds[player] = currentTurnSpeed
+                if math.abs(speedChange) > math.abs(speedDiff) then
+                        currentSpeed = targetSpeed
+                else
+                        currentSpeed = currentSpeed + speedChange
+                end
+        else
+                -- Decelerating
+                local speedDiff = targetSpeed - currentSpeed
+                local speedChange = math.sign(speedDiff) * decelerationRate * deltaTime
 
-	-- CALCULATE MOVEMENT WITH ACTUAL SPEED
+                if math.abs(speedChange) > math.abs(speedDiff) then
+                        currentSpeed = targetSpeed
+                else
+                        currentSpeed = currentSpeed + speedChange
+                end
+        end
+
+        -- Apply turn acceleration
+        local turnDiff = targetTurnSpeed - currentTurnSpeed
+        local turnChange = math.sign(turnDiff) * turnAccelerationRate * deltaTime
+
+        if math.abs(turnChange) > math.abs(turnDiff) then
+                currentTurnSpeed = targetTurnSpeed
+        else
+                currentTurnSpeed = currentTurnSpeed + turnChange
+        end
+
+        if isSubmarine then
+                local maxSpeed = accelData.maxSpeed
+                if maxSpeed and maxSpeed > 0 then
+                        currentSpeed = math.clamp(currentSpeed, -maxSpeed, maxSpeed)
+                end
+
+                local maxTurn = baseTurnSpeed
+                if maxTurn ~= 0 then
+                        currentTurnSpeed = math.clamp(currentTurnSpeed, -math.abs(maxTurn), math.abs(maxTurn))
+                end
+        end
+
+        -- Store updated speeds
+        BoatSpeeds[player] = currentSpeed
+        BoatTurnSpeeds[player] = currentTurnSpeed
+
+        -- CALCULATE MOVEMENT WITH ACTUAL SPEED
 	local currentCFrame = controlPart.CFrame
 	local newCFrame
 
         if isSubmarine then
+                local throttleInput = 0
+                if accelData.maxSpeed and accelData.maxSpeed ~= 0 then
+                        throttleInput = currentSpeed / accelData.maxSpeed
+                end
+
+                local steerInput = 0
+                local turnSpeedValue = baseTurnSpeed ~= 0 and baseTurnSpeed or (config.TurnSpeed or 0)
+                if turnSpeedValue ~= 0 then
+                        steerInput = currentTurnSpeed / turnSpeedValue
+                end
+
+                local controlMultiplier = isSubmarine and math.max(stressAccelMultiplier, SUB_CONTROL_MIN_MULTIPLIER) or 1
+
                 local adjustedInputs = {
-                        throttle = currentSpeed / accelData.maxSpeed,
-                        steer = currentTurnSpeed / config.TurnSpeed,
-                        ascend = ascend,
-                        pitch = pitch,
-			roll = roll
-		}
+                        throttle = throttleInput,
+                        steer = steerInput,
+                        ascend = ascend * controlMultiplier,
+                        pitch = pitch * controlMultiplier,
+                        roll = roll * controlMultiplier
+                }
 
-		local subConfig = {}
-		for k, v in pairs(config) do
-			subConfig[k] = v
-		end
-		subConfig.Speed = subConfig.Speed or subConfig.MaxSpeed or 28
+                local subConfig = {}
+                for k, v in pairs(config) do
+                        subConfig[k] = v
+                end
 
-		newCFrame = SubmarinePhysics.CalculateMovement(
-			currentCFrame, 
-			adjustedInputs, 
-			subConfig, 
+                local baseSpeedValue = (subConfig.Speed or subConfig.MaxSpeed or 28)
+                local controlSpeedMultiplier = isSubmarine and stressSpeedMultiplier or 1
+                local controlTurnMultiplier = isSubmarine and math.max(stressAccelMultiplier, SUB_CONTROL_MIN_MULTIPLIER) or 1
+
+                subConfig.Speed = baseSpeedValue * controlSpeedMultiplier
+                subConfig.MaxSpeed = (subConfig.MaxSpeed or baseSpeedValue) * controlSpeedMultiplier
+                subConfig.TurnSpeed = (subConfig.TurnSpeed or 1.8) * controlSpeedMultiplier
+                subConfig.PitchSpeed = (subConfig.PitchSpeed or 1.5) * controlTurnMultiplier
+                subConfig.RollSpeed = (subConfig.RollSpeed or 1.0) * controlTurnMultiplier
+                subConfig.VerticalSpeed = (subConfig.VerticalSpeed or 18) * controlMultiplier
+
+                newCFrame = SubmarinePhysics.CalculateMovement(
+                        currentCFrame,
+                        adjustedInputs,
+                        subConfig,
 			deltaTime,
 			math.abs(ascend) > 0.01,
 			false
@@ -996,10 +1340,12 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
                         )
                         newCFrame = floatingCFrame
                 end
+
+                newCFrame = ApplySubmarineStressEffects(player, boat, config, newCFrame, deltaTime)
         else
-		-- Calculate turning with actual turn speed
-		local turnAmount = currentTurnSpeed * deltaTime
-		local newRotation = currentCFrame * CFrame.Angles(0, -turnAmount, 0)
+                -- Calculate turning with actual turn speed
+                local turnAmount = currentTurnSpeed * deltaTime
+                local newRotation = currentCFrame * CFrame.Angles(0, -turnAmount, 0)
 
 		-- Calculate forward movement with actual speed
 		local moveDirection = newRotation.LookVector

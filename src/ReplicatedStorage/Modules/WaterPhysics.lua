@@ -21,6 +21,11 @@ local WATER_VOLUME_CACHE_DURATION = 1
 local WATER_HORIZONTAL_TOLERANCE = 0.5
 local WATER_VOLUME_TAGS = { "WaterVolume", "WaterRegion" }
 local BOAT_LEAN_RESPONSIVENESS = 4
+local BOAT_LEAN_RESPONSIVENESS_MIN_SCALE = 0.35
+local BOAT_LEAN_RESPONSIVENESS_MAX_SCALE = 1
+local BOAT_LEAN_SLOPE_GAIN = 3
+local BOAT_LEAN_INTENSITY_EXPONENT = 1.5
+local BOAT_MIN_LEAN_THRESHOLD = 0.05
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -249,11 +254,21 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
         local surfaceY
         local surfaceNormal = Vector3.yAxis
         local leanStrength = 0
+        local intensity = 0
 
         if surfaceSample then
                 surfaceY = surfaceSample.Height
                 surfaceNormal = surfaceSample.Normal
-                leanStrength = math.clamp(surfaceSample.Intensity or 0, 0, 1)
+                intensity = math.clamp(surfaceSample.Intensity or 0, 0, 1)
+
+                if surfaceNormal.Magnitude > 1e-3 and intensity > 0 then
+                        surfaceNormal = surfaceNormal.Unit
+
+                        local slopeDot = math.clamp(surfaceNormal:Dot(Vector3.yAxis), -1, 1)
+                        local slopeFactor = math.clamp((1 - slopeDot) * BOAT_LEAN_SLOPE_GAIN, 0, 1)
+                        local intensityFactor = intensity ^ BOAT_LEAN_INTENSITY_EXPONENT
+                        leanStrength = math.clamp(slopeFactor * intensityFactor, 0, 1)
+                end
         else
                 surfaceY = WaterPhysics.TryGetWaterSurface(position)
         end
@@ -278,7 +293,7 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
         local _, currentYaw, _ = currentCFrame:ToOrientation()
         local basePosition = Vector3.new(position.X, newY, position.Z)
 
-        if leanStrength <= 0 then
+        if leanStrength <= BOAT_MIN_LEAN_THRESHOLD then
                 local newCFrame = CFrame.new(basePosition) * CFrame.Angles(0, currentYaw, 0)
                 return newCFrame, true
         end
@@ -305,7 +320,9 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
         forward = forward.Unit
 
         local targetOrientation = CFrame.lookAt(basePosition, basePosition + forward, surfaceNormal)
-        local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS, 0, 1)
+        local responsivenessScale = BOAT_LEAN_RESPONSIVENESS_MIN_SCALE
+                + (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * intensity
+        local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS * responsivenessScale, 0, 1)
         local blendedOrientation = currentCFrame:Lerp(targetOrientation, alpha)
         local rotation = blendedOrientation - blendedOrientation.Position
 

@@ -1,10 +1,13 @@
 -- SubmarinePhysics.lua (FIXED - Performance optimizations and cached parsing)
 -- Place in: ReplicatedStorage/Modules/SubmarinePhysics.lua
 
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
+
 local SubmarinePhysics = {}
 
 -- Constants
-local WATER_LEVEL = 908.935
 local SURFACE_DETECTION_RANGE = 8
 local SURFACE_PULL_STRENGTH = 15
 local DEPTH_PRESSURE_DAMAGE = 1
@@ -54,7 +57,7 @@ end
 
 -- Helper function to get depth
 function SubmarinePhysics.GetDepth(position)
-	return WATER_LEVEL - position.Y
+        return WaterPhysics.GetWaterLevel(position) - position.Y
 end
 
 -- Check if submarine should auto-surface
@@ -230,8 +233,8 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
 
 	if shouldSurface and not isInDiveMode then
 		-- AUTO-SURFACE MODE
-		local currentDepth = SubmarinePhysics.GetDepth(currentCFrame.Position)
-		local targetY = WATER_LEVEL - 1
+                local currentDepth = SubmarinePhysics.GetDepth(currentCFrame.Position)
+                local targetY = WaterPhysics.GetWaterLevel(currentCFrame.Position) - 1
 
 		local yDifference = targetY - currentCFrame.Position.Y
 		local surfaceSpeed = math.clamp(yDifference * 2, -2, 2) * deltaTime
@@ -298,13 +301,13 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
 			if SubmarinePhysics.GetDepth(newPosition) > config.MaxDepth then
 				newPosition = Vector3.new(
 					newPosition.X,
-					WATER_LEVEL - config.MaxDepth,
+                                        WaterPhysics.GetWaterLevel(newPosition) - config.MaxDepth,
 					newPosition.Z
 				)
 			elseif SubmarinePhysics.GetDepth(newPosition) < config.MinDepth then
 				newPosition = Vector3.new(
 					newPosition.X,
-					WATER_LEVEL - config.MinDepth,
+                                        WaterPhysics.GetWaterLevel(newPosition) - config.MinDepth,
 					newPosition.Z
 				)
 			end

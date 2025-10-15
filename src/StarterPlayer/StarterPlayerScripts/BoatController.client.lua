@@ -35,7 +35,9 @@ local cameraDistance = 35
 local targetCameraDistance = 35
 local firstPersonCameraPart = nil
 local isCharacterHiddenForSubmarine = false
-local characterVisibilityConnection = nil
+local characterVisibilityAddedConnection = nil
+local characterVisibilityRemovedConnection = nil
+local characterPartTransparencyConnections = {}
 local hiddenCharacter = nil
 
 -- Submarine controls
@@ -412,35 +414,113 @@ local function UpdateSpeedDisplay()
 end
 
 -- Cleanup
+local function disconnectVisibilityTracking()
+        if characterVisibilityAddedConnection then
+                characterVisibilityAddedConnection:Disconnect()
+                characterVisibilityAddedConnection = nil
+        end
+
+        if characterVisibilityRemovedConnection then
+                characterVisibilityRemovedConnection:Disconnect()
+                characterVisibilityRemovedConnection = nil
+        end
+
+        for part, connection in pairs(characterPartTransparencyConnections) do
+                if connection then
+                        connection:Disconnect()
+                end
+                characterPartTransparencyConnections[part] = nil
+        end
+end
+
+local function trackPartTransparency(part, hidden)
+        if not part:IsA("BasePart") then
+                return
+        end
+
+        local existingConnection = characterPartTransparencyConnections[part]
+        if existingConnection then
+                existingConnection:Disconnect()
+                characterPartTransparencyConnections[part] = nil
+        end
+
+        if hidden then
+                part.LocalTransparencyModifier = 1
+                characterPartTransparencyConnections[part] = part:GetPropertyChangedSignal("LocalTransparencyModifier")
+                        :Connect(function()
+                                if not isCharacterHiddenForSubmarine then
+                                        local connection = characterPartTransparencyConnections[part]
+                                        if connection then
+                                                connection:Disconnect()
+                                        end
+                                        characterPartTransparencyConnections[part] = nil
+                                        return
+                                end
+
+                                if hiddenCharacter and hiddenCharacter.Parent and part:IsDescendantOf(hiddenCharacter) then
+                                        if part.LocalTransparencyModifier < 1 then
+                                                part.LocalTransparencyModifier = 1
+                                        end
+                                else
+                                        local connection = characterPartTransparencyConnections[part]
+                                        if connection then
+                                                connection:Disconnect()
+                                        end
+                                        characterPartTransparencyConnections[part] = nil
+                                end
+                        end)
+        else
+                part.LocalTransparencyModifier = 0
+        end
+end
+
+local function applyCharacterVisibility(character, hidden)
+	for _, descendant in character:GetDescendants() do
+		trackPartTransparency(descendant, hidden)
+	end
+end
+
 local function SetLocalCharacterVisibility(hidden)
 	local character = player.Character
-	if isCharacterHiddenForSubmarine == hidden and hiddenCharacter == character then
-		return
-	end
-
 	if not character then
+		disconnectVisibilityTracking()
 		isCharacterHiddenForSubmarine = hidden
 		hiddenCharacter = nil
 		return
 	end
 
-	for _, descendant in character:GetDescendants() do
-		if descendant:IsA("BasePart") then
-			descendant.LocalTransparencyModifier = hidden and 1 or 0
-		end
+	if hiddenCharacter and hiddenCharacter ~= character then
+		applyCharacterVisibility(hiddenCharacter, false)
+		disconnectVisibilityTracking()
 	end
 
-	if characterVisibilityConnection then
-		characterVisibilityConnection:Disconnect()
-		characterVisibilityConnection = nil
+	if isCharacterHiddenForSubmarine == hidden and hiddenCharacter == character then
+		return
 	end
 
 	if hidden then
-		characterVisibilityConnection = character.DescendantAdded:Connect(function(descendant)
-			if descendant:IsA("BasePart") then
-				descendant.LocalTransparencyModifier = 1
+		applyCharacterVisibility(character, true)
+
+		if characterVisibilityAddedConnection then
+			characterVisibilityAddedConnection:Disconnect()
+		end
+		characterVisibilityAddedConnection = character.DescendantAdded:Connect(function(descendant)
+			trackPartTransparency(descendant, true)
+		end)
+
+		if characterVisibilityRemovedConnection then
+			characterVisibilityRemovedConnection:Disconnect()
+		end
+		characterVisibilityRemovedConnection = character.DescendantRemoving:Connect(function(descendant)
+			local connection = characterPartTransparencyConnections[descendant]
+			if connection then
+				connection:Disconnect()
+				characterPartTransparencyConnections[descendant] = nil
 			end
 		end)
+	else
+		applyCharacterVisibility(character, false)
+		disconnectVisibilityTracking()
 	end
 
 	isCharacterHiddenForSubmarine = hidden

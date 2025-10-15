@@ -465,9 +465,33 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 	end
 
 	BoatConnections[player].occupant = seat:GetPropertyChangedSignal("Occupant"):Connect(onOccupantChanged)
-	boat.Parent = workspace
+        boat.Parent = workspace
 
-	return true
+        local teleportPart = boat:FindFirstChild("TeleportPart", true)
+        if teleportPart and teleportPart:IsA("BasePart") then
+                BoatSecurity.RegisterSafeTeleport(player, boat.PrimaryPart and boat.PrimaryPart.Position or teleportPart.Position)
+
+                task.defer(function()
+                        local character = player.Character
+                        if not character then
+                                return
+                        end
+
+                        local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+                        if not humanoidRootPart then
+                                return
+                        end
+
+                        local teleportCFrame = teleportPart.CFrame
+                        if character.Parent then
+                                character:PivotTo(teleportCFrame)
+                        else
+                                humanoidRootPart.CFrame = teleportCFrame
+                        end
+                end)
+        end
+
+        return true
 end
 
 -- Despawn function

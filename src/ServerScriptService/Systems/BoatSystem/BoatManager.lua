@@ -70,6 +70,8 @@ local SUB_IMPL_DEBRIS_MAX_SPEED = 80
 local SUB_IMPL_DEBRIS_MAX_ANGULAR = math.rad(160)
 local SUB_IMPL_DEBRIS_FADE_TIME = 3.5
 
+local ZERO_VECTOR = Vector3.new()
+
 -- Memory management
 local MemoryCheckTimer = 0
 local BOAT_CLEANUP_QUEUE = {}
@@ -383,6 +385,14 @@ local function GetOrCreateSubmarineState(player, config)
                         speedMultiplier = 1,
                         accelMultiplier = 1,
                         shakeIntensity = 0,
+                        lastStressOffset = ZERO_VECTOR,
+                        currentJitterAllowance = 0,
+                        hullRadius = nil,
+                        hullRadiusPart = nil,
+                        lastStressOffsetDelta = 0,
+                        lastLeakEmissionRate = 0,
+                        lastWarningRange = 0,
+                        lastWarningBrightness = 0,
                 }
                 state.shakeRandom = Random.new()
                 state.warningPhase = math.random()
@@ -401,11 +411,19 @@ end
 local function ApplySubmarineStressEffects(player, boat, config, targetCFrame, deltaTime)
         local state = SubmarineStates[player]
         if not state or state.isImploding or not boat or not boat.PrimaryPart then
+                if state then
+                        state.currentJitterAllowance = 0
+                        state.lastStressOffset = ZERO_VECTOR
+                        state.lastStressOffsetDelta = 0
+                end
                 return targetCFrame
         end
 
         local integrityRatio = state.integrityRatio or 1
         local primaryPart = boat.PrimaryPart
+        local baseCFrame = targetCFrame
+        local previousStressOffset = state.lastStressOffset or ZERO_VECTOR
+        local jitterAllowance = 0
 
         if state.shakeIntensity and state.shakeIntensity > 0 then
                 local randomGen = state.shakeRandom or Random.new()
@@ -424,7 +442,25 @@ local function ApplySubmarineStressEffects(player, boat, config, targetCFrame, d
                 local rotY = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
                 local rotZ = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
 
-                targetCFrame = targetCFrame * CFrame.new(offset) * CFrame.Angles(rotX, rotY, rotZ)
+                local stressOffsetWorld = baseCFrame:VectorToWorldSpace(offset)
+                targetCFrame = baseCFrame * CFrame.new(offset) * CFrame.Angles(rotX, rotY, rotZ)
+
+                local hullRadius = state.hullRadius
+                if not hullRadius or state.hullRadiusPart ~= primaryPart then
+                        hullRadius = primaryPart.Size.Magnitude * 0.5
+                        state.hullRadius = hullRadius
+                        state.hullRadiusPart = primaryPart
+                end
+
+                local offsetDelta = (stressOffsetWorld - previousStressOffset).Magnitude
+                local baselineAllowance = offsetMagnitude * 0.35
+                if hullRadius then
+                        baselineAllowance = baselineAllowance + math.min(hullRadius, 1) * (angleMagnitude * 0.5)
+                end
+
+                jitterAllowance = math.max(offsetDelta, baselineAllowance)
+                state.lastStressOffset = stressOffsetWorld
+                state.lastStressOffsetDelta = offsetDelta
         end
 
         if integrityRatio < SUB_LEAK_THRESHOLD then
@@ -437,8 +473,9 @@ local function ApplySubmarineStressEffects(player, boat, config, targetCFrame, d
                         state.damageAttachment = attachment
                 end
 
-                if (tick() - (state.lastLeakOffsetTime or 0)) > SUB_LEAK_OFFSET_INTERVAL then
-                        state.lastLeakOffsetTime = tick()
+                local currentTime = tick()
+                if (currentTime - (state.lastLeakOffsetTime or 0)) > SUB_LEAK_OFFSET_INTERVAL then
+                        state.lastLeakOffsetTime = currentTime
                         local randomGen = state.shakeRandom or Random.new()
                         local offset = Vector3.new(
                                 randomGen:NextNumber(-primaryPart.Size.X * 0.45, primaryPart.Size.X * 0.45),
@@ -469,14 +506,27 @@ local function ApplySubmarineStressEffects(player, boat, config, targetCFrame, d
                         emitter.SpreadAngle = Vector2.new(45, 45)
                         emitter.Parent = attachment
                         state.damageEmitter = emitter
+                        state.lastLeakEmissionRate = 0
                 end
 
                 local emissionRate = math.clamp(30 + (1 - integrityRatio) * SUB_LEAK_MAX_RATE, 20, SUB_LEAK_MAX_RATE)
-                state.damageEmitter.Rate = emissionRate
-                state.damageEmitter.Enabled = emissionRate > 0
+                if math.abs((state.lastLeakEmissionRate or 0) - emissionRate) > 1 then
+                        state.damageEmitter.Rate = emissionRate
+                        state.lastLeakEmissionRate = emissionRate
+                end
+
+                local shouldEnableEmitter = emissionRate > 0
+                if state.damageEmitter.Enabled ~= shouldEnableEmitter then
+                        state.damageEmitter.Enabled = shouldEnableEmitter
+                end
         elseif state.damageEmitter then
-                state.damageEmitter.Rate = 0
-                state.damageEmitter.Enabled = false
+                if state.damageEmitter.Rate ~= 0 then
+                        state.damageEmitter.Rate = 0
+                end
+                if state.damageEmitter.Enabled then
+                        state.damageEmitter.Enabled = false
+                end
+                state.lastLeakEmissionRate = 0
         end
 
         if integrityRatio < SUB_WARNING_LIGHT_THRESHOLD then
@@ -491,17 +541,48 @@ local function ApplySubmarineStressEffects(player, boat, config, targetCFrame, d
                         light.Enabled = true
                         light.Parent = primaryPart
                         state.warningLight = light
+                        state.lastWarningRange = light.Range
+                        state.lastWarningBrightness = light.Brightness
                 end
 
                 local pulse = 0.5 + 0.5 * math.sin((tick() * SUB_WARNING_LIGHT_PULSE_SPEED) + (state.warningPhase or 0))
                 local intensityFactor = (1 - integrityRatio)
-                light.Enabled = true
-                light.Range = SUB_WARNING_LIGHT_BASE_RANGE + intensityFactor * (SUB_WARNING_LIGHT_MAX_RANGE - SUB_WARNING_LIGHT_BASE_RANGE)
-                light.Brightness = SUB_WARNING_LIGHT_MIN_BRIGHTNESS
+                if not light.Enabled then
+                        light.Enabled = true
+                end
+
+                local targetRange = SUB_WARNING_LIGHT_BASE_RANGE
+                        + intensityFactor * (SUB_WARNING_LIGHT_MAX_RANGE - SUB_WARNING_LIGHT_BASE_RANGE)
+                if math.abs((state.lastWarningRange or 0) - targetRange) > 0.25 then
+                        light.Range = targetRange
+                        state.lastWarningRange = targetRange
+                end
+
+                local targetBrightness = SUB_WARNING_LIGHT_MIN_BRIGHTNESS
                         + pulse * (SUB_WARNING_LIGHT_MAX_BRIGHTNESS - SUB_WARNING_LIGHT_MIN_BRIGHTNESS) * intensityFactor
+                if math.abs((state.lastWarningBrightness or 0) - targetBrightness) > 0.25 then
+                        light.Brightness = targetBrightness
+                        state.lastWarningBrightness = targetBrightness
+                end
+
         elseif state.warningLight then
-                state.warningLight.Enabled = false
+                if state.warningLight.Enabled then
+                        state.warningLight.Enabled = false
+                end
         end
+
+        if jitterAllowance == 0 then
+                jitterAllowance = previousStressOffset.Magnitude
+                state.lastStressOffset = ZERO_VECTOR
+                state.lastStressOffsetDelta = jitterAllowance
+        end
+
+        if jitterAllowance < 0.05 then
+                jitterAllowance = 0
+                state.lastStressOffsetDelta = 0
+        end
+
+        state.currentJitterAllowance = jitterAllowance
 
         return targetCFrame
 end
@@ -1369,8 +1450,19 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
         end
 
         -- Validate movement
+        local securityOptions
+        if isSubmarine and stressState then
+                local jitterAllowance = stressState.currentJitterAllowance or 0
+                if jitterAllowance > 0 then
+                        securityOptions = {
+                                jitterAllowance = jitterAllowance,
+                                shakeDelta = stressState.lastStressOffsetDelta or jitterAllowance,
+                        }
+                end
+        end
+
         local valid, message, shouldKick = BoatSecurity.ValidateBoatMovement(
-                player, boat, newCFrame.Position, deltaTime
+                player, boat, newCFrame.Position, deltaTime, securityOptions
         )
 
         if not valid then

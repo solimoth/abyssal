@@ -45,13 +45,17 @@ local WaveConfig = {
         },
 
         -- Optional extra perturbation to create sharper crests without needing a
-        -- denser mesh.
+        -- denser tessellation.
         Choppiness = 0.35,
 
-        -- Minimum time (seconds) between full geometry uploads for each tile. We
-        -- update vertex heights every frame but only push the triangles to the
-        -- physics engine at this rate to stay performant.
-        UploadInterval = 0.1,
+        -- Thickness (studs) applied to each procedural cell part. Higher values are
+        -- visually chunkier but can help with interaction volumes on very large
+        -- vessels. Lower values look sleeker but reduce the collider depth.
+        TileThickness = 0.6,
+
+        -- Minimum horizontal size (studs) allowed for generated cell parts. Prevents
+        -- extreme choppiness from collapsing geometry to zero width.
+        MinCellSize = 0.05,
 
         -- How quickly the tiled surface recenters around the highest-priority
         -- focus object (ships, submarines, the camera, etc.).
@@ -72,8 +76,8 @@ local WaveConfig = {
         -- wave tiles.
         ContainerName = "DynamicWaveSurface",
 
-        -- Physical properties for the MeshParts. Ships interact with the visible
-        -- geometry, so we keep the density low and enable custom physical
+        -- Physical properties for the generated parts. Ships interact with the
+        -- visible geometry, so we keep the density low and enable custom physical
         -- material tuning.
         PhysicalMaterial = PhysicalProperties.new(0.4, 0.3, 0.5),
 }

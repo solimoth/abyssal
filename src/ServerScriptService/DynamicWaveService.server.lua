@@ -1,7 +1,7 @@
 --!strict
 -- DynamicWaveService.server.lua
--- Bootstraps the editable-mesh based ocean surface and keeps it updated on the
--- server so that physics and visuals remain consistent for all players.
+-- Bootstraps the dynamic ocean surface and keeps it updated on the server so
+-- that physics and visuals remain consistent for all players.
 
 local RunService = game:GetService("RunService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")

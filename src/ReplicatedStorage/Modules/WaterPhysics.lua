@@ -34,7 +34,7 @@ local BOAT_SLOPE_DEADZONE = math.rad(1.5)
 local BOAT_LEAN_CALM_INTENSITY_THRESHOLD = 0.9
 local BOAT_LEAN_CALM_INTENSITY_EXPONENT = 2.5
 local BOAT_LEAN_CALM_RESIDUAL_SCALE = 0.035
-local BOAT_LEAN_CALM_BASELINE_SCALE = 0.05
+local BOAT_LEAN_CALM_BASELINE_SCALE = 0.1
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude

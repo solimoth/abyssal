@@ -140,6 +140,10 @@ function WaveField:_createTile(): WaveTile
         if self.config.PhysicalMaterial then
                 part.CustomPhysicalProperties = self.config.PhysicalMaterial
         end
+        -- MeshPart:CreateEditableMesh requires the part to be parented, so temporarily
+        -- attach it to the folder before creating the editable mesh surface.
+        part.Parent = self.folder
+
         local mesh, vertexIds, baseVertices = createEditablePlane(part, self.resolution, self.tileSize)
         mesh:ApplyToBasePart(part)
 

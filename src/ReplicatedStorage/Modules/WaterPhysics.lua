@@ -25,10 +25,12 @@ local BOAT_LEAN_RESPONSIVENESS_MIN_SCALE = 0.35
 local BOAT_LEAN_RESPONSIVENESS_MAX_SCALE = 1
 local BOAT_MAX_ROLL = math.rad(22)
 local BOAT_MAX_PITCH = math.rad(15)
-local BOAT_ROLL_GAIN = 1.15
-local BOAT_PITCH_GAIN = 1
+local BOAT_ROLL_GAIN = 1
+local BOAT_PITCH_GAIN = 0.9
 local BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH = math.rad(18)
 local BOAT_MIN_LEAN_THRESHOLD = 0.05
+local BOAT_INTENSITY_POWER = 2
+local BOAT_SLOPE_DEADZONE = math.rad(1.5)
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -37,6 +39,16 @@ waterRaycastParams.IgnoreWater = false
 
 local cachedWaterParts: { BasePart } = {}
 local cachedWaterUpdateTime = 0
+
+local function applyAngularDeadzone(angle: number): number
+    local absAngle = math.abs(angle)
+    if absAngle <= BOAT_SLOPE_DEADZONE then
+        return 0
+    end
+
+    local sign = angle >= 0 and 1 or -1
+    return (absAngle - BOAT_SLOPE_DEADZONE) * sign
+end
 
 local function refreshWaterParts()
     local now = os.clock()
@@ -258,6 +270,7 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
         local surfaceNormal = Vector3.yAxis
         local leanStrength = 0
         local intensity = 0
+        local intensityScale = 0
         local targetPitch = 0
         local targetRoll = 0
 
@@ -265,6 +278,7 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
                 surfaceY = surfaceSample.Height
                 surfaceNormal = surfaceSample.Normal
                 intensity = math.clamp(surfaceSample.Intensity or 0, 0, 1)
+                intensityScale = intensity ^ BOAT_INTENSITY_POWER
 
                 if surfaceNormal.Magnitude > 1e-3 and intensity > 0 then
                         surfaceNormal = surfaceNormal.Unit
@@ -290,16 +304,22 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
                         local slopeForward = -(surfaceNormal.X * forwardXZ.X + surfaceNormal.Z * forwardXZ.Z) / upDot
                         local slopeRight = -(surfaceNormal.X * rightXZ.X + surfaceNormal.Z * rightXZ.Z) / upDot
 
-                        local basePitch = math.atan(math.clamp(slopeForward, -4, 4))
-                        local baseRoll = math.atan(math.clamp(slopeRight, -4, 4))
+                        local basePitch = applyAngularDeadzone(math.atan(math.clamp(slopeForward, -4, 4)))
+                        local baseRoll = applyAngularDeadzone(math.atan(math.clamp(slopeRight, -4, 4)))
 
-                        targetPitch = math.clamp(-basePitch * BOAT_PITCH_GAIN * intensity, -BOAT_MAX_PITCH, BOAT_MAX_PITCH)
-                        targetRoll = math.clamp(-baseRoll * BOAT_ROLL_GAIN * intensity, -BOAT_MAX_ROLL, BOAT_MAX_ROLL)
+                        targetPitch = math.clamp(-basePitch * BOAT_PITCH_GAIN * intensityScale, -BOAT_MAX_PITCH, BOAT_MAX_PITCH)
+                        targetRoll = math.clamp(-baseRoll * BOAT_ROLL_GAIN * intensityScale, -BOAT_MAX_ROLL, BOAT_MAX_ROLL)
 
                         local maxAngle = math.max(math.abs(targetPitch) / BOAT_MAX_PITCH, math.abs(targetRoll) / BOAT_MAX_ROLL)
-                        local slopeScale = math.min(1, math.abs(basePitch) / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH)
-                        slopeScale = math.max(slopeScale, math.min(1, math.abs(baseRoll) / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH))
-                        leanStrength = math.clamp(math.max(maxAngle, slopeScale * intensity), 0, 1)
+                        local slopeScale = 0
+                        if BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH > 0 then
+                                slopeScale = math.max(
+                                        math.min(1, math.abs(basePitch) / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH),
+                                        math.min(1, math.abs(baseRoll) / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH)
+                                )
+                        end
+
+                        leanStrength = math.clamp(math.max(maxAngle, slopeScale * intensityScale), 0, 1)
                 end
         else
                 surfaceY = WaterPhysics.TryGetWaterSurface(position)
@@ -335,7 +355,7 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
                 * CFrame.Angles(targetPitch, 0, 0)
                 * CFrame.Angles(0, 0, targetRoll)
         local responsivenessScale = BOAT_LEAN_RESPONSIVENESS_MIN_SCALE
-                + (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * math.max(intensity, leanStrength)
+                + (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * math.max(intensityScale, leanStrength)
         local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS * responsivenessScale, 0, 1)
         local blendedOrientation = currentCFrame:Lerp(targetOrientation, alpha)
         local rotation = blendedOrientation - blendedOrientation.Position

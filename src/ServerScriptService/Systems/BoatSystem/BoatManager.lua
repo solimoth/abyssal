@@ -11,6 +11,7 @@ local HttpService = game:GetService("HttpService")
 local BoatConfig = require(ReplicatedStorage.Modules.BoatConfig)
 local BoatSecurity = require(ReplicatedStorage.Modules.BoatSecurity)
 local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
+local SubmarinePhysics = require(ReplicatedStorage.Modules.SubmarinePhysics)
 local Remotes = ReplicatedStorage.Remotes.BoatRemotes
 
 -- Boat storage
@@ -20,6 +21,7 @@ local BoatControllers = {}
 local BoatControls = {}
 local BoatLastActivity = {}
 local BoatPhysicsObjects = {} -- NEW: Track physics objects
+local SubmarineStates = {}
 
 -- ACCELERATION SYSTEM STORAGE
 local BoatSpeeds = {}
@@ -34,6 +36,15 @@ local MAX_UPDATE_DELTA = 0.1
 local PHYSICS_THROTTLE_DISTANCE = 500 -- NEW: Don't update physics for far boats
 local PASSIVE_WAVE_DISTANCE = 150 -- NEW: Range for passive wave simulation
 local MAX_CONTROL_RATE = 30 -- NEW: Realistic rate limit (30/sec)
+
+-- Submarine pressure damage tuning
+local SUB_HEALTH_RECOVERY_RATE = 0.02
+local SUB_PRESSURE_BASE_DAMAGE = 1.2
+local SUB_PRESSURE_DEPTH_MULTIPLIER = 20
+local SUB_PRESSURE_TIME_MULTIPLIER = 2
+local SUB_HEALTH_WARNING_STEP = 10
+local SUB_DEPTH_WARNING_COOLDOWN = 3
+local SUB_SAFE_RECOVERY_COOLDOWN = 2
 
 -- Memory management
 local MemoryCheckTimer = 0
@@ -283,19 +294,197 @@ local function CleanupBoat(player)
 			end
 		end
 		BoatConnections[player] = nil
-	end
+        end
 
-	BoatControls[player] = nil
-	BoatLastActivity[player] = nil
-	BoatSecurity.CleanupPlayer(player)
+        BoatControls[player] = nil
+        BoatLastActivity[player] = nil
+        BoatSecurity.CleanupPlayer(player)
+        SubmarineStates[player] = nil
+end
+
+-- Process cleanup queue
+local function GetOrCreateSubmarineState(player, config)
+        local state = SubmarineStates[player]
+        local maxHealth = (config and config.MaxHealth) or (state and state.maxHealth) or 100
+
+        if not state then
+                state = {
+                        maxHealth = maxHealth,
+                        health = maxHealth,
+                        lastHealthPercentPrint = 100,
+                        timeOverDepth = 0,
+                        wasOverDepth = false,
+                        lastWarningTime = 0,
+                        lastSafeMessageTime = 0,
+                        isImploding = false,
+                        lastDepth = 0,
+                }
+                SubmarineStates[player] = state
+        else
+                if state.maxHealth ~= maxHealth then
+                        state.maxHealth = maxHealth
+                        state.health = math.clamp(state.health, 0, maxHealth)
+                end
+        end
+
+        return state
+end
+
+local function TriggerSubmarineImplosion(player, boat, config)
+        local state = SubmarineStates[player]
+        if state then
+                if state.isImploding then
+                        return
+                end
+                state.isImploding = true
+        end
+
+        local playerName = player and player.Name or "Unknown"
+        print(('[Submarine] CRITICAL: %s\'s submarine has imploded under pressure!'):format(playerName))
+
+        local primaryPart = boat and boat.PrimaryPart
+        if primaryPart then
+                local effectPart = Instance.new("Part")
+                effectPart.Name = "SubImplosionEffect"
+                effectPart.Anchored = true
+                effectPart.CanCollide = false
+                effectPart.Transparency = 1
+                effectPart.Size = Vector3.new(1, 1, 1)
+                effectPart.CFrame = primaryPart.CFrame
+                effectPart.Parent = workspace
+
+                local bubbleBurst = Instance.new("ParticleEmitter")
+                bubbleBurst.Name = "ImplosionBubbles"
+                bubbleBurst.Rate = 0
+                bubbleBurst.Speed = NumberRange.new(25, 35)
+                bubbleBurst.Lifetime = NumberRange.new(0.35, 0.6)
+                bubbleBurst.Size = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 6),
+                        NumberSequenceKeypoint.new(1, 0)
+                })
+                bubbleBurst.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0),
+                        NumberSequenceKeypoint.new(1, 1)
+                })
+                bubbleBurst.Acceleration = Vector3.new(0, -60, 0)
+                bubbleBurst.Color = ColorSequence.new(Color3.fromRGB(210, 235, 255), Color3.fromRGB(32, 120, 255))
+                bubbleBurst.SpreadAngle = Vector2.new(360, 360)
+                bubbleBurst.LightEmission = 0.8
+                bubbleBurst.Parent = effectPart
+                bubbleBurst:Emit(200)
+
+                local shockwave = Instance.new("ParticleEmitter")
+                shockwave.Name = "ImplosionShockwave"
+                shockwave.Rate = 0
+                shockwave.Speed = NumberRange.new(15, 18)
+                shockwave.Lifetime = NumberRange.new(0.2, 0.35)
+                shockwave.Size = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 2),
+                        NumberSequenceKeypoint.new(0.3, 8),
+                        NumberSequenceKeypoint.new(1, 12)
+                })
+                shockwave.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0),
+                        NumberSequenceKeypoint.new(1, 1)
+                })
+                shockwave.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+                shockwave.LightEmission = 1
+                shockwave.Parent = effectPart
+                shockwave:Emit(35)
+
+                Debris:AddItem(effectPart, 3)
+
+                local implosionFlash = Instance.new("Explosion")
+                implosionFlash.Name = "SubImplosionFlash"
+                implosionFlash.BlastPressure = 0
+                implosionFlash.BlastRadius = 0
+                implosionFlash.DestroyJointRadiusPercent = 0
+                implosionFlash.Position = primaryPart.Position
+                implosionFlash.Visible = true
+                implosionFlash.Parent = workspace
+        end
+
+        task.defer(function()
+                CleanupBoat(player)
+        end)
+end
+
+local function ApplySubmarineDepthDamage(player, boat, config, targetPosition, deltaTime)
+        if not config or not config.MaxDepth then
+                return false
+        end
+
+        local state = GetOrCreateSubmarineState(player, config)
+        if state.isImploding then
+                return true
+        end
+
+        local depth = SubmarinePhysics.GetDepth(targetPosition)
+        state.lastDepth = depth
+
+        local overDepth = depth - config.MaxDepth
+        if overDepth <= 0 then
+                if state.wasOverDepth then
+                        state.wasOverDepth = false
+                        state.timeOverDepth = math.max(state.timeOverDepth - deltaTime, 0)
+
+                        if (tick() - (state.lastSafeMessageTime or 0)) > SUB_SAFE_RECOVERY_COOLDOWN then
+                                local playerName = player and player.Name or "Unknown"
+                                print(('[Submarine] Hull integrity stabilizing for %s\'s submarine.'):format(playerName))
+                                state.lastSafeMessageTime = tick()
+                        end
+                else
+                        state.timeOverDepth = math.max(state.timeOverDepth - deltaTime, 0)
+                end
+
+                if state.health < state.maxHealth then
+                        local regenAmount = state.maxHealth * SUB_HEALTH_RECOVERY_RATE * deltaTime
+                        state.health = math.min(state.maxHealth, state.health + regenAmount)
+                        if state.health >= state.maxHealth then
+                                state.lastHealthPercentPrint = 100
+                        end
+                end
+
+                return false
+        end
+
+        state.wasOverDepth = true
+        state.timeOverDepth = state.timeOverDepth + deltaTime
+
+        if (tick() - (state.lastWarningTime or 0)) > SUB_DEPTH_WARNING_COOLDOWN then
+                local playerName = player and player.Name or "Unknown"
+                print(('[Submarine] WARNING: %s\'s submarine has exceeded its safe depth! Hull under extreme pressure.'):format(playerName))
+                state.lastWarningTime = tick()
+        end
+
+        local safeMaxDepth = math.max(config.MaxDepth, 1)
+        local depthRatio = overDepth / safeMaxDepth
+        local sustainedFactor = state.timeOverDepth * SUB_PRESSURE_TIME_MULTIPLIER
+        local damageRate = SUB_PRESSURE_BASE_DAMAGE + (depthRatio * SUB_PRESSURE_DEPTH_MULTIPLIER) + sustainedFactor
+        local damage = damageRate * deltaTime
+        state.health = math.max(state.health - damage, 0)
+
+        local currentPercent = math.clamp(math.floor((state.health / state.maxHealth) * 100), 0, 100)
+        if not state.lastHealthPercentPrint or currentPercent <= state.lastHealthPercentPrint - SUB_HEALTH_WARNING_STEP then
+                local playerName = player and player.Name or "Unknown"
+                print(('[Submarine] Hull integrity at %d%% for %s\'s submarine.'):format(currentPercent, playerName))
+                state.lastHealthPercentPrint = currentPercent
+        end
+
+        if state.health <= 0 then
+                TriggerSubmarineImplosion(player, boat, config)
+                return true
+        end
+
+        return false
 end
 
 -- Process cleanup queue
 local function ProcessCleanupQueue()
-	for _, player in ipairs(BOAT_CLEANUP_QUEUE) do
-		CleanupBoat(player)
-	end
-	BOAT_CLEANUP_QUEUE = {}
+        for _, player in ipairs(BOAT_CLEANUP_QUEUE) do
+                CleanupBoat(player)
+        end
+        BOAT_CLEANUP_QUEUE = {}
 end
 
 -- Spawn boat function with improved validation
@@ -441,12 +630,26 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 	-- Initialize acceleration system for this boat
 	InitializeBoatAcceleration(player, boatType)
 
-	ActiveBoats[player] = boat
-	BoatConnections[player] = {}
-	BoatLastActivity[player] = tick()
+        ActiveBoats[player] = boat
+        BoatConnections[player] = {}
+        BoatLastActivity[player] = tick()
 
-	local function onOccupantChanged()
-		local humanoid = seat.Occupant
+        if config.Type == "Submarine" then
+                local state = GetOrCreateSubmarineState(player, config)
+                state.health = state.maxHealth
+                state.lastHealthPercentPrint = 100
+                state.timeOverDepth = 0
+                state.wasOverDepth = false
+                local now = tick()
+                state.lastWarningTime = now - SUB_DEPTH_WARNING_COOLDOWN
+                state.lastSafeMessageTime = now
+                state.isImploding = false
+        else
+                SubmarineStates[player] = nil
+        end
+
+        local function onOccupantChanged()
+                local humanoid = seat.Occupant
 		if humanoid then
 			local seatPlayer = Players:GetPlayerFromCharacter(humanoid.Parent)
 			if seatPlayer and seatPlayer ~= player then
@@ -761,14 +964,12 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 	local currentCFrame = controlPart.CFrame
 	local newCFrame
 
-	if isSubmarine then
-		local SubmarinePhysics = require(ReplicatedStorage.Modules.SubmarinePhysics)
-
-		local adjustedInputs = {
-			throttle = currentSpeed / accelData.maxSpeed,
-			steer = currentTurnSpeed / config.TurnSpeed,
-			ascend = ascend,
-			pitch = pitch,
+        if isSubmarine then
+                local adjustedInputs = {
+                        throttle = currentSpeed / accelData.maxSpeed,
+                        steer = currentTurnSpeed / config.TurnSpeed,
+                        ascend = ascend,
+                        pitch = pitch,
 			roll = roll
 		}
 
@@ -787,15 +988,15 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 			false
 		)
 
-		if SubmarinePhysics.ShouldAutoSurface(newCFrame.Position) then
-			local floatingCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
-				newCFrame, 
-				"Surface",
-				deltaTime
-			)
-			newCFrame = floatingCFrame
-		end
-	else
+                if SubmarinePhysics.ShouldAutoSurface(newCFrame.Position) then
+                        local floatingCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
+                                newCFrame,
+                                "Surface",
+                                deltaTime
+                        )
+                        newCFrame = floatingCFrame
+                end
+        else
 		-- Calculate turning with actual turn speed
 		local turnAmount = currentTurnSpeed * deltaTime
 		local newRotation = currentCFrame * CFrame.Angles(0, -turnAmount, 0)
@@ -813,9 +1014,15 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 			"Surface",
 			deltaTime
 		)
-	end
+        end
 
-	-- Validate movement
+        if isSubmarine then
+                if ApplySubmarineDepthDamage(player, boat, config, newCFrame.Position, deltaTime) then
+                        return
+                end
+        end
+
+        -- Validate movement
         local valid, message, shouldKick = BoatSecurity.ValidateBoatMovement(
                 player, boat, newCFrame.Position, deltaTime
         )

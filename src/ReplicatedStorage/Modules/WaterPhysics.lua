@@ -1,13 +1,17 @@
 local CollectionService = game:GetService("CollectionService")
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local WaterPhysics = {}
+
+local WaveRegistry = require(ReplicatedStorage.Modules.WaveRegistry)
+local WaveConfig = require(ReplicatedStorage.Modules.WaveConfig)
 
 -- The legacy system expected a fixed water level for the map. We keep a default so
 -- downstream systems that rely on a reference plane continue to function even when
 -- a water surface cannot be located with raycasts (for example while inside sealed
 -- interiors). The value can be configured through TerrainWaterSystem if required.
-local DEFAULT_WATER_LEVEL = 908.935
+local DEFAULT_WATER_LEVEL = WaveConfig.SeaLevel or 908.935
 
 -- When sampling for the water surface we cast a ray both above and below the target
 -- position to ensure we find the closest body of water without having to know the
@@ -135,7 +139,20 @@ local function findWaterSurfaceFromParts(position: Vector3): number?
     return closestSurface
 end
 
+local function sampleDynamicSurface(position: Vector3): number?
+    local height = WaveRegistry.Sample(position)
+    if height then
+        return height
+    end
+    return nil
+end
+
 local function findWaterSurface(position: Vector3): number?
+    local dynamicHeight = sampleDynamicSurface(position)
+    if dynamicHeight then
+        return dynamicHeight
+    end
+
     local origin = position + Vector3.new(0, WATER_SURFACE_SEARCH_DISTANCE, 0)
     local direction = Vector3.new(0, -WATER_SURFACE_SEARCH_DISTANCE * 2, 0)
     local result = Workspace:Raycast(origin, direction, waterRaycastParams)

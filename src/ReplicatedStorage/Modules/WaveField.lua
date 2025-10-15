@@ -22,7 +22,15 @@ export type WaveField = {
     recenterResponsiveness: number,
     waveInfos: { GerstnerWave.WaveInfo },
     time: number,
+    timeScale: number,
+    intensity: number,
+    targetIntensity: number,
+    intensityResponsiveness: number,
     folder: Folder?,
+    lastFocusX: number,
+    lastFocusZ: number,
+    lastIntensity: number,
+    lastClock: number,
     tileSizeX: number,
     tileSizeZ: number,
     spacing: number,
@@ -63,6 +71,10 @@ function WaveField.new(config: any): WaveField
     self.recenterResponsiveness = math.max(0, config.RecenterResponsiveness or 6)
     self.waveInfos = GerstnerWave.BuildWaveInfos(config.Waves)
     self.time = Workspace:GetServerTimeNow()
+    self.timeScale = math.max(0, config.TimeScale or 1)
+    self.intensity = math.max(0, config.DefaultIntensity or 1)
+    self.targetIntensity = self.intensity
+    self.intensityResponsiveness = math.max(0, config.IntensityResponsiveness or 0)
 
     self.gridWidth = math.max(2, math.floor(config.GridWidth or 64))
     self.gridHeight = math.max(2, math.floor(config.GridHeight or 64))
@@ -72,6 +84,10 @@ function WaveField.new(config: any): WaveField
     self.tileSizeZ = self.spacing * (self.gridHeight - 1)
 
     self.focusPosition = Vector3.new(0, self.seaLevel, 0)
+    self.lastFocusX = self.focusPosition.X
+    self.lastFocusZ = self.focusPosition.Z
+    self.lastIntensity = self.intensity
+    self.lastClock = self.time
 
     local folder = Instance.new("Folder")
     folder.Name = config.ContainerName or "DynamicWaveSurface"
@@ -79,6 +95,9 @@ function WaveField.new(config: any): WaveField
     folder:SetAttribute("FocusX", self.focusPosition.X)
     folder:SetAttribute("FocusZ", self.focusPosition.Z)
     folder:SetAttribute("WaveClock", self.time)
+    folder:SetAttribute("WaveIntensity", self.intensity)
+    folder:SetAttribute("IntensityResponsiveness", self.intensityResponsiveness)
+    folder:SetAttribute("TimeScale", self.timeScale)
     folder:SetAttribute("GridWidth", self.gridWidth)
     folder:SetAttribute("GridHeight", self.gridHeight)
     folder:SetAttribute("GridSpacing", self.spacing)
@@ -145,7 +164,7 @@ function WaveField:_getFocusPosition(): Vector3
 end
 
 function WaveField:Step(dt: number)
-    self.time = Workspace:GetServerTimeNow()
+    self.time += dt * self.timeScale
 
     local targetFocus = self:_getFocusPosition()
     if self.recenterResponsiveness > 0 then
@@ -155,16 +174,56 @@ function WaveField:Step(dt: number)
         self.focusPosition = targetFocus
     end
 
+    if self.intensity ~= self.targetIntensity then
+        local alpha = self.intensityResponsiveness > 0 and math.clamp(dt * self.intensityResponsiveness, 0, 1) or 1
+        self.intensity += (self.targetIntensity - self.intensity) * alpha
+        if math.abs(self.intensity - self.targetIntensity) < 1e-3 then
+            self.intensity = self.targetIntensity
+        end
+    end
+
     if self.folder then
-        self.folder:SetAttribute("FocusX", self.focusPosition.X)
-        self.folder:SetAttribute("FocusZ", self.focusPosition.Z)
-        self.folder:SetAttribute("WaveClock", self.time)
+        if math.abs(self.focusPosition.X - self.lastFocusX) > 1e-3 then
+            self.lastFocusX = self.focusPosition.X
+            self.folder:SetAttribute("FocusX", self.lastFocusX)
+        end
+
+        if math.abs(self.focusPosition.Z - self.lastFocusZ) > 1e-3 then
+            self.lastFocusZ = self.focusPosition.Z
+            self.folder:SetAttribute("FocusZ", self.lastFocusZ)
+        end
+
+        if math.abs(self.time - self.lastClock) > 1e-3 then
+            self.lastClock = self.time
+            self.folder:SetAttribute("WaveClock", self.lastClock)
+        end
+
+        if math.abs(self.intensity - self.lastIntensity) > 1e-3 then
+            self.lastIntensity = self.intensity
+            self.folder:SetAttribute("WaveIntensity", self.lastIntensity)
+        end
     end
 end
 
 function WaveField:GetHeight(position: Vector3): number
     local transform = GerstnerWave:GetTransform(self.waveInfos, Vector2.new(position.X, position.Z), self.time)
-    return self.seaLevel + transform.Y
+    local scaledHeight = math.max(0, transform.Y * self.intensity)
+    return self.seaLevel + scaledHeight
+end
+
+function WaveField:SetTargetIntensity(intensity: number)
+    self.targetIntensity = math.max(0, intensity)
+end
+
+function WaveField:GetIntensity(): number
+    return self.intensity
+end
+
+function WaveField:SetTimeScale(timeScale: number)
+    self.timeScale = math.max(0, timeScale)
+    if self.folder then
+        self.folder:SetAttribute("TimeScale", self.timeScale)
+    end
 end
 
 function WaveField:GetSeaLevel(): number

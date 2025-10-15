@@ -8,6 +8,17 @@ local WaveConfig = {
     -- Base height (world Y) of the simulated water surface.
     SeaLevel = 908.935,
 
+    -- Global multiplier that scales every wave layer. Keep this at 1 for calm seas
+    -- and drive it via WaveField:SetTargetIntensity for weather events.
+    DefaultIntensity = 0.85,
+
+    -- How quickly the intensity reacts to changes triggered by gameplay systems.
+    -- Higher values snap immediately, lower values give smooth transitions.
+    IntensityResponsiveness = 2.5,
+
+    -- Overall simulation speed multiplier. Lower values make waves roll slowly.
+    TimeScale = 0.4,
+
     -- Number of vertices along each axis of the editable mesh tile. Higher values
     -- give smoother waves but cost more to update every frame.
     GridWidth = 100,
@@ -59,22 +70,22 @@ local WaveConfig = {
     -- Gerstner parameters internally.
     Waves = {
         {
-            Amplitude = 6,
-            Wavelength = 140,
-            Speed = 14,
-            Direction = Vector2.new(1, 0),
+            Amplitude = 5.5,
+            Wavelength = 180,
+            Speed = 9,
+            Direction = Vector2.new(1, 0.2),
         },
         {
-            Amplitude = 2.5,
-            Wavelength = 40,
-            Speed = 28,
-            Direction = Vector2.new(0.4, 0.8),
+            Amplitude = 2,
+            Wavelength = 60,
+            Speed = 16,
+            Direction = Vector2.new(0.35, 0.8),
         },
         {
-            Amplitude = 1.25,
-            Wavelength = 16,
-            Speed = 50,
-            Direction = Vector2.new(-0.6, 0.2),
+            Amplitude = 1,
+            Wavelength = 22,
+            Speed = 24,
+            Direction = Vector2.new(-0.5, 0.15),
         },
     },
 }

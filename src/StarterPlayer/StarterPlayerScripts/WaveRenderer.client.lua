@@ -75,6 +75,9 @@ local tileRadius = math.max(0, math.floor(attributeNumber("TileRadius", WaveConf
 local choppiness = math.clamp(attributeNumber("Choppiness", WaveConfig.Choppiness or 0.35), 0, 1)
 local reapplyInterval = math.max(1 / 60, attributeNumber("ReapplyInterval", WaveConfig.ReapplyInterval or (1 / 20)))
 local seaLevel = attributeNumber("SeaLevel", WaveConfig.SeaLevel or 0)
+local intensity = math.max(0, attributeNumber("WaveIntensity", WaveConfig.DefaultIntensity or 1))
+local targetIntensity = intensity
+local intensityResponsiveness = math.max(0, attributeNumber("IntensityResponsiveness", WaveConfig.IntensityResponsiveness or 2.5))
 local material = attributeMaterial("MaterialName", WaveConfig.Material or Enum.Material.Water)
 local color = attributeColor("Color", WaveConfig.Color or Color3.fromRGB(30, 120, 150))
 local transparency = attributeNumber("Transparency", WaveConfig.Transparency or 0.2)
@@ -84,6 +87,19 @@ local tileSizeX = spacing * (gridWidth - 1)
 local tileSizeZ = spacing * (gridHeight - 1)
 
 local waves = GerstnerWave.BuildWaveInfos(WaveConfig.Waves)
+
+local lastClockAttribute = attributeNumber("WaveClock", Workspace:GetServerTimeNow())
+local clockSyncedAt = os.clock()
+
+local function getWaveClock()
+    local attr = container:GetAttribute("WaveClock")
+    if typeof(attr) == "number" and attr ~= lastClockAttribute then
+        lastClockAttribute = attr
+        clockSyncedAt = os.clock()
+    end
+    local elapsed = os.clock() - clockSyncedAt
+    return lastClockAttribute + elapsed
+end
 
 local function roundTo(value: number, snap: number): number
     if snap == 0 then
@@ -217,12 +233,10 @@ local function getFallbackFocus(): Vector2
     return Vector2.zero
 end
 
-local function updateTile(tile)
+local function updateTile(tile, runTime, scaledChoppiness, scaledIntensity)
     local editable = tile.Editable
     local vertices = tile.Vertices
     local originCF = tile.OriginCF
-
-    local runTime = Workspace:GetServerTimeNow()
 
     for y = 1, gridHeight do
         local row = vertices[y]
@@ -233,9 +247,9 @@ local function updateTile(tile)
             local worldPosition = (originCF * CFrame.new(vx, 0, vz)).Position
             local transform = GerstnerWave:GetTransform(waves, Vector2.new(worldPosition.X, worldPosition.Z), runTime)
 
-            local offsetX = vx + (transform.X * choppiness)
-            local offsetY = transform.Y
-            local offsetZ = vz + (transform.Z * choppiness)
+            local offsetX = vx + (transform.X * scaledChoppiness)
+            local offsetY = math.max(0, transform.Y * scaledIntensity)
+            local offsetZ = vz + (transform.Z * scaledChoppiness)
 
             editable:SetPosition(row[x], Vector3.new(offsetX, offsetY, offsetZ))
         end
@@ -244,10 +258,23 @@ end
 
 RunService.Heartbeat:Connect(function(dt)
     seaLevel = attributeNumber("SeaLevel", seaLevel)
+    targetIntensity = math.max(0, attributeNumber("WaveIntensity", targetIntensity))
+    intensityResponsiveness = math.max(0, attributeNumber("IntensityResponsiveness", intensityResponsiveness))
+
+    if intensity ~= targetIntensity then
+        local alpha = intensityResponsiveness > 0 and math.clamp(dt * intensityResponsiveness, 0, 1) or 1
+        intensity += (targetIntensity - intensity) * alpha
+        if math.abs(intensity - targetIntensity) < 1e-3 then
+            intensity = targetIntensity
+        end
+    end
 
     local focus = getSharedFocus() or getFallbackFocus()
     local originX = roundTo(focus.X, tileSizeX)
     local originZ = roundTo(focus.Y, tileSizeZ)
+
+    local runTime = getWaveClock()
+    local scaledChoppiness = choppiness * intensity
 
     for _, tile in ipairs(tiles) do
         local offset = tile.GridOffset
@@ -257,7 +284,7 @@ RunService.Heartbeat:Connect(function(dt)
 
         tile.OriginCF = originCF
         tile.Part.CFrame = originCF
-        updateTile(tile)
+        updateTile(tile, runTime, scaledChoppiness, intensity)
     end
 
     reapplyClock += dt

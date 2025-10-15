@@ -4,6 +4,9 @@
 
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 
 local player = Players.LocalPlayer
 
@@ -27,7 +30,8 @@ RunService.Heartbeat:Connect(function()
 							print("=== SUBMARINE DEBUG ===")
 							print("Boat Y:", primaryPart.Position.Y)
 							print("Control Part Y:", controlPart.Position.Y)
-							print("Depth from surface:", 908.935 - primaryPart.Position.Y)
+                                                        local surfaceY = WaterPhysics.GetWaterLevel(primaryPart.Position)
+                                                        print("Depth from surface:", surfaceY - primaryPart.Position.Y)
 							print("Control Anchored?", controlPart.Anchored)
 
 							-- Check for BodyVelocity (shouldn't exist)

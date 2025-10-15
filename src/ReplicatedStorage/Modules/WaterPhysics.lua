@@ -34,6 +34,7 @@ local BOAT_SLOPE_DEADZONE = math.rad(1.5)
 local BOAT_LEAN_CALM_INTENSITY_THRESHOLD = 0.9
 local BOAT_LEAN_CALM_INTENSITY_EXPONENT = 2.5
 local BOAT_LEAN_CALM_RESIDUAL_SCALE = 0.035
+local BOAT_LEAN_CALM_BASELINE_SCALE = 0.05
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -289,8 +290,10 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
                                 / math.max(1 - BOAT_LEAN_CALM_INTENSITY_THRESHOLD, 1e-3)
                         leanIntensityScale = math.clamp(normalized, 0, 1) ^ BOAT_LEAN_CALM_INTENSITY_EXPONENT
                 elseif BOAT_LEAN_CALM_INTENSITY_THRESHOLD > 0 then
-                        local calmNormalized = intensity / BOAT_LEAN_CALM_INTENSITY_THRESHOLD
-                        leanIntensityScale = math.clamp(calmNormalized, 0, 1) * BOAT_LEAN_CALM_RESIDUAL_SCALE
+                        local calmNormalized = math.clamp(intensity / BOAT_LEAN_CALM_INTENSITY_THRESHOLD, 0, 1)
+                        local residual = calmNormalized * BOAT_LEAN_CALM_RESIDUAL_SCALE
+                        local baseline = calmNormalized * BOAT_LEAN_CALM_BASELINE_SCALE
+                        leanIntensityScale = math.max(residual, baseline)
                 end
 
                 if surfaceNormal.Magnitude > 1e-3 and intensity > 0 then

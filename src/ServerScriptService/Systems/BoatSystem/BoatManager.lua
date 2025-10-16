@@ -658,9 +658,9 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                 BoatConnections[player] = connections
         end
 
-        local monitoredParts = {}
+        local hitboxParts = {}
         for _, desc in ipairs(boat:GetDescendants()) do
-                if desc:IsA("BasePart") and desc.CanCollide then
+                if desc:IsA("BasePart") and string.lower(desc.Name) == "hitbox" then
                         if desc.CanTouch == false then
                                 desc.CanTouch = true
                         end
@@ -668,18 +668,20 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                                 ApplySubmarineCollisionDamage(player, boat, config, desc, otherPart)
                         end)
                         table.insert(connections, connection)
-                        table.insert(monitoredParts, desc)
+                        table.insert(hitboxParts, desc)
                 end
         end
 
-        if #monitoredParts > 0 then
-                state.collisionPollParts = monitoredParts
+        if #hitboxParts == 0 then
+                warn(string.format("[Submarine] No Hitbox part found for %s; collision damage may not register.", boat:GetFullName()))
+        else
+                state.collisionPollParts = hitboxParts
                 local ancestryConnection = boat.AncestryChanged:Connect(function(_, parent)
                         if not parent then
-                                for _, part in ipairs(monitoredParts) do
+                                for _, part in ipairs(hitboxParts) do
                                         state.recentCollisionParts[part] = nil
                                 end
-                                clearTable(monitoredParts)
+                                clearTable(hitboxParts)
                                 clearTable(state.collisionPollParts)
                                 state.collisionPollIndex = 0
                         end

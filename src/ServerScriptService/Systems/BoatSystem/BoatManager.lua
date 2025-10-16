@@ -81,8 +81,9 @@ local SUB_COLLISION_GLOBAL_COOLDOWN = 0.3
 local SUB_COLLISION_PART_COOLDOWN = 1.2
 local SUB_COLLISION_PRINT_COOLDOWN = 0.75
 local SUB_COLLISION_IMPULSE_EXPONENT = 1.35
-local SUB_COLLISION_POLL_INTERVAL = 0.12
-local SUB_COLLISION_POLL_PART_LIMIT = 6
+local SUB_COLLISION_POLL_INTERVAL = 0.05
+local SUB_COLLISION_POLL_PART_LIMIT = 8
+local SUB_COLLISION_BOX_PADDING = Vector3.new(4, 4, 4)
 
 local ZERO_VECTOR = Vector3.new()
 
@@ -117,6 +118,8 @@ local function GetOrCreateOverlapParams(state, boat)
                 clearTable(filterList)
         end
 
+        params.MaxParts = 0
+
         if boat then
                 table.insert(filterList, boat)
 
@@ -138,6 +141,10 @@ local function GatherCollisionContacts(part, overlapParams, buffer)
 
         buffer = buffer or {}
 
+        if part.CanQuery == false then
+                part.CanQuery = true
+        end
+
         for existing in pairs(buffer) do
                 buffer[existing] = nil
         end
@@ -151,12 +158,29 @@ local function GatherCollisionContacts(part, overlapParams, buffer)
                 end
         end
 
-        if overlapParams and Workspace.GetPartsInPart then
-                local success, overlapParts = pcall(Workspace.GetPartsInPart, Workspace, part, overlapParams)
-                if success and overlapParts then
-                        for _, otherPart in ipairs(overlapParts) do
-                                if otherPart and otherPart:IsA("BasePart") then
-                                        buffer[otherPart] = true
+        if overlapParams then
+                overlapParams.CollisionGroup = part.CollisionGroup
+
+                if Workspace.GetPartsInPart then
+                        local success, overlapParts = pcall(Workspace.GetPartsInPart, Workspace, part, overlapParams)
+                        if success and overlapParts then
+                                for _, otherPart in ipairs(overlapParts) do
+                                        if otherPart and otherPart:IsA("BasePart") then
+                                                buffer[otherPart] = true
+                                        end
+                                end
+                        end
+                end
+
+                if Workspace.GetPartBoundsInBox then
+                        local size = part.Size + SUB_COLLISION_BOX_PADDING
+                        local cframe = part.CFrame
+                        local success, overlapParts = pcall(Workspace.GetPartBoundsInBox, Workspace, cframe, size, overlapParams)
+                        if success and overlapParts then
+                                for _, otherPart in ipairs(overlapParts) do
+                                        if otherPart and otherPart:IsA("BasePart") then
+                                                buffer[otherPart] = true
+                                        end
                                 end
                         end
                 end

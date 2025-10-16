@@ -1799,6 +1799,45 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
         BoatLastActivity[player] = tick()
 end
 
+local function SetupSubmarineCollisionMonitoring(player, boat, config)
+        if not boat or not boat.PrimaryPart then
+                return
+        end
+
+        local state = GetOrCreateSubmarineState(player, config)
+        state.lastCollisionTime = 0
+        state.lastCollisionPrint = 0
+        state.recentCollisionParts = {}
+
+        local connections = BoatConnections[player]
+        if not connections then
+                connections = {}
+                BoatConnections[player] = connections
+        end
+
+        local monitoredParts = {}
+        for _, desc in ipairs(boat:GetDescendants()) do
+                if desc:IsA("BasePart") and desc.CanCollide then
+                        local connection = desc.Touched:Connect(function(otherPart)
+                                ApplySubmarineCollisionDamage(player, boat, config, desc, otherPart)
+                        end)
+                        table.insert(connections, connection)
+                        table.insert(monitoredParts, desc)
+                end
+        end
+
+        if #monitoredParts > 0 then
+                local ancestryConnection = boat.AncestryChanged:Connect(function(_, parent)
+                        if not parent then
+                                for _, part in ipairs(monitoredParts) do
+                                        state.recentCollisionParts[part] = nil
+                                end
+                        end
+                end)
+                table.insert(connections, ancestryConnection)
+        end
+end
+
 -- Main update loop
 local function UpdateAllBoats(deltaTime)
 	deltaTime = math.min(deltaTime, MAX_UPDATE_DELTA)

@@ -134,12 +134,33 @@ local function GetOrCreateOverlapParams(state, boat)
         return params
 end
 
+local function BelongsToPlayerCharacter(part)
+        local ancestor = part and part.Parent
+        while ancestor do
+                if Players:GetPlayerFromCharacter(ancestor) then
+                        return true
+                end
+
+                ancestor = ancestor.Parent
+        end
+
+        return false
+end
+
 local function ShouldIgnoreCollision(part)
         if not part or not part:IsA("BasePart") then
                 return true
         end
 
-        return part:GetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE) == true
+        if part:GetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE) == true then
+                return true
+        end
+
+        if BelongsToPlayerCharacter(part) then
+                return true
+        end
+
+        return false
 end
 
 local function GatherCollisionContacts(part, overlapParams, buffer)

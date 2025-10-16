@@ -81,6 +81,7 @@ local SUB_COLLISION_PRINT_COOLDOWN = 0.75
 local SUB_COLLISION_POLL_INTERVAL = 0.05
 local SUB_COLLISION_POLL_PART_LIMIT = 8
 local SUB_COLLISION_BOX_PADDING = Vector3.new(4, 4, 4)
+local SUB_COLLISION_IGNORE_ATTRIBUTE = "IgnoreCollision"
 
 local ZERO_VECTOR = Vector3.new()
 
@@ -133,6 +134,14 @@ local function GetOrCreateOverlapParams(state, boat)
         return params
 end
 
+local function ShouldIgnoreCollision(part)
+        if not part or not part:IsA("BasePart") then
+                return true
+        end
+
+        return part:GetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE) == true
+end
+
 local function GatherCollisionContacts(part, overlapParams, buffer)
         if not part or not part:IsA("BasePart") then
                 return buffer
@@ -151,7 +160,7 @@ local function GatherCollisionContacts(part, overlapParams, buffer)
         if part.CanTouch ~= false then
                 local touchingParts = part:GetTouchingParts()
                 for _, otherPart in ipairs(touchingParts) do
-                        if otherPart and otherPart:IsA("BasePart") then
+                        if otherPart and otherPart:IsA("BasePart") and not ShouldIgnoreCollision(otherPart) then
                                 buffer[otherPart] = true
                         end
                 end
@@ -164,7 +173,7 @@ local function GatherCollisionContacts(part, overlapParams, buffer)
                         local success, overlapParts = pcall(Workspace.GetPartsInPart, Workspace, part, overlapParams)
                         if success and overlapParts then
                                 for _, otherPart in ipairs(overlapParts) do
-                                        if otherPart and otherPart:IsA("BasePart") then
+                                        if otherPart and otherPart:IsA("BasePart") and not ShouldIgnoreCollision(otherPart) then
                                                 buffer[otherPart] = true
                                         end
                                 end
@@ -177,7 +186,7 @@ local function GatherCollisionContacts(part, overlapParams, buffer)
                         local success, overlapParts = pcall(Workspace.GetPartBoundsInBox, Workspace, cframe, size, overlapParams)
                         if success and overlapParts then
                                 for _, otherPart in ipairs(overlapParts) do
-                                        if otherPart and otherPart:IsA("BasePart") then
+                                        if otherPart and otherPart:IsA("BasePart") and not ShouldIgnoreCollision(otherPart) then
                                                 buffer[otherPart] = true
                                         end
                                 end
@@ -596,6 +605,10 @@ end
 
 local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, otherPart)
         if not boat or not boat.Parent or not otherPart or not otherPart:IsA("BasePart") then
+                return
+        end
+
+        if ShouldIgnoreCollision(otherPart) then
                 return
         end
 

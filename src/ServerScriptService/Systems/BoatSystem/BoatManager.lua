@@ -767,6 +767,7 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                 warn(string.format("[Submarine] No Hitbox part found for %s; collision damage may not register.", boat:GetFullName()))
         else
                 state.collisionPollParts = hitboxParts
+                state.collisionOverlapParams = GetOrCreateOverlapParams(state, boat)
                 local ancestryConnection = boat.AncestryChanged:Connect(function(_, parent)
                         if not parent then
                                 for _, part in ipairs(hitboxParts) do

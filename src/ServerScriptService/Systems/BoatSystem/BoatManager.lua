@@ -5,6 +5,7 @@ local Players = game:GetService("Players")
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
@@ -73,15 +74,17 @@ local SUB_IMPL_DEBRIS_MAX_SPEED = 80
 local SUB_IMPL_DEBRIS_MAX_ANGULAR = math.rad(160)
 local SUB_IMPL_DEBRIS_FADE_TIME = 3.5
 
-local SUB_COLLISION_MIN_SPEED = 8
+local SUB_COLLISION_DETECTION_SPEED = 1 -- minimum speed to consider a collision event
+local SUB_COLLISION_DAMAGE_START_SPEED = 2 -- speed where hull damage begins to scale up
 local SUB_COLLISION_MAX_SPEED = 120
 local SUB_COLLISION_DAMAGE_RATIO = 0.35
 local SUB_COLLISION_GLOBAL_COOLDOWN = 0.3
 local SUB_COLLISION_PART_COOLDOWN = 1.2
 local SUB_COLLISION_PRINT_COOLDOWN = 0.75
 local SUB_COLLISION_IMPULSE_EXPONENT = 1.35
-local SUB_COLLISION_POLL_INTERVAL = 0.12
-local SUB_COLLISION_POLL_PART_LIMIT = 6
+local SUB_COLLISION_POLL_INTERVAL = 0.05
+local SUB_COLLISION_POLL_PART_LIMIT = 8
+local SUB_COLLISION_BOX_PADDING = Vector3.new(4, 4, 4)
 
 local ZERO_VECTOR = Vector3.new()
 
@@ -93,6 +96,98 @@ local function clearTable(tbl)
         for key in pairs(tbl) do
                 tbl[key] = nil
         end
+end
+
+local function GetOrCreateOverlapParams(state, boat)
+        if not state then
+                return nil
+        end
+
+        local params = state.collisionOverlapParams
+        if not params then
+                params = OverlapParams.new()
+                params.RespectCanCollide = false
+                params.FilterType = Enum.RaycastFilterType.Exclude
+                state.collisionOverlapParams = params
+        end
+
+        local filterList = state.collisionFilterList
+        if not filterList then
+                filterList = {}
+                state.collisionFilterList = filterList
+        else
+                clearTable(filterList)
+        end
+
+        params.MaxParts = 0
+
+        if boat then
+                table.insert(filterList, boat)
+
+                local physicsObjects = BoatPhysicsObjects[boat]
+                if physicsObjects and physicsObjects.controlPart then
+                        table.insert(filterList, physicsObjects.controlPart)
+                end
+        end
+
+        params.FilterDescendantsInstances = filterList
+
+        return params
+end
+
+local function GatherCollisionContacts(part, overlapParams, buffer)
+        if not part or not part:IsA("BasePart") then
+                return buffer
+        end
+
+        buffer = buffer or {}
+
+        if part.CanQuery == false then
+                part.CanQuery = true
+        end
+
+        for existing in pairs(buffer) do
+                buffer[existing] = nil
+        end
+
+        if part.CanTouch ~= false then
+                local touchingParts = part:GetTouchingParts()
+                for _, otherPart in ipairs(touchingParts) do
+                        if otherPart and otherPart:IsA("BasePart") then
+                                buffer[otherPart] = true
+                        end
+                end
+        end
+
+        if overlapParams then
+                overlapParams.CollisionGroup = part.CollisionGroup
+
+                if Workspace.GetPartsInPart then
+                        local success, overlapParts = pcall(Workspace.GetPartsInPart, Workspace, part, overlapParams)
+                        if success and overlapParts then
+                                for _, otherPart in ipairs(overlapParts) do
+                                        if otherPart and otherPart:IsA("BasePart") then
+                                                buffer[otherPart] = true
+                                        end
+                                end
+                        end
+                end
+
+                if Workspace.GetPartBoundsInBox then
+                        local size = part.Size + SUB_COLLISION_BOX_PADDING
+                        local cframe = part.CFrame
+                        local success, overlapParts = pcall(Workspace.GetPartBoundsInBox, Workspace, cframe, size, overlapParams)
+                        if success and overlapParts then
+                                for _, otherPart in ipairs(overlapParts) do
+                                        if otherPart and otherPart:IsA("BasePart") then
+                                                buffer[otherPart] = true
+                                        end
+                                end
+                        end
+                end
+        end
+
+        return buffer
 end
 
 -- Memory management
@@ -592,12 +687,12 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
         local otherVelocity = otherPart.AssemblyLinearVelocity or otherPart.Velocity or ZERO_VECTOR
         local relativeSpeed = (boatVelocity - otherVelocity).Magnitude
 
-        if relativeSpeed < SUB_COLLISION_MIN_SPEED then
+        if relativeSpeed < SUB_COLLISION_DETECTION_SPEED then
                 return
         end
 
-        local speedRange = math.max(SUB_COLLISION_MAX_SPEED - SUB_COLLISION_MIN_SPEED, 1)
-        local normalizedImpact = math.clamp((relativeSpeed - SUB_COLLISION_MIN_SPEED) / speedRange, 0, 1)
+        local speedRange = math.max(SUB_COLLISION_MAX_SPEED - SUB_COLLISION_DAMAGE_START_SPEED, 1)
+        local normalizedImpact = math.clamp((relativeSpeed - SUB_COLLISION_DAMAGE_START_SPEED) / speedRange, 0, 1)
         normalizedImpact = normalizedImpact ^ SUB_COLLISION_IMPULSE_EXPONENT
 
         local boatMass = primaryPart.AssemblyMass or primaryPart:GetMass()
@@ -708,6 +803,7 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                 warn(string.format("[Submarine] No Hitbox part found for %s; collision damage may not register.", boat:GetFullName()))
         else
                 state.collisionPollParts = hitboxParts
+                state.collisionOverlapParams = GetOrCreateOverlapParams(state, boat)
                 local ancestryConnection = boat.AncestryChanged:Connect(function(_, parent)
                         if not parent then
                                 for _, part in ipairs(hitboxParts) do
@@ -776,12 +872,16 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                                         end
                                 else
                                         checked += 1
-                                        if part.CanTouch ~= false then
-                                                local touchingParts = part:GetTouchingParts()
-                                                for _, otherPart in ipairs(touchingParts) do
+                                        local contactBuffer = state.collisionContactBuffer
+                                        contactBuffer = GatherCollisionContacts(part, state.collisionOverlapParams, contactBuffer)
+                                        state.collisionContactBuffer = contactBuffer
+
+                                        if contactBuffer then
+                                                for otherPart in pairs(contactBuffer) do
                                                         if otherPart and otherPart:IsA("BasePart") then
                                                                 ApplySubmarineCollisionDamage(player, boat, config, part, otherPart)
                                                         end
+                                                        contactBuffer[otherPart] = nil
                                                 end
                                         end
                                 end
@@ -1931,45 +2031,6 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
         end
 
         BoatLastActivity[player] = tick()
-end
-
-local function SetupSubmarineCollisionMonitoring(player, boat, config)
-        if not boat or not boat.PrimaryPart then
-                return
-        end
-
-        local state = GetOrCreateSubmarineState(player, config)
-        state.lastCollisionTime = 0
-        state.lastCollisionPrint = 0
-        state.recentCollisionParts = {}
-
-        local connections = BoatConnections[player]
-        if not connections then
-                connections = {}
-                BoatConnections[player] = connections
-        end
-
-        local monitoredParts = {}
-        for _, desc in ipairs(boat:GetDescendants()) do
-                if desc:IsA("BasePart") and desc.CanCollide then
-                        local connection = desc.Touched:Connect(function(otherPart)
-                                ApplySubmarineCollisionDamage(player, boat, config, desc, otherPart)
-                        end)
-                        table.insert(connections, connection)
-                        table.insert(monitoredParts, desc)
-                end
-        end
-
-        if #monitoredParts > 0 then
-                local ancestryConnection = boat.AncestryChanged:Connect(function(_, parent)
-                        if not parent then
-                                for _, part in ipairs(monitoredParts) do
-                                        state.recentCollisionParts[part] = nil
-                                end
-                        end
-                end)
-                table.insert(connections, ancestryConnection)
-        end
 end
 
 -- Main update loop

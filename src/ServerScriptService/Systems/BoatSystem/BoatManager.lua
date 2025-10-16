@@ -510,6 +510,36 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
                 return
         end
 
+        local primaryPart = boat.PrimaryPart
+        if not primaryPart then
+                return
+        end
+
+        if otherPart == primaryPart or (otherPart.AssemblyRootPart and otherPart.AssemblyRootPart == primaryPart) then
+                return
+        end
+
+        local otherParent = otherPart.Parent
+        if otherParent then
+                if Players:GetPlayerFromCharacter(otherParent) then
+                        return
+                end
+
+                local humanoid = otherParent:FindFirstChildOfClass("Humanoid")
+                if humanoid then
+                        return
+                end
+        end
+
+        if otherPart.Material == Enum.Material.Water then
+                return
+        end
+
+        local otherName = string.lower(otherPart.Name or "")
+        if otherName == "water" or otherName == "ocean" or otherName == "sea" then
+                return
+        end
+
         local state = GetOrCreateSubmarineState(player, config)
         if not state or state.isImploding then
                 return
@@ -547,17 +577,19 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
                 return
         end
 
-        local primaryPart = boat.PrimaryPart
-        if not primaryPart then
-                return
-        end
-
         if not state.maxHealth or state.maxHealth <= 0 then
                 return
         end
 
         local boatVelocity = primaryPart.AssemblyLinearVelocity or ZERO_VECTOR
-        local otherVelocity = otherPart.AssemblyLinearVelocity or ZERO_VECTOR
+        local hitVelocity = hitPart and (hitPart.AssemblyLinearVelocity or hitPart.Velocity) or ZERO_VECTOR
+        if hitVelocity.Magnitude > boatVelocity.Magnitude then
+                boatVelocity = hitVelocity
+        elseif boatVelocity.Magnitude < 0.5 and primaryPart.Velocity then
+                boatVelocity = primaryPart.Velocity
+        end
+
+        local otherVelocity = otherPart.AssemblyLinearVelocity or otherPart.Velocity or ZERO_VECTOR
         local relativeSpeed = (boatVelocity - otherVelocity).Magnitude
 
         if relativeSpeed < SUB_COLLISION_MIN_SPEED then

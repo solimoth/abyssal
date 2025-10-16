@@ -53,6 +53,8 @@ local SUB_SHAKE_MAX_ANGLE = math.rad(5)
 local SUB_SPEED_MIN_MULTIPLIER = 0.25
 local SUB_ACCEL_MIN_MULTIPLIER = 0.35
 local SUB_CONTROL_MIN_MULTIPLIER = 0.4
+local SUB_CLIENT_SPEED_TOLERANCE = 0.12
+local SUB_CLIENT_SPEED_MIN_MARGIN = 4
 local SUB_LEAK_THRESHOLD = 0.7
 local SUB_LEAK_MAX_RATE = 140
 local SUB_LEAK_OFFSET_INTERVAL = 0.8
@@ -1092,6 +1094,10 @@ local function UpdateBoatControl(player, controls)
                 return
         end
 
+        local boatType = boat:GetAttribute("BoatType")
+        local boatConfig = boatType and BoatConfig.GetBoatData(boatType) or nil
+        local isSubmarine = boatConfig and boatConfig.Type == "Submarine"
+
         -- Validate inputs
         local throttle = sanitizeControlAxis(controls.throttle)
         local steer = sanitizeControlAxis(controls.steer)
@@ -1109,19 +1115,35 @@ local function UpdateBoatControl(player, controls)
 
         end
 
-        if clientSpeed and BoatAccelerationData[player] then
-                local maxAllowed = BoatAccelerationData[player].maxSpeed
-                if math.abs(clientSpeed) > maxAllowed then
+        local accelData = BoatAccelerationData[player]
+        if clientSpeed and accelData then
+                local baseMax = math.abs(accelData.baseMaxSpeed or accelData.maxSpeed or 0)
+                local maxAllowed = math.abs(accelData.maxSpeed or baseMax)
+
+                if isSubmarine then
+                        local stressMax = math.abs(accelData.currentStressMaxSpeed or accelData.maxSpeed or baseMax)
+                        maxAllowed = math.max(baseMax, stressMax)
+                        if maxAllowed == 0 then
+                                maxAllowed = baseMax
+                        end
+
+                        local margin = math.max(baseMax * SUB_CLIENT_SPEED_TOLERANCE, SUB_CLIENT_SPEED_MIN_MARGIN)
+                        maxAllowed += margin
+                end
+
+                if maxAllowed > 0 and math.abs(clientSpeed) > maxAllowed then
                         -- Track violations
                         PlayerViolations[player] = (PlayerViolations[player] or 0) + 1
 
-			if PlayerViolations[player] > 50 then
-				warn("Excessive speed violations from", player.Name)
-				player:Kick("Movement security violation")
-			end
-			return
-		end
-	end
+                        if PlayerViolations[player] > 50 then
+                                warn("Excessive speed violations from", player.Name)
+                                player:Kick("Movement security violation")
+                        end
+                        return
+                elseif PlayerViolations[player] then
+                        PlayerViolations[player] = math.max(PlayerViolations[player] - 0.25, 0)
+                end
+        end
 
 	if not BoatSecurity.ValidateInput(throttle, steer) then
 		warn("Invalid boat control input from", player.Name)
@@ -1290,12 +1312,17 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 	local currentSpeed = BoatSpeeds[player] or 0
 	local currentTurnSpeed = BoatTurnSpeeds[player] or 0
 
+        local baseMaxSpeed = accelData.baseMaxSpeed or accelData.maxSpeed or 0
+        local effectiveMaxSpeed = accelData.maxSpeed or baseMaxSpeed
         if isSubmarine then
-                local baseMaxSpeed = accelData.baseMaxSpeed or accelData.maxSpeed
-                accelData.maxSpeed = baseMaxSpeed * stressSpeedMultiplier
+                effectiveMaxSpeed = baseMaxSpeed * stressSpeedMultiplier
+                accelData.maxSpeed = effectiveMaxSpeed
+                accelData.currentStressMaxSpeed = effectiveMaxSpeed
+        else
+                accelData.currentStressMaxSpeed = effectiveMaxSpeed
         end
 
-        local targetSpeed = throttle * accelData.maxSpeed
+        local targetSpeed = throttle * effectiveMaxSpeed
 
         local baseTurnSpeed = config.TurnSpeed or 0
         if isSubmarine then
@@ -1347,7 +1374,7 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
         end
 
         if isSubmarine then
-                local maxSpeed = accelData.maxSpeed
+                local maxSpeed = effectiveMaxSpeed
                 if maxSpeed and maxSpeed > 0 then
                         currentSpeed = math.clamp(currentSpeed, -maxSpeed, maxSpeed)
                 end
@@ -1368,8 +1395,8 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 
         if isSubmarine then
                 local throttleInput = 0
-                if accelData.maxSpeed and accelData.maxSpeed ~= 0 then
-                        throttleInput = currentSpeed / accelData.maxSpeed
+                if effectiveMaxSpeed ~= 0 then
+                        throttleInput = currentSpeed / effectiveMaxSpeed
                 end
 
                 local steerInput = 0

@@ -74,7 +74,8 @@ local SUB_IMPL_DEBRIS_MAX_SPEED = 80
 local SUB_IMPL_DEBRIS_MAX_ANGULAR = math.rad(160)
 local SUB_IMPL_DEBRIS_FADE_TIME = 3.5
 
-local SUB_COLLISION_MIN_SPEED = 8
+local SUB_COLLISION_DETECTION_SPEED = 1 -- minimum speed to consider a collision event
+local SUB_COLLISION_DAMAGE_START_SPEED = 2 -- speed where hull damage begins to scale up
 local SUB_COLLISION_MAX_SPEED = 120
 local SUB_COLLISION_DAMAGE_RATIO = 0.35
 local SUB_COLLISION_GLOBAL_COOLDOWN = 0.3
@@ -686,12 +687,12 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
         local otherVelocity = otherPart.AssemblyLinearVelocity or otherPart.Velocity or ZERO_VECTOR
         local relativeSpeed = (boatVelocity - otherVelocity).Magnitude
 
-        if relativeSpeed < SUB_COLLISION_MIN_SPEED then
+        if relativeSpeed < SUB_COLLISION_DETECTION_SPEED then
                 return
         end
 
-        local speedRange = math.max(SUB_COLLISION_MAX_SPEED - SUB_COLLISION_MIN_SPEED, 1)
-        local normalizedImpact = math.clamp((relativeSpeed - SUB_COLLISION_MIN_SPEED) / speedRange, 0, 1)
+        local speedRange = math.max(SUB_COLLISION_MAX_SPEED - SUB_COLLISION_DAMAGE_START_SPEED, 1)
+        local normalizedImpact = math.clamp((relativeSpeed - SUB_COLLISION_DAMAGE_START_SPEED) / speedRange, 0, 1)
         normalizedImpact = normalizedImpact ^ SUB_COLLISION_IMPULSE_EXPONENT
 
         local boatMass = primaryPart.AssemblyMass or primaryPart:GetMass()

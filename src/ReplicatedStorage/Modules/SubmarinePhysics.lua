@@ -68,17 +68,19 @@ end
 
 -- Helper function to check if position is valid for submarine
 function SubmarinePhysics.IsValidDepth(position, config)
-	local depth = SubmarinePhysics.GetDepth(position)
+        local depth = SubmarinePhysics.GetDepth(position)
+        local maxDepth = (config and config.MaxDepth) or math.huge
+        local minDepth = (config and config.MinDepth) or -math.huge
 
-	if depth > config.MaxDepth then
-		return false, "Too deep!"
-	end
+        if depth < minDepth then
+                return false, "Too high!", depth
+        end
 
-	if depth < config.MinDepth then
-		return false, "Too high!"
-	end
+        if depth > maxDepth then
+                return true, "overDepth", depth
+        end
 
-	return true
+        return true, nil, depth
 end
 
 -- Calculate and apply dynamic balance correction for asymmetric submarines
@@ -296,25 +298,20 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
 			+ (moveDirection * moveDistance)
 			+ Vector3.new(0, verticalMovement, 0)
 
-		local validDepth, message = SubmarinePhysics.IsValidDepth(newPosition, config)
-		if not validDepth then
-			if SubmarinePhysics.GetDepth(newPosition) > config.MaxDepth then
-				newPosition = Vector3.new(
-					newPosition.X,
-                                        WaterPhysics.GetWaterLevel(newPosition) - config.MaxDepth,
-					newPosition.Z
-				)
-			elseif SubmarinePhysics.GetDepth(newPosition) < config.MinDepth then
-				newPosition = Vector3.new(
-					newPosition.X,
-                                        WaterPhysics.GetWaterLevel(newPosition) - config.MinDepth,
-					newPosition.Z
-				)
-			end
-		end
+                local minDepth = config.MinDepth
+                if minDepth ~= nil then
+                        local currentDepth = SubmarinePhysics.GetDepth(newPosition)
+                        if currentDepth < minDepth then
+                                newPosition = Vector3.new(
+                                        newPosition.X,
+                                        WaterPhysics.GetWaterLevel(newPosition) - minDepth,
+                                        newPosition.Z
+                                )
+                        end
+                end
 
-		return CFrame.new(newPosition) * newRotation.Rotation
-	end
+                return CFrame.new(newPosition) * newRotation.Rotation
+        end
 end
 
 -- Set up collision filtering for phasing through water

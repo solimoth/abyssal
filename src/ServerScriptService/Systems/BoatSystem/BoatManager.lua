@@ -88,6 +88,8 @@ local SUB_COLLISION_BOX_PADDING = Vector3.new(4, 4, 4)
 
 local ZERO_VECTOR = Vector3.new()
 
+local TriggerSubmarineImplosion
+
 local function clearTable(tbl)
         if not tbl then
                 return
@@ -1151,7 +1153,7 @@ local function CreateSubmarineImplosionDebris(boat, primaryPart)
         end
 end
 
-local function TriggerSubmarineImplosion(player, boat, config)
+TriggerSubmarineImplosion = function(player, boat, config)
         local state = SubmarineStates[player]
         if state then
                 if state.isImploding then

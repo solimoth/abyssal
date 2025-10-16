@@ -82,6 +82,7 @@ local SUB_COLLISION_POLL_INTERVAL = 0.05
 local SUB_COLLISION_POLL_PART_LIMIT = 8
 local SUB_COLLISION_BOX_PADDING = Vector3.new(4, 4, 4)
 local SUB_COLLISION_IGNORE_ATTRIBUTE = "IgnoreCollision"
+local BOAT_CONTROL_PART_PREFIX = "BoatControlPart_"
 
 local ZERO_VECTOR = Vector3.new()
 
@@ -153,6 +154,11 @@ local function ShouldIgnoreCollision(part)
         end
 
         if part:GetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE) == true then
+                return true
+        end
+
+        local partName = part.Name
+        if partName and partName:sub(1, #BOAT_CONTROL_PART_PREFIX) == BOAT_CONTROL_PART_PREFIX then
                 return true
         end
 
@@ -335,16 +341,17 @@ local function SetupBoatPhysics(boat, config)
 	boatAttachment.Parent = primaryPart
 
 	-- Create control part with unique name
-	local controlPart = Instance.new("Part")
-	controlPart.Name = "BoatControlPart_" .. HttpService:GenerateGUID(false)
-	controlPart.Transparency = 1
-	controlPart.CanCollide = false
-	controlPart.Anchored = true
-	controlPart.Size = Vector3.new(1, 1, 1)
-	controlPart.CFrame = primaryPart.CFrame
-	controlPart:SetAttribute("OwnerUserId", boat:GetAttribute("OwnerId"))
-	controlPart:SetAttribute("BoatId", boat:GetAttribute("BoatId"))
-	controlPart.Parent = workspace
+        local controlPart = Instance.new("Part")
+        controlPart.Name = "BoatControlPart_" .. HttpService:GenerateGUID(false)
+        controlPart.Transparency = 1
+        controlPart.CanCollide = false
+        controlPart.Anchored = true
+        controlPart.Size = Vector3.new(1, 1, 1)
+        controlPart.CFrame = primaryPart.CFrame
+        controlPart:SetAttribute("OwnerUserId", boat:GetAttribute("OwnerId"))
+        controlPart:SetAttribute("BoatId", boat:GetAttribute("BoatId"))
+        controlPart:SetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE, true)
+        controlPart.Parent = workspace
 
 	local controlAttachment = Instance.new("Attachment")
 	controlAttachment.Name = "ControlAttachment"

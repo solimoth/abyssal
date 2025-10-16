@@ -80,8 +80,20 @@ local SUB_COLLISION_GLOBAL_COOLDOWN = 0.3
 local SUB_COLLISION_PART_COOLDOWN = 1.2
 local SUB_COLLISION_PRINT_COOLDOWN = 0.75
 local SUB_COLLISION_IMPULSE_EXPONENT = 1.35
+local SUB_COLLISION_POLL_INTERVAL = 0.12
+local SUB_COLLISION_POLL_PART_LIMIT = 6
 
 local ZERO_VECTOR = Vector3.new()
+
+local function clearTable(tbl)
+        if not tbl then
+                return
+        end
+
+        for key in pairs(tbl) do
+                tbl[key] = nil
+        end
+end
 
 -- Memory management
 local MemoryCheckTimer = 0
@@ -630,6 +642,16 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                 state.recentCollisionParts[trackedPart] = nil
         end
 
+        if state.collisionPollConnection then
+                state.collisionPollConnection:Disconnect()
+                state.collisionPollConnection = nil
+        end
+
+        state.collisionPollParts = state.collisionPollParts or {}
+        clearTable(state.collisionPollParts)
+        state.collisionPollIndex = 0
+        state.nextCollisionPoll = 0
+
         local connections = BoatConnections[player]
         if not connections then
                 connections = {}
@@ -638,7 +660,10 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
 
         local monitoredParts = {}
         for _, desc in ipairs(boat:GetDescendants()) do
-                if desc:IsA("BasePart") and desc.CanCollide and desc.CanTouch ~= false then
+                if desc:IsA("BasePart") and desc.CanCollide then
+                        if desc.CanTouch == false then
+                                desc.CanTouch = true
+                        end
                         local connection = desc.Touched:Connect(function(otherPart)
                                 ApplySubmarineCollisionDamage(player, boat, config, desc, otherPart)
                         end)
@@ -648,14 +673,89 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
         end
 
         if #monitoredParts > 0 then
+                state.collisionPollParts = monitoredParts
                 local ancestryConnection = boat.AncestryChanged:Connect(function(_, parent)
                         if not parent then
                                 for _, part in ipairs(monitoredParts) do
                                         state.recentCollisionParts[part] = nil
                                 end
+                                clearTable(monitoredParts)
+                                clearTable(state.collisionPollParts)
+                                state.collisionPollIndex = 0
                         end
                 end)
                 table.insert(connections, ancestryConnection)
+
+                state.collisionPollConnection = RunService.Heartbeat:Connect(function()
+                        if state.isImploding then
+                                return
+                        end
+
+                        if not boat.Parent then
+                                return
+                        end
+
+                        local primaryPart = boat.PrimaryPart
+                        if not primaryPart then
+                                return
+                        end
+
+                        if primaryPart:GetNetworkOwner() == nil then
+                                return
+                        end
+
+                        local now = tick()
+                        if now < (state.nextCollisionPoll or 0) then
+                                return
+                        end
+
+                        local pollParts = state.collisionPollParts
+                        local totalParts = pollParts and #pollParts or 0
+                        if totalParts == 0 then
+                                return
+                        end
+
+                        state.nextCollisionPoll = now + SUB_COLLISION_POLL_INTERVAL
+
+                        local index = state.collisionPollIndex or 0
+                        local checksRemaining = math.min(totalParts, SUB_COLLISION_POLL_PART_LIMIT)
+                        local checked = 0
+
+                        while checked < checksRemaining and totalParts > 0 do
+                                index += 1
+                                if index > totalParts then
+                                        index = 1
+                                end
+
+                                local part = pollParts[index]
+                                if not part or not part.Parent or not part:IsDescendantOf(boat) then
+                                        table.remove(pollParts, index)
+                                        totalParts -= 1
+                                        if totalParts == 0 then
+                                                index = 0
+                                                break
+                                        end
+                                        if index > totalParts then
+                                                index = 0
+                                        else
+                                                index -= 1
+                                        end
+                                else
+                                        checked += 1
+                                        if part.CanTouch ~= false then
+                                                local touchingParts = part:GetTouchingParts()
+                                                for _, otherPart in ipairs(touchingParts) do
+                                                        if otherPart and otherPart:IsA("BasePart") then
+                                                                ApplySubmarineCollisionDamage(player, boat, config, part, otherPart)
+                                                        end
+                                                end
+                                        end
+                                end
+                        end
+
+                        state.collisionPollIndex = index
+                end)
+                table.insert(connections, state.collisionPollConnection)
         end
 end
 

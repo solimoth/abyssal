@@ -211,11 +211,21 @@ function BoatSecurity.ValidateInput(throttle, steer)
 end
 
 -- Enhanced boat movement validation
-function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
+function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime, options)
         InitializePlayer(player)
 
         local data = PlayerData[player]
         local currentTime = tick()
+        options = options or {}
+        local jitterAllowance = math.max(options.jitterAllowance or 0, 0)
+        local shakeDelta = options.shakeDelta
+        if typeof(shakeDelta) ~= "number" then
+                shakeDelta = jitterAllowance
+        end
+        shakeDelta = math.max(shakeDelta, 0)
+        if jitterAllowance > 0 then
+                shakeDelta = math.min(shakeDelta, jitterAllowance)
+        end
 
         local teleportAllowance = SafeTeleportAllowance[player]
         if teleportAllowance then
@@ -256,19 +266,23 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
 	-- for suspicious movement we therefore compare against the last validated
 	-- target position if we have one instead of the boat's physical location.
 	local referencePosition = LastValidPositions[player] or boat.PrimaryPart.Position
-	local distance = (newPosition - referencePosition).Magnitude
+        local rawDistance = (newPosition - referencePosition).Magnitude
+        local effectiveDistance = rawDistance
+        if shakeDelta > 0 then
+                effectiveDistance = math.max(rawDistance - shakeDelta, 0)
+        end
 
-	-- Store position history
+        -- Store position history
         local history = BoatPositionHistory[player]
         if not history then
                 BoatPositionHistory[player] = {}
                 history = BoatPositionHistory[player]
         end
-	table.insert(history, {
-		position = newPosition,
-		time = tick(),
-		distance = distance
-	})
+        table.insert(history, {
+                position = newPosition,
+                time = tick(),
+                distance = effectiveDistance
+        })
 
 	-- Keep only recent history
 	if #history > MAX_POSITION_HISTORY then
@@ -276,8 +290,8 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime)
 	end
 
 	-- Check for teleporting
-	local maxAllowedDistance = MAX_TELEPORT_DISTANCE * math.max(deltaTime, 0.03)
-        if distance > maxAllowedDistance then
+        local maxAllowedDistance = MAX_TELEPORT_DISTANCE * math.max(deltaTime, 0.03)
+        if rawDistance > maxAllowedDistance + jitterAllowance then
                 data.violations = data.violations + 1
                 data.lastViolationTime = currentTime
 

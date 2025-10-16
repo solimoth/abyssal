@@ -80,7 +80,6 @@ local SUB_COLLISION_PART_COOLDOWN = 1.2
 local SUB_COLLISION_PRINT_COOLDOWN = 0.75
 local SUB_COLLISION_POLL_INTERVAL = 0.05
 local SUB_COLLISION_POLL_PART_LIMIT = 8
-local SUB_COLLISION_BOX_PADDING = Vector3.new(4, 4, 4)
 local SUB_COLLISION_IGNORE_ATTRIBUTE = "IgnoreCollision"
 local BOAT_CONTROL_PART_PREFIX = "BoatControlPart_"
 
@@ -96,43 +95,6 @@ local function clearTable(tbl)
         for key in pairs(tbl) do
                 tbl[key] = nil
         end
-end
-
-local function GetOrCreateOverlapParams(state, boat)
-        if not state then
-                return nil
-        end
-
-        local params = state.collisionOverlapParams
-        if not params then
-                params = OverlapParams.new()
-                params.RespectCanCollide = false
-                params.FilterType = Enum.RaycastFilterType.Exclude
-                state.collisionOverlapParams = params
-        end
-
-        local filterList = state.collisionFilterList
-        if not filterList then
-                filterList = {}
-                state.collisionFilterList = filterList
-        else
-                clearTable(filterList)
-        end
-
-        params.MaxParts = 0
-
-        if boat then
-                table.insert(filterList, boat)
-
-                local physicsObjects = BoatPhysicsObjects[boat]
-                if physicsObjects and physicsObjects.controlPart then
-                        table.insert(filterList, physicsObjects.controlPart)
-                end
-        end
-
-        params.FilterDescendantsInstances = filterList
-
-        return params
 end
 
 local function BelongsToPlayerCharacter(part)
@@ -169,7 +131,7 @@ local function ShouldIgnoreCollision(part)
         return false
 end
 
-local function GatherCollisionContacts(part, overlapParams, buffer)
+local function GatherCollisionContacts(part, buffer)
         if not part or not part:IsA("BasePart") then
                 return buffer
         end
@@ -189,34 +151,6 @@ local function GatherCollisionContacts(part, overlapParams, buffer)
                 for _, otherPart in ipairs(touchingParts) do
                         if otherPart and otherPart:IsA("BasePart") and not ShouldIgnoreCollision(otherPart) then
                                 buffer[otherPart] = true
-                        end
-                end
-        end
-
-        if overlapParams then
-                overlapParams.CollisionGroup = part.CollisionGroup
-
-                if Workspace.GetPartsInPart then
-                        local success, overlapParts = pcall(Workspace.GetPartsInPart, Workspace, part, overlapParams)
-                        if success and overlapParts then
-                                for _, otherPart in ipairs(overlapParts) do
-                                        if otherPart and otherPart:IsA("BasePart") and not ShouldIgnoreCollision(otherPart) then
-                                                buffer[otherPart] = true
-                                        end
-                                end
-                        end
-                end
-
-                if Workspace.GetPartBoundsInBox then
-                        local size = part.Size + SUB_COLLISION_BOX_PADDING
-                        local cframe = part.CFrame
-                        local success, overlapParts = pcall(Workspace.GetPartBoundsInBox, Workspace, cframe, size, overlapParams)
-                        if success and overlapParts then
-                                for _, otherPart in ipairs(overlapParts) do
-                                        if otherPart and otherPart:IsA("BasePart") and not ShouldIgnoreCollision(otherPart) then
-                                                buffer[otherPart] = true
-                                        end
-                                end
                         end
                 end
         end
@@ -903,7 +837,7 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                                 else
                                         checked += 1
                                         local contactBuffer = state.collisionContactBuffer
-                                        contactBuffer = GatherCollisionContacts(part, state.collisionOverlapParams, contactBuffer)
+                                        contactBuffer = GatherCollisionContacts(part, contactBuffer)
                                         state.collisionContactBuffer = contactBuffer
 
                                         if contactBuffer then

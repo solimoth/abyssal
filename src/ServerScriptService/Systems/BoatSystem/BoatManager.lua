@@ -74,14 +74,10 @@ local SUB_IMPL_DEBRIS_MAX_SPEED = 80
 local SUB_IMPL_DEBRIS_MAX_ANGULAR = math.rad(160)
 local SUB_IMPL_DEBRIS_FADE_TIME = 3.5
 
-local SUB_COLLISION_DETECTION_SPEED = 1 -- minimum speed to consider a collision event
-local SUB_COLLISION_DAMAGE_START_SPEED = 2 -- speed where hull damage begins to scale up
-local SUB_COLLISION_MAX_SPEED = 120
-local SUB_COLLISION_DAMAGE_RATIO = 0.35
+local SUB_COLLISION_DAMAGE_RATIO = 0.18 -- percent of max hull lost per qualifying collision before modifiers
 local SUB_COLLISION_GLOBAL_COOLDOWN = 0.3
 local SUB_COLLISION_PART_COOLDOWN = 1.2
 local SUB_COLLISION_PRINT_COOLDOWN = 0.75
-local SUB_COLLISION_IMPULSE_EXPONENT = 1.35
 local SUB_COLLISION_POLL_INTERVAL = 0.05
 local SUB_COLLISION_POLL_PART_LIMIT = 8
 local SUB_COLLISION_BOX_PADDING = Vector3.new(4, 4, 4)
@@ -689,14 +685,6 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
         local otherVelocity = otherPart.AssemblyLinearVelocity or otherPart.Velocity or ZERO_VECTOR
         local relativeSpeed = (boatVelocity - otherVelocity).Magnitude
 
-        if relativeSpeed < SUB_COLLISION_DETECTION_SPEED then
-                return
-        end
-
-        local speedRange = math.max(SUB_COLLISION_MAX_SPEED - SUB_COLLISION_DAMAGE_START_SPEED, 1)
-        local normalizedImpact = math.clamp((relativeSpeed - SUB_COLLISION_DAMAGE_START_SPEED) / speedRange, 0, 1)
-        normalizedImpact = normalizedImpact ^ SUB_COLLISION_IMPULSE_EXPONENT
-
         local boatMass = primaryPart.AssemblyMass or primaryPart:GetMass()
         local otherMass = otherPart.AssemblyMass or otherPart:GetMass()
         local massFactor = 1
@@ -711,7 +699,6 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
 
         local damage = state.maxHealth
                 * SUB_COLLISION_DAMAGE_RATIO
-                * normalizedImpact
                 * massFactor
                 * anchoredFactor
                 * damageMultiplier
@@ -732,7 +719,7 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
                 end
 
                 print(string.format(
-                        "[Submarine] Hull collapsed after collision between %s at %.1f studs/s.",
+                        "[Submarine] Hull collapsed after collision between %s (reported speed %.1f studs/s).",
                         impactSource,
                         relativeSpeed
                 ))
@@ -742,7 +729,7 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
 
         if not state.lastHealthPercentPrint or currentPercent <= state.lastHealthPercentPrint - SUB_HEALTH_WARNING_STEP then
                 print(string.format(
-                        "[Submarine] Hull integrity at %d%% after collision with %s (impact speed %.1f).",
+                        "[Submarine] Hull integrity at %d%% after collision with %s (reported speed %.1f).",
                         currentPercent,
                         otherPart:GetFullName(),
                         relativeSpeed
@@ -750,7 +737,7 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
                 state.lastHealthPercentPrint = currentPercent
         elseif (now - (state.lastCollisionPrint or 0)) > SUB_COLLISION_PRINT_COOLDOWN then
                 print(string.format(
-                        "[Submarine] Collision registered with %s (impact speed %.1f).",
+                        "[Submarine] Collision registered with %s (reported speed %.1f).",
                         otherPart:GetFullName(),
                         relativeSpeed
                 ))

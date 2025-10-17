@@ -5,6 +5,7 @@ local Players = game:GetService("Players")
 local ServerStorage = game:GetService("ServerStorage")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
 local Debris = game:GetService("Debris")
 local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
@@ -73,17 +74,18 @@ local SUB_IMPL_DEBRIS_MAX_SPEED = 80
 local SUB_IMPL_DEBRIS_MAX_ANGULAR = math.rad(160)
 local SUB_IMPL_DEBRIS_FADE_TIME = 3.5
 
-local SUB_COLLISION_MIN_SPEED = 8
-local SUB_COLLISION_MAX_SPEED = 120
-local SUB_COLLISION_DAMAGE_RATIO = 0.35
+local SUB_COLLISION_DAMAGE_RATIO = 0.18 -- percent of max hull lost per qualifying collision before modifiers
 local SUB_COLLISION_GLOBAL_COOLDOWN = 0.3
 local SUB_COLLISION_PART_COOLDOWN = 1.2
 local SUB_COLLISION_PRINT_COOLDOWN = 0.75
-local SUB_COLLISION_IMPULSE_EXPONENT = 1.35
-local SUB_COLLISION_POLL_INTERVAL = 0.12
-local SUB_COLLISION_POLL_PART_LIMIT = 6
+local SUB_COLLISION_POLL_INTERVAL = 0.05
+local SUB_COLLISION_POLL_PART_LIMIT = 8
+local SUB_COLLISION_IGNORE_ATTRIBUTE = "IgnoreCollision"
+local BOAT_CONTROL_PART_PREFIX = "BoatControlPart_"
 
 local ZERO_VECTOR = Vector3.new()
+
+local TriggerSubmarineImplosion
 
 local function clearTable(tbl)
         if not tbl then
@@ -93,6 +95,71 @@ local function clearTable(tbl)
         for key in pairs(tbl) do
                 tbl[key] = nil
         end
+end
+
+local function BelongsToPlayerCharacter(part)
+        local ancestor = part and part.Parent
+        while ancestor do
+                if Players:GetPlayerFromCharacter(ancestor) then
+                        return true
+                end
+
+                ancestor = ancestor.Parent
+        end
+
+        return false
+end
+
+local function ShouldIgnoreCollision(part)
+        if not part or not part:IsA("BasePart") then
+                return true
+        end
+
+        if part.CanCollide == false then
+                return true
+        end
+
+        if part:GetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE) == true then
+                return true
+        end
+
+        local partName = part.Name
+        if partName and partName:sub(1, #BOAT_CONTROL_PART_PREFIX) == BOAT_CONTROL_PART_PREFIX then
+                return true
+        end
+
+        if BelongsToPlayerCharacter(part) then
+                return true
+        end
+
+        return false
+end
+
+local function GatherCollisionContacts(part, buffer)
+        if not part or not part:IsA("BasePart") then
+                return buffer
+        end
+
+        buffer = buffer or {}
+
+        if part.CanQuery == false then
+                part.CanQuery = true
+        end
+
+        for existing in pairs(buffer) do
+                buffer[existing] = nil
+        end
+
+        if part.CanTouch ~= false then
+                local touchingParts = part:GetTouchingParts()
+                for _, otherPart in ipairs(touchingParts) do
+                        if otherPart and otherPart:IsA("BasePart") and not ShouldIgnoreCollision(otherPart) then
+                                buffer[otherPart] = true
+                        end
+                end
+        end
+
+        return buffer
 end
 
 -- Memory management
@@ -212,16 +279,17 @@ local function SetupBoatPhysics(boat, config)
 	boatAttachment.Parent = primaryPart
 
 	-- Create control part with unique name
-	local controlPart = Instance.new("Part")
-	controlPart.Name = "BoatControlPart_" .. HttpService:GenerateGUID(false)
-	controlPart.Transparency = 1
-	controlPart.CanCollide = false
-	controlPart.Anchored = true
-	controlPart.Size = Vector3.new(1, 1, 1)
-	controlPart.CFrame = primaryPart.CFrame
-	controlPart:SetAttribute("OwnerUserId", boat:GetAttribute("OwnerId"))
-	controlPart:SetAttribute("BoatId", boat:GetAttribute("BoatId"))
-	controlPart.Parent = workspace
+        local controlPart = Instance.new("Part")
+        controlPart.Name = "BoatControlPart_" .. HttpService:GenerateGUID(false)
+        controlPart.Transparency = 1
+        controlPart.CanCollide = false
+        controlPart.Anchored = true
+        controlPart.Size = Vector3.new(1, 1, 1)
+        controlPart.CFrame = primaryPart.CFrame
+        controlPart:SetAttribute("OwnerUserId", boat:GetAttribute("OwnerId"))
+        controlPart:SetAttribute("BoatId", boat:GetAttribute("BoatId"))
+        controlPart:SetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE, true)
+        controlPart.Parent = workspace
 
 	local controlAttachment = Instance.new("Attachment")
 	controlAttachment.Name = "ControlAttachment"
@@ -506,6 +574,10 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
                 return
         end
 
+        if ShouldIgnoreCollision(otherPart) then
+                return
+        end
+
         if otherPart:IsDescendantOf(boat) then
                 return
         end
@@ -592,14 +664,6 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
         local otherVelocity = otherPart.AssemblyLinearVelocity or otherPart.Velocity or ZERO_VECTOR
         local relativeSpeed = (boatVelocity - otherVelocity).Magnitude
 
-        if relativeSpeed < SUB_COLLISION_MIN_SPEED then
-                return
-        end
-
-        local speedRange = math.max(SUB_COLLISION_MAX_SPEED - SUB_COLLISION_MIN_SPEED, 1)
-        local normalizedImpact = math.clamp((relativeSpeed - SUB_COLLISION_MIN_SPEED) / speedRange, 0, 1)
-        normalizedImpact = normalizedImpact ^ SUB_COLLISION_IMPULSE_EXPONENT
-
         local boatMass = primaryPart.AssemblyMass or primaryPart:GetMass()
         local otherMass = otherPart.AssemblyMass or otherPart:GetMass()
         local massFactor = 1
@@ -614,7 +678,6 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
 
         local damage = state.maxHealth
                 * SUB_COLLISION_DAMAGE_RATIO
-                * normalizedImpact
                 * massFactor
                 * anchoredFactor
                 * damageMultiplier
@@ -635,7 +698,7 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
                 end
 
                 print(string.format(
-                        "[Submarine] Hull collapsed after collision between %s at %.1f studs/s.",
+                        "[Submarine] Hull collapsed after collision between %s (reported speed %.1f studs/s).",
                         impactSource,
                         relativeSpeed
                 ))
@@ -645,7 +708,7 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
 
         if not state.lastHealthPercentPrint or currentPercent <= state.lastHealthPercentPrint - SUB_HEALTH_WARNING_STEP then
                 print(string.format(
-                        "[Submarine] Hull integrity at %d%% after collision with %s (impact speed %.1f).",
+                        "[Submarine] Hull integrity at %d%% after collision with %s (reported speed %.1f).",
                         currentPercent,
                         otherPart:GetFullName(),
                         relativeSpeed
@@ -653,7 +716,7 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
                 state.lastHealthPercentPrint = currentPercent
         elseif (now - (state.lastCollisionPrint or 0)) > SUB_COLLISION_PRINT_COOLDOWN then
                 print(string.format(
-                        "[Submarine] Collision registered with %s (impact speed %.1f).",
+                        "[Submarine] Collision registered with %s (reported speed %.1f).",
                         otherPart:GetFullName(),
                         relativeSpeed
                 ))
@@ -708,8 +771,13 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                 warn(string.format("[Submarine] No Hitbox part found for %s; collision damage may not register.", boat:GetFullName()))
         else
                 state.collisionPollParts = hitboxParts
-                local ancestryConnection = boat.AncestryChanged:Connect(function(_, parent)
-                        if not parent then
+                local function onBoatRemoved(_, parent)
+                        local currentParent = parent
+                        if currentParent == nil then
+                                currentParent = boat.Parent
+                        end
+
+                        if not currentParent then
                                 for _, part in ipairs(hitboxParts) do
                                         state.recentCollisionParts[part] = nil
                                 end
@@ -717,8 +785,21 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                                 clearTable(state.collisionPollParts)
                                 state.collisionPollIndex = 0
                         end
-                end)
-                table.insert(connections, ancestryConnection)
+                end
+
+                local ancestryConnection
+                local ancestrySignal = boat.AncestryChanged
+                if ancestrySignal and typeof(ancestrySignal) == "RBXScriptSignal" then
+                        ancestryConnection = ancestrySignal:Connect(onBoatRemoved)
+                else
+                        ancestryConnection = boat:GetPropertyChangedSignal("Parent"):Connect(function()
+                                onBoatRemoved(nil, boat.Parent)
+                        end)
+                end
+
+                if ancestryConnection then
+                        table.insert(connections, ancestryConnection)
+                end
 
                 state.collisionPollConnection = RunService.Heartbeat:Connect(function()
                         if state.isImploding then
@@ -776,12 +857,16 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                                         end
                                 else
                                         checked += 1
-                                        if part.CanTouch ~= false then
-                                                local touchingParts = part:GetTouchingParts()
-                                                for _, otherPart in ipairs(touchingParts) do
+                                        local contactBuffer = state.collisionContactBuffer
+                                        contactBuffer = GatherCollisionContacts(part, contactBuffer)
+                                        state.collisionContactBuffer = contactBuffer
+
+                                        if contactBuffer then
+                                                for otherPart in pairs(contactBuffer) do
                                                         if otherPart and otherPart:IsA("BasePart") then
                                                                 ApplySubmarineCollisionDamage(player, boat, config, part, otherPart)
                                                         end
+                                                        contactBuffer[otherPart] = nil
                                                 end
                                         end
                                 end
@@ -1051,7 +1136,7 @@ local function CreateSubmarineImplosionDebris(boat, primaryPart)
         end
 end
 
-local function TriggerSubmarineImplosion(player, boat, config)
+TriggerSubmarineImplosion = function(player, boat, config)
         local state = SubmarineStates[player]
         if state then
                 if state.isImploding then
@@ -1931,45 +2016,6 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
         end
 
         BoatLastActivity[player] = tick()
-end
-
-local function SetupSubmarineCollisionMonitoring(player, boat, config)
-        if not boat or not boat.PrimaryPart then
-                return
-        end
-
-        local state = GetOrCreateSubmarineState(player, config)
-        state.lastCollisionTime = 0
-        state.lastCollisionPrint = 0
-        state.recentCollisionParts = {}
-
-        local connections = BoatConnections[player]
-        if not connections then
-                connections = {}
-                BoatConnections[player] = connections
-        end
-
-        local monitoredParts = {}
-        for _, desc in ipairs(boat:GetDescendants()) do
-                if desc:IsA("BasePart") and desc.CanCollide then
-                        local connection = desc.Touched:Connect(function(otherPart)
-                                ApplySubmarineCollisionDamage(player, boat, config, desc, otherPart)
-                        end)
-                        table.insert(connections, connection)
-                        table.insert(monitoredParts, desc)
-                end
-        end
-
-        if #monitoredParts > 0 then
-                local ancestryConnection = boat.AncestryChanged:Connect(function(_, parent)
-                        if not parent then
-                                for _, part in ipairs(monitoredParts) do
-                                        state.recentCollisionParts[part] = nil
-                                end
-                        end
-                end)
-                table.insert(connections, ancestryConnection)
-        end
 end
 
 -- Main update loop

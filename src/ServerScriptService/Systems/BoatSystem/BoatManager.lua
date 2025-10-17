@@ -767,9 +767,13 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                 warn(string.format("[Submarine] No Hitbox part found for %s; collision damage may not register.", boat:GetFullName()))
         else
                 state.collisionPollParts = hitboxParts
-                state.collisionOverlapParams = GetOrCreateOverlapParams(state, boat)
-                local ancestryConnection = boat.AncestryChanged:Connect(function(_, parent)
-                        if not parent then
+                local function onBoatRemoved(_, parent)
+                        local currentParent = parent
+                        if currentParent == nil then
+                                currentParent = boat.Parent
+                        end
+
+                        if not currentParent then
                                 for _, part in ipairs(hitboxParts) do
                                         state.recentCollisionParts[part] = nil
                                 end
@@ -777,8 +781,21 @@ local function SetupSubmarineCollisionMonitoring(player, boat, config)
                                 clearTable(state.collisionPollParts)
                                 state.collisionPollIndex = 0
                         end
-                end)
-                table.insert(connections, ancestryConnection)
+                end
+
+                local ancestryConnection
+                local ancestrySignal = boat.AncestryChanged
+                if ancestrySignal and typeof(ancestrySignal) == "RBXScriptSignal" then
+                        ancestryConnection = ancestrySignal:Connect(onBoatRemoved)
+                else
+                        ancestryConnection = boat:GetPropertyChangedSignal("Parent"):Connect(function()
+                                onBoatRemoved(nil, boat.Parent)
+                        end)
+                end
+
+                if ancestryConnection then
+                        table.insert(connections, ancestryConnection)
+                end
 
                 state.collisionPollConnection = RunService.Heartbeat:Connect(function()
                         if state.isImploding then

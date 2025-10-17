@@ -25,6 +25,7 @@ local BoatControls = {}
 local BoatLastActivity = {}
 local BoatPhysicsObjects = {} -- NEW: Track physics objects
 local SubmarineStates = {}
+local BoatWaterLevelOffsets = {}
 
 -- ACCELERATION SYSTEM STORAGE
 local BoatSpeeds = {}
@@ -86,6 +87,13 @@ local BOAT_CONTROL_PART_PREFIX = "BoatControlPart_"
 local ZERO_VECTOR = Vector3.new()
 
 local TriggerSubmarineImplosion
+
+local standingRaycastParams = RaycastParams.new()
+standingRaycastParams.FilterType = Enum.RaycastFilterType.Include
+standingRaycastParams.IgnoreWater = false
+
+local STANDING_TRACK_DISTANCE = 45
+local STANDING_RAYCAST_DISTANCE = 8
 
 local function clearTable(tbl)
         if not tbl then
@@ -160,6 +168,106 @@ local function GatherCollisionContacts(part, buffer)
         end
 
         return buffer
+end
+
+local function AlignCharacterOrientationWithBoat(character, referenceCFrame)
+        if not character or not referenceCFrame then
+                return
+        end
+
+        local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+        if not humanoidRootPart then
+                return
+        end
+
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if not humanoid or humanoid.Health <= 0 then
+                return
+        end
+
+        local boatUp = referenceCFrame.UpVector
+        local currentCFrame = humanoidRootPart.CFrame
+        local lookVector = currentCFrame.LookVector
+        local projectedLook = lookVector - boatUp * lookVector:Dot(boatUp)
+
+        if projectedLook.Magnitude < 1e-3 then
+                local fallbackLook = referenceCFrame.LookVector
+                fallbackLook = fallbackLook - boatUp * fallbackLook:Dot(boatUp)
+
+                if fallbackLook.Magnitude > 1e-3 then
+                        projectedLook = fallbackLook
+                else
+                        local alternative = referenceCFrame.RightVector - boatUp * referenceCFrame.RightVector:Dot(boatUp)
+                        if alternative.Magnitude > 1e-3 then
+                                projectedLook = alternative
+                        else
+                                projectedLook = Vector3.new(0, 0, -1)
+                        end
+                end
+        end
+
+        projectedLook = projectedLook.Unit
+        local rightVector = boatUp:Cross(projectedLook)
+        if rightVector.Magnitude < 1e-3 then
+                local fallback = boatUp:Cross(Vector3.new(0, 0, -1))
+                if fallback.Magnitude < 1e-3 then
+                        fallback = boatUp:Cross(Vector3.new(1, 0, 0))
+                end
+                rightVector = fallback
+        end
+
+        rightVector = rightVector.Unit
+        projectedLook = rightVector:Cross(boatUp).Unit
+
+        humanoidRootPart.CFrame = CFrame.fromMatrix(currentCFrame.Position, projectedLook, boatUp)
+end
+
+local function UpdateStandingPassengers(boat, referenceCFrame, processedCharacters)
+        if not boat or not referenceCFrame then
+                return
+        end
+
+        processedCharacters = processedCharacters or {}
+        standingRaycastParams.FilterDescendantsInstances = { boat }
+
+        local boatPosition = referenceCFrame.Position
+
+        for _, otherPlayer in ipairs(Players:GetPlayers()) do
+                local character = otherPlayer.Character
+                if not character or processedCharacters[character] then
+                        continue
+                end
+
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                if not humanoid or humanoid.Health <= 0 then
+                        continue
+                end
+
+                if humanoid.Sit or humanoid.PlatformStand then
+                        continue
+                end
+
+                local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+                if not humanoidRootPart then
+                        continue
+                end
+
+                local distance = (humanoidRootPart.Position - boatPosition).Magnitude
+                if distance > STANDING_TRACK_DISTANCE then
+                        continue
+                end
+
+                local rayResult = Workspace:Raycast(
+                        humanoidRootPart.Position,
+                        Vector3.new(0, -STANDING_RAYCAST_DISTANCE, 0),
+                        standingRaycastParams
+                )
+
+                if rayResult and rayResult.Instance and rayResult.Instance:IsDescendantOf(boat) then
+                        AlignCharacterOrientationWithBoat(character, referenceCFrame)
+                        processedCharacters[character] = true
+                end
+        end
 end
 
 -- Memory management
@@ -387,17 +495,18 @@ local function CleanupBoat(player)
 		end
 
 		-- Clean up boat parts
-		pcall(function()
-			RestoreCanCollideStates(boat)
-			for _, desc in pairs(boat:GetDescendants()) do
-				if desc:IsA("Constraint") or desc:IsA("BodyMover") then
-					desc:Destroy()
-				end
-			end
-			boat:Destroy()
-		end)
-		ActiveBoats[player] = nil
-	end
+                pcall(function()
+                        RestoreCanCollideStates(boat)
+                        for _, desc in pairs(boat:GetDescendants()) do
+                                if desc:IsA("Constraint") or desc:IsA("BodyMover") then
+                                        desc:Destroy()
+                                end
+                        end
+                        boat:Destroy()
+                end)
+                ActiveBoats[player] = nil
+                BoatWaterLevelOffsets[boat] = nil
+        end
 
 	-- Clean up controller
 	local controller = BoatControllers[player]
@@ -1348,19 +1457,40 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 		return false, "Boat model not found"
 	end
 
-	local boat
-	local success = pcall(function()
-		boat = boatTemplate:Clone()
-	end)
+        local boat
+        local success = pcall(function()
+                boat = boatTemplate:Clone()
+        end)
 
-	if not success or not boat then
-		return false, "Failed to create boat"
-	end
+        if not success or not boat then
+                return false, "Failed to create boat"
+        end
 
-	-- Set attributes
-	local boatId = HttpService:GenerateGUID(false)
-	boat:SetAttribute("BoatId", boatId)
-	boat:SetAttribute("OwnerId", tostring(player.UserId))
+        local waterLevelPart = boat:FindFirstChild("WaterLevel", true)
+        if not waterLevelPart or not waterLevelPart:IsA("BasePart") then
+                boat:Destroy()
+                return false, "Boat model missing WaterLevel part"
+        end
+
+        if not boat.PrimaryPart then
+                local primaryCandidate = waterLevelPart:IsA("BasePart") and waterLevelPart or nil
+                if primaryCandidate then
+                        boat.PrimaryPart = primaryCandidate
+                end
+        end
+
+        local primaryPart = boat.PrimaryPart
+        if not primaryPart or not primaryPart:IsA("BasePart") then
+                boat:Destroy()
+                return false, "Boat model has no PrimaryPart"
+        end
+
+        local waterLevelOffset = -(waterLevelPart.Position.Y - primaryPart.Position.Y)
+
+        -- Set attributes
+        local boatId = HttpService:GenerateGUID(false)
+        boat:SetAttribute("BoatId", boatId)
+        boat:SetAttribute("OwnerId", tostring(player.UserId))
 	boat:SetAttribute("OwnerName", player.Name)
 	boat:SetAttribute("BoatType", boatType)
 	boat:SetAttribute("SpawnTime", tick())
@@ -1396,40 +1526,37 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 	end
 
         local waterLevel = getWaterLevel(spawnPosition)
-        if config.Type == "Submarine" then
-                spawnPosition = Vector3.new(spawnPosition.X, waterLevel - 1, spawnPosition.Z)
-        else
-                spawnPosition = Vector3.new(spawnPosition.X, waterLevel + 2, spawnPosition.Z)
+        local targetWaterOffset = waterLevelOffset
+        if targetWaterOffset == nil then
+                targetWaterOffset = config.Type == "Submarine" and -1 or 2
         end
+        spawnPosition = Vector3.new(spawnPosition.X, waterLevel + targetWaterOffset, spawnPosition.Z)
 
-	local desiredYaw = math.atan2(spawnDirection.X, -spawnDirection.Z)
-	boat:SetPrimaryPartCFrame(CFrame.new(spawnPosition) * CFrame.Angles(0, desiredYaw, 0))
+        local desiredYaw = math.atan2(spawnDirection.X, -spawnDirection.Z)
+        boat:SetPrimaryPartCFrame(CFrame.new(spawnPosition) * CFrame.Angles(0, desiredYaw, 0))
 
-	-- Set up physics
-	for _, part in pairs(boat:GetDescendants()) do
-		if part:IsA("BasePart") and part.Name ~= "BoatControlPart" then
-			local originalCanCollide = part.CanCollide
-			part:SetAttribute("OriginalCanCollide", originalCanCollide)
-			part.Anchored = false
+        -- Set up physics
+        for _, part in pairs(boat:GetDescendants()) do
+                if part:IsA("BasePart") and part.Name ~= "BoatControlPart" then
+                        local originalCanCollide = part.CanCollide
+                        part:SetAttribute("OriginalCanCollide", originalCanCollide)
+                        part.Anchored = false
 
-			if part == boat.PrimaryPart then
-				part.Massless = false
-				part.RootPriority = config.Type == "Submarine" and 127 or 100
+                        if part == primaryPart then
+                                part.RootPriority = config.Type == "Submarine" and 127 or 100
 
-				local density = 0.3 + (config.Weight * 0.05)
-				local properties = PhysicalProperties.new(
-					config.Type == "Submarine" and density * 1.5 or density,
-					0.3,
-					0.1,
-					1,
-					1
-				)
-				part.CustomPhysicalProperties = properties
-			else
-				part.Massless = true
-			end
-		end
-	end
+                                local density = 0.3 + (config.Weight * 0.05)
+                                local properties = PhysicalProperties.new(
+                                        config.Type == "Submarine" and density * 1.5 or density,
+                                        0.3,
+                                        0.1,
+                                        1,
+                                        1
+                                )
+                                part.CustomPhysicalProperties = properties
+                        end
+                end
+        end
 
 	local controlPart = SetupBoatPhysics(boat, config)
 	if not controlPart then
@@ -1455,9 +1582,11 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 	seat.Anchored = false
 
 	-- Initialize acceleration system for this boat
-	InitializeBoatAcceleration(player, boatType)
+        InitializeBoatAcceleration(player, boatType)
 
         ActiveBoats[player] = boat
+        BoatWaterLevelOffsets[boat] = waterLevelOffset
+        boat:SetAttribute("WaterLevelTargetOffset", waterLevelOffset)
         BoatConnections[player] = {}
         BoatLastActivity[player] = tick()
 
@@ -1634,11 +1763,12 @@ local function UpdateBoatControl(player, controls)
 end
 
 -- ENHANCED PHYSICS UPDATE WITH PERFORMANCE OPTIMIZATIONS
-local function UpdateBoatPhysics(player, boat, deltaTime)
-	if not boat or not boat.Parent then
-		CleanupBoat(player)
-		return
-	end
+local function UpdateBoatPhysics(player, boat, deltaTime, processedCharacters)
+        processedCharacters = processedCharacters or {}
+        if not boat or not boat.Parent then
+                CleanupBoat(player)
+                return
+        end
 
 	if not ValidateBoat(boat) then
 		CleanupBoat(player)
@@ -1703,13 +1833,22 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 	local isIdle = (tick() - lastActivity) > IDLE_THRESHOLD
 
         local waveBoatType = config.Type == "Submarine" and "Submarine" or "Surface"
+        local targetOffset = BoatWaterLevelOffsets[boat]
+        if targetOffset == nil then
+                targetOffset = config.Type == "Submarine" and -1 or 2
+        end
 
         local function syncToBoatWithPassiveWaves()
                 local boatCFrame = primaryPart.CFrame
                 local targetCFrame = boatCFrame
 
                 if isPlayerNearby then
-                        local floatingCFrame, applied = WaterPhysics.ApplyFloatingPhysics(boatCFrame, waveBoatType, deltaTime)
+                        local floatingCFrame, applied = WaterPhysics.ApplyFloatingPhysics(
+                                boatCFrame,
+                                waveBoatType,
+                                deltaTime,
+                                targetOffset
+                        )
                         if applied then
                                 targetCFrame = floatingCFrame
                         end
@@ -1732,6 +1871,8 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 
                 BoatSpeeds[player] = 0
                 BoatTurnSpeeds[player] = 0
+
+                UpdateStandingPassengers(boat, targetCFrame, processedCharacters)
         end
 
         if isIdle and not seat.Occupant then
@@ -1913,11 +2054,12 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 		)
 
                 if SubmarinePhysics.ShouldAutoSurface(newCFrame.Position) then
-                        local floatingCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
-                                newCFrame,
-                                "Surface",
-                                deltaTime
-                        )
+                local floatingCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
+                        newCFrame,
+                        "Surface",
+                        deltaTime,
+                        targetOffset
+                )
                         newCFrame = floatingCFrame
                 end
 
@@ -1935,11 +2077,12 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 		newCFrame = CFrame.new(newPosition) * newRotation.Rotation
 
 		-- Apply water physics
-		newCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
-			newCFrame,
-			"Surface",
-			deltaTime
-		)
+                newCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
+                        newCFrame,
+                        "Surface",
+                        deltaTime,
+                        targetOffset
+                )
         end
 
         if isSubmarine then
@@ -2003,6 +2146,7 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 
         -- Update position
         controlPart.CFrame = newCFrame
+        UpdateStandingPassengers(boat, newCFrame, processedCharacters)
 
         -- Update BodyVelocity for momentum
         if boat.PrimaryPart then
@@ -2068,17 +2212,19 @@ local function UpdateAllBoats(deltaTime)
 				if not ownerFound then
 					-- Clean up physics objects first
 					local physicsObjs = BoatPhysicsObjects[obj]
-					if physicsObjs then
-						for _, physObj in pairs(physicsObjs) do
-							pcall(function() physObj:Destroy() end)
-						end
-						BoatPhysicsObjects[obj] = nil
-					end
+                                        if physicsObjs then
+                                                for _, physObj in pairs(physicsObjs) do
+                                                        pcall(function() physObj:Destroy() end)
+                                                end
+                                                BoatPhysicsObjects[obj] = nil
+                                        end
 
-					pcall(function() obj:Destroy() end)
-					orphanCount = orphanCount + 1
-				end
-			end
+                                        BoatWaterLevelOffsets[obj] = nil
+
+                                        pcall(function() obj:Destroy() end)
+                                        orphanCount = orphanCount + 1
+                                end
+                        end
 		end
 
 		if orphanCount > 0 then
@@ -2087,13 +2233,14 @@ local function UpdateAllBoats(deltaTime)
 	end
 
 	-- Update all boats
-	for player, boat in pairs(ActiveBoats) do
-		if player.Parent then -- Check if player is still in game
-			UpdateBoatPhysics(player, boat, deltaTime)
-		else
-			CleanupBoat(player)
-		end
-	end
+        local processedCharacters = {}
+        for player, boat in pairs(ActiveBoats) do
+                if player.Parent then -- Check if player is still in game
+                        UpdateBoatPhysics(player, boat, deltaTime, processedCharacters)
+                else
+                        CleanupBoat(player)
+                end
+        end
 end
 
 -- Get player's boat

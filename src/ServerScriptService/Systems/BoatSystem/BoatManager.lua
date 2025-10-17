@@ -115,6 +115,10 @@ local function ShouldIgnoreCollision(part)
                 return true
         end
 
+        if part.CanCollide == false then
+                return true
+        end
+
         if part:GetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE) == true then
                 return true
         end

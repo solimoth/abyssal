@@ -46,6 +46,7 @@ local function resetGroundedInfo()
                 lastGroundedInfo.lastUpdate = nil
                 lastGroundedInfo.airStartTime = nil
                 lastGroundedInfo.isAirborne = nil
+                lastGroundedInfo.localContactOffset = nil
         end
         lastGroundedInfo = nil
         maintainMomentum = false
@@ -110,30 +111,34 @@ local function updateGroundedBoat(now)
 
         local boat = findBoatBelow()
         if boat and boat.PrimaryPart and rootPart then
-                local boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(rootPart.Position)
+                local boatCFrame = boat.PrimaryPart.CFrame
+                local localContactOffset = boatCFrame:PointToObjectSpace(rootPart.Position)
+                local contactPosition = boatCFrame:PointToWorldSpace(localContactOffset)
+                local boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(contactPosition)
                 local rootVelocity = rootPart.AssemblyLinearVelocity
 
-		if not lastGroundedInfo then
-			lastGroundedInfo = {}
-		end
+                if not lastGroundedInfo then
+                        lastGroundedInfo = {}
+                end
 
-		local relativeVelocity = Vector3.new(
-			rootVelocity.X - boatVelocity.X,
-			0,
-			rootVelocity.Z - boatVelocity.Z
-		)
+                local relativeVelocity = Vector3.new(
+                        rootVelocity.X - boatVelocity.X,
+                        0,
+                        rootVelocity.Z - boatVelocity.Z
+                )
 
-		lastGroundedInfo.boat = boat
-		lastGroundedInfo.boatVelocity = boatVelocity
-		lastGroundedInfo.relativeVelocity = relativeVelocity
-		lastGroundedInfo.lastUpdate = now
-	else
-		if lastGroundedInfo and lastGroundedInfo.lastUpdate then
-			if now - lastGroundedInfo.lastUpdate > DATA_EXPIRATION then
-				resetGroundedInfo()
-			end
-		end
-	end
+                lastGroundedInfo.boat = boat
+                lastGroundedInfo.boatVelocity = boatVelocity
+                lastGroundedInfo.relativeVelocity = relativeVelocity
+                lastGroundedInfo.lastUpdate = now
+                lastGroundedInfo.localContactOffset = localContactOffset
+        else
+                if lastGroundedInfo and lastGroundedInfo.lastUpdate then
+                        if now - lastGroundedInfo.lastUpdate > DATA_EXPIRATION then
+                                resetGroundedInfo()
+                        end
+                end
+        end
 end
 
 local function applyBoatMomentum()
@@ -150,7 +155,16 @@ local function applyBoatMomentum()
         local boatVelocity = lastGroundedInfo.boatVelocity
         local boat = lastGroundedInfo.boat
         if boat and boat.Parent and boat.PrimaryPart then
-                boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(rootPart.Position)
+                local contactPosition
+                if lastGroundedInfo.localContactOffset then
+                        contactPosition = boat.PrimaryPart.CFrame:PointToWorldSpace(lastGroundedInfo.localContactOffset)
+                elseif rootPart then
+                        contactPosition = rootPart.Position
+                end
+
+                if contactPosition then
+                        boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(contactPosition)
+                end
         end
 
         if not boatVelocity then
@@ -219,7 +233,17 @@ local function maintainBoatMomentum()
                 return
         end
 
-        local boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(rootPart.Position)
+        local boatVelocity
+        local contactPosition
+        if lastGroundedInfo.localContactOffset then
+                contactPosition = boat.PrimaryPart.CFrame:PointToWorldSpace(lastGroundedInfo.localContactOffset)
+        else
+                contactPosition = rootPart.Position
+        end
+
+        if contactPosition then
+                boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(contactPosition)
+        end
         if not boatVelocity then
                 resetGroundedInfo()
                 return

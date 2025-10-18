@@ -357,7 +357,9 @@ function WaterPhysics.ApplyFloatingPhysics(
         local overrideType = typeof(targetOffsetOverride)
         if overrideType == "table" then
                 offsetScalar = targetOffsetOverride.vertical or targetOffsetOverride.target or targetOffsetOverride.offset
-                offsetLocal = targetOffsetOverride.localOffset or targetOffsetOverride.local or targetOffsetOverride.vector
+                offsetLocal = targetOffsetOverride.localOffset
+                        or targetOffsetOverride["local"]
+                        or targetOffsetOverride.vector
         elseif overrideType == "number" then
                 offsetScalar = targetOffsetOverride
         end
@@ -392,10 +394,29 @@ function WaterPhysics.ApplyFloatingPhysics(
         end
 
 	local targetHeight = surfaceY + targetOffset
-	if offsetLocal then
-		local rotatedOffset = (rotation * CFrame.new(offsetLocal)).Position
-		targetHeight = surfaceY - rotatedOffset.Y
-	end
+        if offsetLocal then
+                local offsetVector: Vector3?
+                local offsetType = typeof(offsetLocal)
+
+                if offsetType == "Vector3" then
+                        offsetVector = offsetLocal
+                elseif offsetType == "CFrame" then
+                        offsetVector = offsetLocal.Position
+                elseif offsetType == "table" then
+                        local x = offsetLocal.X or offsetLocal.x
+                        local y = offsetLocal.Y or offsetLocal.y
+                        local z = offsetLocal.Z or offsetLocal.z
+
+                        if type(x) == "number" and type(y) == "number" and type(z) == "number" then
+                                offsetVector = Vector3.new(x, y, z)
+                        end
+                end
+
+                if offsetVector then
+                        local rotatedOffset = rotation:VectorToWorldSpace(offsetVector)
+                        targetHeight = surfaceY - rotatedOffset.Y
+                end
+        end
 
         local yDifference = targetHeight - position.Y
         local stiffness = boatType == "Submarine" and 2 or 5

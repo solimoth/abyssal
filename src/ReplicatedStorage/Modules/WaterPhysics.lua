@@ -35,6 +35,7 @@ local BOAT_LEAN_CALM_INTENSITY_THRESHOLD = 0.9
 local BOAT_LEAN_CALM_INTENSITY_EXPONENT = 2.5
 local BOAT_LEAN_CALM_RESIDUAL_SCALE = 0.035
 local BOAT_LEAN_CALM_BASELINE_SCALE = 0.1
+local WATER_LEVEL_ALIGNMENT_SPEED = 40
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -403,6 +404,7 @@ function WaterPhysics.ApplyFloatingPhysics(
         local basePosition = Vector3.new(position.X, newY, position.Z)
 
         local finalCFrame = CFrame.new(basePosition) * rotation
+        finalCFrame = applyOffsetCorrection(finalCFrame)
         return finalCFrame, true
 end
 

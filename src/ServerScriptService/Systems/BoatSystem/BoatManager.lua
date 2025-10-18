@@ -96,6 +96,8 @@ standingRaycastParams.IgnoreWater = false
 
 local STANDING_TRACK_DISTANCE = 45
 local STANDING_RAYCAST_DISTANCE = 8
+local STANDING_RELEASE_GRACE = 0.6
+local STANDING_ORIENTATION_LERP_ALPHA = 0.35
 
 local function clearTable(tbl)
         if not tbl then
@@ -187,51 +189,53 @@ local function AlignCharacterOrientationWithBoat(character, referenceCFrame, sta
                 return
         end
 
+        local humanoidState = humanoid:GetState()
+        if humanoidState == Enum.HumanoidStateType.Seated then
+                return
+        end
+
         local boatUp = referenceCFrame.UpVector
         local currentCFrame = humanoidRootPart.CFrame
         local currentPosition = currentCFrame.Position
-        local lookVector = currentCFrame.LookVector
-        local projectedLook = lookVector - boatUp * lookVector:Dot(boatUp)
+        local currentLook = currentCFrame.LookVector
+        local projectedLook = currentLook - boatUp * currentLook:Dot(boatUp)
 
         if projectedLook.Magnitude < 1e-3 then
                 if state and state.lastProjectedLook and state.lastProjectedLook.Magnitude > 1e-3 then
                         projectedLook = state.lastProjectedLook
                 else
-                        local fallbackLook = referenceCFrame.LookVector
-                        fallbackLook = fallbackLook - boatUp * fallbackLook:Dot(boatUp)
-
-                        if fallbackLook.Magnitude > 1e-3 then
-                                projectedLook = fallbackLook
+                        local fallback = referenceCFrame.LookVector - boatUp * referenceCFrame.LookVector:Dot(boatUp)
+                        if fallback.Magnitude > 1e-3 then
+                                projectedLook = fallback
                         else
-                                local alternative = referenceCFrame.RightVector - boatUp * referenceCFrame.RightVector:Dot(boatUp)
-                                if alternative.Magnitude > 1e-3 then
-                                        projectedLook = alternative
-                                else
-                                        projectedLook = Vector3.new(0, 0, -1)
-                                end
+                                projectedLook = Vector3.new(0, 0, -1)
                         end
                 end
         end
 
         projectedLook = projectedLook.Unit
 
+        local targetCFrame = CFrame.lookAt(currentPosition, currentPosition + projectedLook, boatUp)
         if state then
                 state.lastProjectedLook = projectedLook
         end
 
-        local targetCFrame = CFrame.lookAt(currentPosition, currentPosition + projectedLook, boatUp)
-        local currentLook = currentCFrame.LookVector
         local currentUp = currentCFrame.UpVector
         if currentLook:Dot(targetCFrame.LookVector) > 0.999 and currentUp:Dot(targetCFrame.UpVector) > 0.999 then
                 return
         end
 
-        if state then
-                state.lastProjectedLook = targetCFrame.LookVector
-                state.lastUpVector = targetCFrame.UpVector
+        local blendAlpha = STANDING_ORIENTATION_LERP_ALPHA
+        if state and state.customBlend then
+                blendAlpha = state.customBlend
         end
 
-        humanoidRootPart.CFrame = targetCFrame
+        local blended = currentCFrame:Lerp(targetCFrame, blendAlpha)
+        humanoidRootPart.CFrame = blended
+
+        if state then
+                state.lastUpVector = boatUp
+        end
 end
 
 local function releaseStandingPassenger(boat, character)
@@ -275,6 +279,7 @@ local function UpdateStandingPassengers(boat, referenceCFrame, processedCharacte
         end
 
         local seenCharacters = {}
+        local now = os.clock()
 
         for _, otherPlayer in ipairs(Players:GetPlayers()) do
                 local character = otherPlayer.Character
@@ -324,14 +329,39 @@ local function UpdateStandingPassengers(boat, referenceCFrame, processedCharacte
                                 tracked[character] = state
                         end
 
+                        state.lastSeen = now
+                        processedCharacters[character] = true
                         AlignCharacterOrientationWithBoat(character, referenceCFrame, state)
                 end
         end
 
-        for character in pairs(tracked) do
-                if not seenCharacters[character]
-                        or not character.Parent
-                        or not character:FindFirstChild("HumanoidRootPart") then
+        for character, state in pairs(tracked) do
+                if not character or not character.Parent then
+                        releaseStandingPassenger(boat, character)
+                        continue
+                end
+
+                local humanoid = character:FindFirstChildOfClass("Humanoid")
+                if not humanoid or humanoid.Health <= 0 or humanoid.Sit or humanoid.PlatformStand then
+                        releaseStandingPassenger(boat, character)
+                        continue
+                end
+
+                local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+                if not humanoidRootPart then
+                        releaseStandingPassenger(boat, character)
+                        continue
+                end
+
+                if seenCharacters[character] then
+                        continue
+                end
+
+                local lastSeen = state and state.lastSeen or 0
+                if now - lastSeen <= STANDING_RELEASE_GRACE then
+                        processedCharacters[character] = true
+                        AlignCharacterOrientationWithBoat(character, referenceCFrame, state)
+                else
                         releaseStandingPassenger(boat, character)
                 end
         end

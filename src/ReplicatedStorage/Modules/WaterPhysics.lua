@@ -362,6 +362,24 @@ function WaterPhysics.ApplyFloatingPhysics(
                 offsetScalar = targetOffsetOverride
         end
 
+        local _, currentYaw, _ = currentCFrame:ToOrientation()
+
+        local rotation: CFrame
+        if leanStrength <= BOAT_MIN_LEAN_THRESHOLD then
+                rotation = CFrame.Angles(0, currentYaw, 0)
+        else
+                local targetOrientation = CFrame.new(position)
+                        * CFrame.Angles(0, currentYaw, 0)
+                        * CFrame.Angles(targetPitch, 0, 0)
+                        * CFrame.Angles(0, 0, targetRoll)
+                local responsivenessDriver = math.max(leanStrength, leanIntensityScale, intensityScale * 0.1, 0.05)
+                local responsivenessScale = BOAT_LEAN_RESPONSIVENESS_MIN_SCALE
+                        + (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * responsivenessDriver
+                local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS * responsivenessScale, 0, 1)
+                local blendedOrientation = currentCFrame:Lerp(targetOrientation, alpha)
+                rotation = blendedOrientation - blendedOrientation.Position
+        end
+
         local targetOffset = offsetScalar
         if targetOffset == nil then
                 if boatType == "Surface" then
@@ -373,51 +391,17 @@ function WaterPhysics.ApplyFloatingPhysics(
                 end
         end
 
-        local targetY = surfaceY + targetOffset
-        local yDifference = targetY - position.Y
+        local targetHeight = surfaceY + targetOffset
+        if offsetLocal then
+                local rotatedOffset = rotation:VectorToWorldSpace(offsetLocal)
+                targetHeight = surfaceY - rotatedOffset.Y
+        end
+
+        local yDifference = targetHeight - position.Y
         local stiffness = boatType == "Submarine" and 2 or 5
         local buoyancySpeed = math.clamp(yDifference * stiffness, -10, 10)
         local newY = position.Y + (buoyancySpeed * deltaTime)
-
-        local _, currentYaw, _ = currentCFrame:ToOrientation()
         local basePosition = Vector3.new(position.X, newY, position.Z)
-
-        local function applyOffsetCorrection(cframe: CFrame)
-                if not offsetLocal then
-                        return cframe
-                end
-
-                local worldWaterPoint = cframe:PointToWorldSpace(offsetLocal)
-                local correction = surfaceY - worldWaterPoint.Y
-
-                if math.abs(correction) < 1e-3 then
-                        return cframe
-                end
-
-                local maxAdjust = WATER_LEVEL_ALIGNMENT_SPEED * deltaTime
-                if maxAdjust > 0 then
-                        correction = math.clamp(correction, -maxAdjust, maxAdjust)
-                end
-
-                return cframe + Vector3.new(0, correction, 0)
-        end
-
-        if leanStrength <= BOAT_MIN_LEAN_THRESHOLD then
-                local newCFrame = CFrame.new(basePosition) * CFrame.Angles(0, currentYaw, 0)
-                newCFrame = applyOffsetCorrection(newCFrame)
-                return newCFrame, true
-        end
-
-        local targetOrientation = CFrame.new(basePosition)
-                * CFrame.Angles(0, currentYaw, 0)
-                * CFrame.Angles(targetPitch, 0, 0)
-                * CFrame.Angles(0, 0, targetRoll)
-        local responsivenessDriver = math.max(leanStrength, leanIntensityScale, intensityScale * 0.1, 0.05)
-        local responsivenessScale = BOAT_LEAN_RESPONSIVENESS_MIN_SCALE
-                + (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * responsivenessDriver
-        local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS * responsivenessScale, 0, 1)
-        local blendedOrientation = currentCFrame:Lerp(targetOrientation, alpha)
-        local rotation = blendedOrientation - blendedOrientation.Position
 
         local finalCFrame = CFrame.new(basePosition) * rotation
         finalCFrame = applyOffsetCorrection(finalCFrame)

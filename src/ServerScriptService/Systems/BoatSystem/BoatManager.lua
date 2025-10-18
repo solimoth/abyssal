@@ -175,67 +175,77 @@ local function GatherCollisionContacts(part, buffer)
 end
 
 local function AlignCharacterOrientationWithBoat(character, referenceCFrame, state)
-        if not character or not referenceCFrame then
-                return
-        end
+	if not character or not referenceCFrame then
+		return
+	end
 
-        local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-        if not humanoidRootPart then
-                return
-        end
+	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+	if not humanoidRootPart then
+		return
+	end
 
-        local humanoid = character:FindFirstChildOfClass("Humanoid")
-        if not humanoid or humanoid.Health <= 0 then
-                return
-        end
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if not humanoid or humanoid.Health <= 0 then
+		return
+	end
 
-        local humanoidState = humanoid:GetState()
-        if humanoidState == Enum.HumanoidStateType.Seated then
-                return
-        end
+	local boatUp = referenceCFrame.UpVector
+	if state then
+		state.lastUpVector = boatUp
+	end
 
-        local boatUp = referenceCFrame.UpVector
-        local currentCFrame = humanoidRootPart.CFrame
-        local currentPosition = currentCFrame.Position
-        local currentLook = currentCFrame.LookVector
-        local projectedLook = currentLook - boatUp * currentLook:Dot(boatUp)
+	local humanoidState = humanoid:GetState()
+	if humanoidState == Enum.HumanoidStateType.Seated then
+		return
+	end
 
-        if projectedLook.Magnitude < 1e-3 then
-                if state and state.lastProjectedLook and state.lastProjectedLook.Magnitude > 1e-3 then
-                        projectedLook = state.lastProjectedLook
-                else
-                        local fallback = referenceCFrame.LookVector - boatUp * referenceCFrame.LookVector:Dot(boatUp)
-                        if fallback.Magnitude > 1e-3 then
-                                projectedLook = fallback
-                        else
-                                projectedLook = Vector3.new(0, 0, -1)
-                        end
-                end
-        end
+	if humanoid.FloorMaterial == Enum.Material.Air then
+		return
+	end
 
-        projectedLook = projectedLook.Unit
+	if humanoidState == Enum.HumanoidStateType.Jumping
+		or humanoidState == Enum.HumanoidStateType.Freefall
+		or humanoidState == Enum.HumanoidStateType.FallingDown then
+		return
+	end
 
-        local targetCFrame = CFrame.lookAt(currentPosition, currentPosition + projectedLook, boatUp)
-        if state then
-                state.lastProjectedLook = projectedLook
-        end
+	local currentCFrame = humanoidRootPart.CFrame
+	local currentPosition = currentCFrame.Position
+	local currentLook = currentCFrame.LookVector
+	local projectedLook = currentLook - boatUp * currentLook:Dot(boatUp)
 
-        local currentUp = currentCFrame.UpVector
-        if currentLook:Dot(targetCFrame.LookVector) > 0.999 and currentUp:Dot(targetCFrame.UpVector) > 0.999 then
-                return
-        end
+	if projectedLook.Magnitude < 1e-3 then
+		if state and state.lastProjectedLook and state.lastProjectedLook.Magnitude > 1e-3 then
+			projectedLook = state.lastProjectedLook
+		else
+			local fallback = referenceCFrame.LookVector - boatUp * referenceCFrame.LookVector:Dot(boatUp)
+			if fallback.Magnitude > 1e-3 then
+				projectedLook = fallback
+			else
+				projectedLook = Vector3.new(0, 0, -1)
+			end
+		end
+	end
 
-        local blendAlpha = STANDING_ORIENTATION_LERP_ALPHA
-        if state and state.customBlend then
-                blendAlpha = state.customBlend
-        end
+	projectedLook = projectedLook.Unit
 
-        local blended = currentCFrame:Lerp(targetCFrame, blendAlpha)
-        humanoidRootPart.CFrame = blended
+	local targetCFrame = CFrame.lookAt(currentPosition, currentPosition + projectedLook, boatUp)
+	if state then
+		state.lastProjectedLook = projectedLook
+	end
 
-        if state then
-                state.lastUpVector = boatUp
-        end
+	local currentUp = currentCFrame.UpVector
+	if currentLook:Dot(targetCFrame.LookVector) > 0.999 and currentUp:Dot(targetCFrame.UpVector) > 0.999 then
+		return
+	end
+
+	local blendAlpha = STANDING_ORIENTATION_LERP_ALPHA
+	if state and state.customBlend then
+		blendAlpha = state.customBlend
+	end
+
+	local blended = currentCFrame:Lerp(targetCFrame, blendAlpha)
+	humanoidRootPart.CFrame = blended
 end
 
 local function releaseStandingPassenger(boat, character)

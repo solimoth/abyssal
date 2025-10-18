@@ -391,11 +391,11 @@ function WaterPhysics.ApplyFloatingPhysics(
                 end
         end
 
-        local targetHeight = surfaceY + targetOffset
-        if offsetLocal then
-                local rotatedOffset = rotation:VectorToWorldSpace(offsetLocal)
-                targetHeight = surfaceY - rotatedOffset.Y
-        end
+	local targetHeight = surfaceY + targetOffset
+	if offsetLocal then
+		local rotatedOffset = (rotation * CFrame.new(offsetLocal)).Position
+		targetHeight = surfaceY - rotatedOffset.Y
+	end
 
         local yDifference = targetHeight - position.Y
         local stiffness = boatType == "Submarine" and 2 or 5

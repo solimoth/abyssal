@@ -15,6 +15,7 @@ local BoatConfig = require(ReplicatedStorage.Modules.BoatConfig)
 local BoatSecurity = require(ReplicatedStorage.Modules.BoatSecurity)
 local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 local SubmarinePhysics = require(ReplicatedStorage.Modules.SubmarinePhysics)
+local PassengerMovement = require(script.Parent.PassengerMovement)
 local Remotes = ReplicatedStorage.Remotes.BoatRemotes
 
 -- Boat storage
@@ -26,8 +27,6 @@ local BoatLastActivity = {}
 local BoatPhysicsObjects = {} -- NEW: Track physics objects
 local SubmarineStates = {}
 local BoatWaterLevelOffsets = {}
-local StandingPassengersByBoat = {}
-local StandingPassengerAssignments = {}
 
 -- ACCELERATION SYSTEM STORAGE
 local BoatSpeeds = {}
@@ -89,15 +88,6 @@ local BOAT_CONTROL_PART_PREFIX = "BoatControlPart_"
 local ZERO_VECTOR = Vector3.new()
 
 local TriggerSubmarineImplosion
-
-local standingRaycastParams = RaycastParams.new()
-standingRaycastParams.FilterType = Enum.RaycastFilterType.Include
-standingRaycastParams.IgnoreWater = false
-
-local STANDING_TRACK_DISTANCE = 45
-local STANDING_RAYCAST_DISTANCE = 8
-local STANDING_RELEASE_GRACE = 0.6
-local STANDING_ORIENTATION_LERP_ALPHA = 0.35
 
 local function clearTable(tbl)
         if not tbl then
@@ -172,209 +162,6 @@ local function GatherCollisionContacts(part, buffer)
         end
 
         return buffer
-end
-
-local function AlignCharacterOrientationWithBoat(character, referenceCFrame, state)
-	if not character or not referenceCFrame then
-		return
-	end
-
-	local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-	if not humanoidRootPart then
-		return
-	end
-
-	local humanoid = character:FindFirstChildOfClass("Humanoid")
-	if not humanoid or humanoid.Health <= 0 then
-		return
-	end
-
-	local boatUp = referenceCFrame.UpVector
-	if state then
-		state.lastUpVector = boatUp
-	end
-
-	local humanoidState = humanoid:GetState()
-	if humanoidState == Enum.HumanoidStateType.Seated then
-		return
-	end
-
-	if humanoid.FloorMaterial == Enum.Material.Air then
-		return
-	end
-
-	if humanoidState == Enum.HumanoidStateType.Jumping
-		or humanoidState == Enum.HumanoidStateType.Freefall
-		or humanoidState == Enum.HumanoidStateType.FallingDown then
-		return
-	end
-
-	local currentCFrame = humanoidRootPart.CFrame
-	local currentPosition = currentCFrame.Position
-	local currentLook = currentCFrame.LookVector
-	local projectedLook = currentLook - boatUp * currentLook:Dot(boatUp)
-
-	if projectedLook.Magnitude < 1e-3 then
-		if state and state.lastProjectedLook and state.lastProjectedLook.Magnitude > 1e-3 then
-			projectedLook = state.lastProjectedLook
-		else
-			local fallback = referenceCFrame.LookVector - boatUp * referenceCFrame.LookVector:Dot(boatUp)
-			if fallback.Magnitude > 1e-3 then
-				projectedLook = fallback
-			else
-				projectedLook = Vector3.new(0, 0, -1)
-			end
-		end
-	end
-
-	projectedLook = projectedLook.Unit
-
-	local targetCFrame = CFrame.lookAt(currentPosition, currentPosition + projectedLook, boatUp)
-	if state then
-		state.lastProjectedLook = projectedLook
-	end
-
-	local currentUp = currentCFrame.UpVector
-	if currentLook:Dot(targetCFrame.LookVector) > 0.999 and currentUp:Dot(targetCFrame.UpVector) > 0.999 then
-		return
-	end
-
-	local blendAlpha = STANDING_ORIENTATION_LERP_ALPHA
-	if state and state.customBlend then
-		blendAlpha = state.customBlend
-	end
-
-	local blended = currentCFrame:Lerp(targetCFrame, blendAlpha)
-	humanoidRootPart.CFrame = blended
-end
-
-local function releaseStandingPassenger(boat, character)
-        local tracked = StandingPassengersByBoat[boat]
-        if tracked then
-                tracked[character] = nil
-                if not next(tracked) then
-                        StandingPassengersByBoat[boat] = nil
-                end
-        end
-
-        StandingPassengerAssignments[character] = nil
-end
-
-local function releaseBoatStandingPassengers(boat)
-        local tracked = StandingPassengersByBoat[boat]
-        if not tracked then
-                return
-        end
-
-        for character in pairs(tracked) do
-                StandingPassengerAssignments[character] = nil
-        end
-
-        StandingPassengersByBoat[boat] = nil
-end
-
-local function UpdateStandingPassengers(boat, referenceCFrame, processedCharacters)
-        if not boat or not referenceCFrame then
-                return
-        end
-
-        processedCharacters = processedCharacters or {}
-        standingRaycastParams.FilterDescendantsInstances = { boat }
-
-        local boatPosition = referenceCFrame.Position
-        local tracked = StandingPassengersByBoat[boat]
-        if not tracked then
-                tracked = {}
-                StandingPassengersByBoat[boat] = tracked
-        end
-
-        local seenCharacters = {}
-        local now = os.clock()
-
-        for _, otherPlayer in ipairs(Players:GetPlayers()) do
-                local character = otherPlayer.Character
-                if not character or processedCharacters[character] then
-                        continue
-                end
-
-                local humanoid = character:FindFirstChildOfClass("Humanoid")
-                if not humanoid or humanoid.Health <= 0 then
-                        continue
-                end
-
-                if humanoid.Sit or humanoid.PlatformStand then
-                        continue
-                end
-
-                local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-                if not humanoidRootPart then
-                        continue
-                end
-
-                local distance = (humanoidRootPart.Position - boatPosition).Magnitude
-                if distance > STANDING_TRACK_DISTANCE then
-                        continue
-                end
-
-                local rayResult = Workspace:Raycast(
-                        humanoidRootPart.Position,
-                        Vector3.new(0, -STANDING_RAYCAST_DISTANCE, 0),
-                        standingRaycastParams
-                )
-
-                if rayResult and rayResult.Instance and rayResult.Instance:IsDescendantOf(boat) then
-                        processedCharacters[character] = true
-                        seenCharacters[character] = true
-
-                        local previousBoat = StandingPassengerAssignments[character]
-                        if previousBoat and previousBoat ~= boat then
-                                releaseStandingPassenger(previousBoat, character)
-                        end
-
-                        StandingPassengerAssignments[character] = boat
-
-                        local state = tracked[character]
-                        if not state then
-                                state = {}
-                                tracked[character] = state
-                        end
-
-                        state.lastSeen = now
-                        processedCharacters[character] = true
-                        AlignCharacterOrientationWithBoat(character, referenceCFrame, state)
-                end
-        end
-
-        for character, state in pairs(tracked) do
-                if not character or not character.Parent then
-                        releaseStandingPassenger(boat, character)
-                        continue
-                end
-
-                local humanoid = character:FindFirstChildOfClass("Humanoid")
-                if not humanoid or humanoid.Health <= 0 or humanoid.Sit or humanoid.PlatformStand then
-                        releaseStandingPassenger(boat, character)
-                        continue
-                end
-
-                local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-                if not humanoidRootPart then
-                        releaseStandingPassenger(boat, character)
-                        continue
-                end
-
-                if seenCharacters[character] then
-                        continue
-                end
-
-                local lastSeen = state and state.lastSeen or 0
-                if now - lastSeen <= STANDING_RELEASE_GRACE then
-                        processedCharacters[character] = true
-                        AlignCharacterOrientationWithBoat(character, referenceCFrame, state)
-                else
-                        releaseStandingPassenger(boat, character)
-                end
-        end
 end
 
 -- Memory management
@@ -601,7 +388,7 @@ local function CleanupBoat(player)
                         BoatPhysicsObjects[boat] = nil
                 end
 
-                releaseBoatStandingPassengers(boat)
+                PassengerMovement.ReleaseBoat(boat)
 
                 -- Clean up boat parts
                 pcall(function()
@@ -1994,7 +1781,7 @@ local function UpdateBoatPhysics(player, boat, deltaTime, processedCharacters)
                 BoatSpeeds[player] = 0
                 BoatTurnSpeeds[player] = 0
 
-                UpdateStandingPassengers(boat, targetCFrame, processedCharacters)
+                PassengerMovement.Update(boat, targetCFrame, deltaTime, processedCharacters)
         end
 
         if isIdle and not seat.Occupant then
@@ -2268,7 +2055,7 @@ local function UpdateBoatPhysics(player, boat, deltaTime, processedCharacters)
 
         -- Update position
         controlPart.CFrame = newCFrame
-        UpdateStandingPassengers(boat, newCFrame, processedCharacters)
+        PassengerMovement.Update(boat, newCFrame, deltaTime, processedCharacters)
 
         -- Update BodyVelocity for momentum
         if boat.PrimaryPart then
@@ -2341,7 +2128,7 @@ local function UpdateAllBoats(deltaTime)
                                                 BoatPhysicsObjects[obj] = nil
                                         end
 
-                                        releaseBoatStandingPassengers(obj)
+                                        PassengerMovement.ReleaseBoat(obj)
                                         BoatWaterLevelOffsets[obj] = nil
 
                                         pcall(function() obj:Destroy() end)
@@ -2450,12 +2237,14 @@ function BoatManager.Initialize()
 	end)
 
 	-- Character handling
-	local function OnCharacterDied(character)
-		local player = Players:GetPlayerFromCharacter(character)
-		if player and ActiveBoats[player] then
-			CleanupBoat(player)
-		end
-	end
+        local function OnCharacterDied(character)
+                PassengerMovement.ReleaseCharacter(character)
+
+                local player = Players:GetPlayerFromCharacter(character)
+                if player and ActiveBoats[player] then
+                        CleanupBoat(player)
+                end
+        end
 
 	local function OnCharacterAdded(character)
 		local humanoid = character:WaitForChild("Humanoid", 5)
@@ -2487,9 +2276,12 @@ function BoatManager.Initialize()
 		player.CharacterAdded:Connect(OnCharacterAdded)
 	end)
 
-	Players.PlayerRemoving:Connect(function(player)
-		CleanupBoat(player)
-	end)
+        Players.PlayerRemoving:Connect(function(player)
+                if player.Character then
+                        PassengerMovement.ReleaseCharacter(player.Character)
+                end
+                CleanupBoat(player)
+        end)
 
 	print("Enhanced BoatManager initialized with full fixes")
 end

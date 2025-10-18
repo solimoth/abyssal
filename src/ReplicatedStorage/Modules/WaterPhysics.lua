@@ -364,6 +364,10 @@ function WaterPhysics.ApplyFloatingPhysics(
                 offsetScalar = targetOffsetOverride
         end
 
+        if typeof(offsetScalar) ~= "number" then
+                offsetScalar = nil
+        end
+
         local _, currentYaw, _ = currentCFrame:ToOrientation()
 
         local rotation: CFrame
@@ -382,20 +386,8 @@ function WaterPhysics.ApplyFloatingPhysics(
                 rotation = blendedOrientation - blendedOrientation.Position
         end
 
-        local targetOffset = offsetScalar
-        if targetOffset == nil then
-                if boatType == "Surface" then
-                        targetOffset = 2
-                elseif boatType == "Submarine" then
-                        targetOffset = -1
-                else
-                        targetOffset = 0
-                end
-        end
-
-	local targetHeight = surfaceY + targetOffset
+        local offsetVector: Vector3? = nil
         if offsetLocal then
-                local offsetVector: Vector3?
                 local offsetType = typeof(offsetLocal)
 
                 if offsetType == "Vector3" then
@@ -411,11 +403,35 @@ function WaterPhysics.ApplyFloatingPhysics(
                                 offsetVector = Vector3.new(x, y, z)
                         end
                 end
+        end
 
-                if offsetVector then
-                        local rotatedOffset = rotation:VectorToWorldSpace(offsetVector)
-                        targetHeight = surfaceY - rotatedOffset.Y
+        if offsetVector and offsetScalar == nil then
+                offsetScalar = -offsetVector.Y
+        end
+
+        local targetOffset = offsetScalar
+        if targetOffset == nil then
+                if boatType == "Surface" then
+                        targetOffset = 2
+                elseif boatType == "Submarine" then
+                        targetOffset = -1
+                else
+                        targetOffset = 0
                 end
+        end
+
+        local targetHeight = surfaceY + targetOffset
+        if offsetVector then
+                local orientation = rotation
+                if not orientation then
+                        orientation = currentCFrame - currentCFrame.Position
+                end
+
+                local rotatedOffsetY = orientation.RightVector.Y * offsetVector.X
+                        + orientation.UpVector.Y * offsetVector.Y
+                        + orientation.LookVector.Y * offsetVector.Z
+
+                targetHeight -= (rotatedOffsetY - offsetVector.Y)
         end
 
         local yDifference = targetHeight - position.Y

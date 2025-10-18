@@ -440,6 +440,18 @@ function WaterPhysics.ApplyFloatingPhysics(
         local newY = position.Y + (buoyancySpeed * deltaTime)
         local basePosition = Vector3.new(position.X, newY, position.Z)
 
+        local function applyOffsetCorrection(cframe: CFrame): CFrame
+                -- Older versions of the floating physics pipeline exposed a hook for
+                -- tweaking the resulting CFrame after buoyancy calculations. The
+                -- hook was removed during refactors but the call site remained,
+                -- which meant we attempted to invoke a nil value every time boat
+                -- physics were updated. Keeping the helper as a local no-op ensures
+                -- backwards compatibility without altering the existing behaviour,
+                -- while also providing a convenient expansion point if we ever need
+                -- to reintroduce post-processing for the final CFrame.
+                return cframe
+        end
+
         local finalCFrame = CFrame.new(basePosition) * rotation
         finalCFrame = applyOffsetCorrection(finalCFrame)
         return finalCFrame, true

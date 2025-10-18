@@ -5,7 +5,8 @@ local PassengerMovement = {}
 
 local ZERO_VECTOR = Vector3.new()
 local MAX_RELATIVE_SPEED = 80
-local VELOCITY_BLEND_ALPHA = 0.35
+local VELOCITY_BLEND_ALPHA_GROUNDED = 0.35
+local VELOCITY_BLEND_ALPHA_AIRBORNE = 0.95
 local STANDING_TRACK_DISTANCE = 45
 local STANDING_RAYCAST_DISTANCE = 8
 local STANDING_RELEASE_GRACE = 0.6
@@ -65,7 +66,7 @@ local function clampRelativeVelocity(relativeVelocity)
         return relativeVelocity
 end
 
-local function applyPassengerVelocity(humanoidRootPart, boatVelocity, state)
+local function applyPassengerVelocity(humanoidRootPart, boatVelocity, state, blendAlpha)
         if not humanoidRootPart then
                 return
         end
@@ -78,8 +79,55 @@ local function applyPassengerVelocity(humanoidRootPart, boatVelocity, state)
                 return
         end
 
-        humanoidRootPart.AssemblyLinearVelocity = currentVelocity:Lerp(targetVelocity, VELOCITY_BLEND_ALPHA)
+        humanoidRootPart.AssemblyLinearVelocity = currentVelocity:Lerp(
+                targetVelocity,
+                blendAlpha or VELOCITY_BLEND_ALPHA_GROUNDED
+        )
         state.relativeVelocity = clampRelativeVelocity(humanoidRootPart.AssemblyLinearVelocity - boatVelocity)
+end
+
+local function updateGroundedPassengerTransform(humanoidRootPart, previousBoatCFrame, referenceCFrame, state)
+        if not humanoidRootPart or not referenceCFrame then
+                return
+        end
+
+        if not previousBoatCFrame then
+                state.lastRelativePosition = referenceCFrame:PointToObjectSpace(humanoidRootPart.Position)
+                return
+        end
+
+        local relativePosition = previousBoatCFrame:PointToObjectSpace(humanoidRootPart.Position)
+        state.lastRelativePosition = relativePosition
+
+        local targetPosition = referenceCFrame:PointToWorldSpace(relativePosition)
+        local delta = targetPosition - humanoidRootPart.Position
+
+        if delta.Magnitude > 1e-4 then
+                humanoidRootPart.CFrame = humanoidRootPart.CFrame + delta
+        end
+end
+
+local function moveAirbornePassengerWithBoat(humanoidRootPart, previousBoatCFrame, referenceCFrame, state)
+        if not humanoidRootPart or not referenceCFrame then
+                return
+        end
+
+        local relativePosition = state.lastRelativePosition
+        if not relativePosition then
+                return
+        end
+
+        if not previousBoatCFrame then
+                return
+        end
+
+        local previousPosition = previousBoatCFrame:PointToWorldSpace(relativePosition)
+        local targetPosition = referenceCFrame:PointToWorldSpace(relativePosition)
+        local delta = targetPosition - previousPosition
+
+        if delta.Magnitude > 1e-4 then
+                humanoidRootPart.CFrame = humanoidRootPart.CFrame + delta
+        end
 end
 
 local function alignCharacterOrientationWithBoat(character, referenceCFrame, state)
@@ -187,6 +235,7 @@ function PassengerMovement.Update(boat, referenceCFrame, deltaTime, processedCha
         local passengers = boatState.passengers
         standingRaycastParams.FilterDescendantsInstances = { boat }
 
+        local previousBoatCFrame = boatState.lastCFrame
         local boatVelocity = updateBoatVelocity(boatState, referenceCFrame, deltaTime)
         local boatPosition = referenceCFrame.Position
         local seenCharacters = {}
@@ -241,6 +290,13 @@ function PassengerMovement.Update(boat, referenceCFrame, deltaTime, processedCha
                         end
 
                         state.lastSeen = now
+
+                        local humanoidState = humanoid:GetState()
+                        local isAirborne = humanoid.FloorMaterial == Enum.Material.Air
+                                or humanoidState == Enum.HumanoidStateType.Jumping
+                                or humanoidState == Enum.HumanoidStateType.Freefall
+                                or humanoidState == Enum.HumanoidStateType.FallingDown
+
                         if not state.relativeVelocity then
                                 state.relativeVelocity = ZERO_VECTOR
                         else
@@ -249,8 +305,22 @@ function PassengerMovement.Update(boat, referenceCFrame, deltaTime, processedCha
                                 )
                         end
 
+                        if not isAirborne then
+                                updateGroundedPassengerTransform(
+                                        humanoidRootPart,
+                                        previousBoatCFrame,
+                                        referenceCFrame,
+                                        state
+                                )
+                        end
+
                         alignCharacterOrientationWithBoat(character, referenceCFrame, state)
-                        applyPassengerVelocity(humanoidRootPart, boatVelocity, state)
+                        applyPassengerVelocity(
+                                humanoidRootPart,
+                                boatVelocity,
+                                state,
+                                isAirborne and VELOCITY_BLEND_ALPHA_AIRBORNE or VELOCITY_BLEND_ALPHA_GROUNDED
+                        )
                 end
         end
 
@@ -281,16 +351,36 @@ function PassengerMovement.Update(boat, referenceCFrame, deltaTime, processedCha
                         processedCharacters[character] = true
 
                         local humanoidState = humanoid:GetState()
-                        if humanoidState ~= Enum.HumanoidStateType.Jumping
-                                and humanoidState ~= Enum.HumanoidStateType.Freefall
-                                and humanoidState ~= Enum.HumanoidStateType.FallingDown then
+                        local isAirborne = humanoidState == Enum.HumanoidStateType.Jumping
+                                or humanoidState == Enum.HumanoidStateType.Freefall
+                                or humanoidState == Enum.HumanoidStateType.FallingDown
+
+                        if not isAirborne then
                                 alignCharacterOrientationWithBoat(character, referenceCFrame, state)
+                                updateGroundedPassengerTransform(
+                                        humanoidRootPart,
+                                        previousBoatCFrame,
+                                        referenceCFrame,
+                                        state
+                                )
+                        else
+                                moveAirbornePassengerWithBoat(
+                                        humanoidRootPart,
+                                        previousBoatCFrame,
+                                        referenceCFrame,
+                                        state
+                                )
                         end
 
                         state.relativeVelocity = clampRelativeVelocity(
                                 humanoidRootPart.AssemblyLinearVelocity - boatVelocity
                         )
-                        applyPassengerVelocity(humanoidRootPart, boatVelocity, state)
+                        applyPassengerVelocity(
+                                humanoidRootPart,
+                                boatVelocity,
+                                state,
+                                isAirborne and VELOCITY_BLEND_ALPHA_AIRBORNE or VELOCITY_BLEND_ALPHA_GROUNDED
+                        )
                 else
                         releasePassenger(boat, character)
                 end

@@ -1,4 +1,5 @@
--- BoatManager.lua (FIXED - Memory leaks, performance, and exploits patched)
+-- BoatManager.lua (V. 9.41.0)
+-- Controls boat spawning, physics, and player interactions.
 -- Place in: ServerScriptService/Systems/BoatSystem/BoatManager.lua
 
 local Players = game:GetService("Players")
@@ -15,7 +16,6 @@ local BoatConfig = require(ReplicatedStorage.Modules.BoatConfig)
 local BoatSecurity = require(ReplicatedStorage.Modules.BoatSecurity)
 local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 local SubmarinePhysics = require(ReplicatedStorage.Modules.SubmarinePhysics)
-local PassengerMovement = require(script.Parent.PassengerMovement)
 local Remotes = ReplicatedStorage.Remotes.BoatRemotes
 
 -- Boat storage
@@ -26,7 +26,6 @@ local BoatControls = {}
 local BoatLastActivity = {}
 local BoatPhysicsObjects = {} -- NEW: Track physics objects
 local SubmarineStates = {}
-local BoatWaterLevelOffsets = {}
 
 -- ACCELERATION SYSTEM STORAGE
 local BoatSpeeds = {}
@@ -90,78 +89,78 @@ local ZERO_VECTOR = Vector3.new()
 local TriggerSubmarineImplosion
 
 local function clearTable(tbl)
-        if not tbl then
-                return
-        end
+	if not tbl then
+		return
+	end
 
-        for key in pairs(tbl) do
-                tbl[key] = nil
-        end
+	for key in pairs(tbl) do
+		tbl[key] = nil
+	end
 end
 
 local function BelongsToPlayerCharacter(part)
-        local ancestor = part and part.Parent
-        while ancestor do
-                if Players:GetPlayerFromCharacter(ancestor) then
-                        return true
-                end
+	local ancestor = part and part.Parent
+	while ancestor do
+		if Players:GetPlayerFromCharacter(ancestor) then
+			return true
+		end
 
-                ancestor = ancestor.Parent
-        end
+		ancestor = ancestor.Parent
+	end
 
-        return false
+	return false
 end
 
 local function ShouldIgnoreCollision(part)
-        if not part or not part:IsA("BasePart") then
-                return true
-        end
+	if not part or not part:IsA("BasePart") then
+		return true
+	end
 
-        if part.CanCollide == false then
-                return true
-        end
+	if part.CanCollide == false then
+		return true
+	end
 
-        if part:GetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE) == true then
-                return true
-        end
+	if part:GetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE) == true then
+		return true
+	end
 
-        local partName = part.Name
-        if partName and partName:sub(1, #BOAT_CONTROL_PART_PREFIX) == BOAT_CONTROL_PART_PREFIX then
-                return true
-        end
+	local partName = part.Name
+	if partName and partName:sub(1, #BOAT_CONTROL_PART_PREFIX) == BOAT_CONTROL_PART_PREFIX then
+		return true
+	end
 
-        if BelongsToPlayerCharacter(part) then
-                return true
-        end
+	if BelongsToPlayerCharacter(part) then
+		return true
+	end
 
-        return false
+	return false
 end
 
 local function GatherCollisionContacts(part, buffer)
-        if not part or not part:IsA("BasePart") then
-                return buffer
-        end
+	if not part or not part:IsA("BasePart") then
+		return buffer
+	end
 
-        buffer = buffer or {}
+	buffer = buffer or {}
 
-        if part.CanQuery == false then
-                part.CanQuery = true
-        end
+	if part.CanQuery == false then
+		part.CanQuery = true
+	end
 
-        for existing in pairs(buffer) do
-                buffer[existing] = nil
-        end
+	for existing in pairs(buffer) do
+		buffer[existing] = nil
+	end
 
-        if part.CanTouch ~= false then
-                local touchingParts = part:GetTouchingParts()
-                for _, otherPart in ipairs(touchingParts) do
-                        if otherPart and otherPart:IsA("BasePart") and not ShouldIgnoreCollision(otherPart) then
-                                buffer[otherPart] = true
-                        end
-                end
-        end
+	if part.CanTouch ~= false then
+		local touchingParts = part:GetTouchingParts()
+		for _, otherPart in ipairs(touchingParts) do
+			if otherPart and otherPart:IsA("BasePart") and not ShouldIgnoreCollision(otherPart) then
+				buffer[otherPart] = true
+			end
+		end
+	end
 
-        return buffer
+	return buffer
 end
 
 -- Memory management
@@ -173,7 +172,7 @@ local SPAWN_DISTANCE = 20
 local MAX_SPAWN_DISTANCE = 200 -- NEW: Limit spawn distance from player
 
 local function getWaterLevel(position: Vector3?): number
-        return WaterPhysics.GetWaterLevel(position)
+	return WaterPhysics.GetWaterLevel(position)
 end
 
 -- Module table
@@ -198,22 +197,22 @@ end
 
 -- Initialize acceleration data for a boat
 local function InitializeBoatAcceleration(player, boatType)
-        local config = BoatConfig.GetBoatData(boatType)
-        if not config then return end
+	local config = BoatConfig.GetBoatData(boatType)
+	if not config then return end
 
-        BoatSpeeds[player] = 0
-        BoatTurnSpeeds[player] = 0
-        BoatAccelerationData[player] = {
-                baseMaxSpeed = config.MaxSpeed or 25,
-                maxSpeed = config.MaxSpeed or 25,
-                weight = config.Weight or 3,
-                accelerationRate = BoatConfig.GetAcceleration(boatType),
-                baseAccelerationRate = BoatConfig.GetAcceleration(boatType),
-                decelerationRate = BoatConfig.GetDeceleration(boatType),
-                baseDecelerationRate = BoatConfig.GetDeceleration(boatType),
-                turnAccelerationRate = 3 * (1.5 - (config.Weight / 10)),
-                baseTurnAccelerationRate = 3 * (1.5 - (config.Weight / 10))
-        }
+	BoatSpeeds[player] = 0
+	BoatTurnSpeeds[player] = 0
+	BoatAccelerationData[player] = {
+		baseMaxSpeed = config.MaxSpeed or 25,
+		maxSpeed = config.MaxSpeed or 25,
+		weight = config.Weight or 3,
+		accelerationRate = BoatConfig.GetAcceleration(boatType),
+		baseAccelerationRate = BoatConfig.GetAcceleration(boatType),
+		decelerationRate = BoatConfig.GetDeceleration(boatType),
+		baseDecelerationRate = BoatConfig.GetDeceleration(boatType),
+		turnAccelerationRate = 3 * (1.5 - (config.Weight / 10)),
+		baseTurnAccelerationRate = 3 * (1.5 - (config.Weight / 10))
+	}
 end
 
 -- Helper function to restore original CanCollide states
@@ -281,17 +280,17 @@ local function SetupBoatPhysics(boat, config)
 	boatAttachment.Parent = primaryPart
 
 	-- Create control part with unique name
-        local controlPart = Instance.new("Part")
-        controlPart.Name = "BoatControlPart_" .. HttpService:GenerateGUID(false)
-        controlPart.Transparency = 1
-        controlPart.CanCollide = false
-        controlPart.Anchored = true
-        controlPart.Size = Vector3.new(1, 1, 1)
-        controlPart.CFrame = primaryPart.CFrame
-        controlPart:SetAttribute("OwnerUserId", boat:GetAttribute("OwnerId"))
-        controlPart:SetAttribute("BoatId", boat:GetAttribute("BoatId"))
-        controlPart:SetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE, true)
-        controlPart.Parent = workspace
+	local controlPart = Instance.new("Part")
+	controlPart.Name = "BoatControlPart_" .. HttpService:GenerateGUID(false)
+	controlPart.Transparency = 1
+	controlPart.CanCollide = false
+	controlPart.Anchored = true
+	controlPart.Size = Vector3.new(1, 1, 1)
+	controlPart.CFrame = primaryPart.CFrame
+	controlPart:SetAttribute("OwnerUserId", boat:GetAttribute("OwnerId"))
+	controlPart:SetAttribute("BoatId", boat:GetAttribute("BoatId"))
+	controlPart:SetAttribute(SUB_COLLISION_IGNORE_ATTRIBUTE, true)
+	controlPart.Parent = workspace
 
 	local controlAttachment = Instance.new("Attachment")
 	controlAttachment.Name = "ControlAttachment"
@@ -375,34 +374,31 @@ local function CleanupBoat(player)
 	PlayerViolations[player] = nil
 
 	-- Clean up boat and physics
-        local boat = ActiveBoats[player]
-        if boat then
-                -- Clean up physics objects first
-                local physicsObjs = BoatPhysicsObjects[boat]
-                if physicsObjs then
+	local boat = ActiveBoats[player]
+	if boat then
+		-- Clean up physics objects first
+		local physicsObjs = BoatPhysicsObjects[boat]
+		if physicsObjs then
 			for _, obj in pairs(physicsObjs) do
 				if obj and obj.Parent then
 					pcall(function() obj:Destroy() end)
 				end
 			end
-                        BoatPhysicsObjects[boat] = nil
-                end
+			BoatPhysicsObjects[boat] = nil
+		end
 
-                PassengerMovement.ReleaseBoat(boat)
-
-                -- Clean up boat parts
-                pcall(function()
-                        RestoreCanCollideStates(boat)
-                        for _, desc in pairs(boat:GetDescendants()) do
-                                if desc:IsA("Constraint") or desc:IsA("BodyMover") then
-                                        desc:Destroy()
-                                end
-                        end
-                        boat:Destroy()
-                end)
-                ActiveBoats[player] = nil
-                BoatWaterLevelOffsets[boat] = nil
-        end
+		-- Clean up boat parts
+		pcall(function()
+			RestoreCanCollideStates(boat)
+			for _, desc in pairs(boat:GetDescendants()) do
+				if desc:IsA("Constraint") or desc:IsA("BodyMover") then
+					desc:Destroy()
+				end
+			end
+			boat:Destroy()
+		end)
+		ActiveBoats[player] = nil
+	end
 
 	-- Clean up controller
 	local controller = BoatControllers[player]
@@ -420,903 +416,903 @@ local function CleanupBoat(player)
 			end
 		end
 		BoatConnections[player] = nil
-        end
+	end
 
-        BoatControls[player] = nil
-        BoatLastActivity[player] = nil
-        BoatSecurity.CleanupPlayer(player)
-        SubmarineStates[player] = nil
+	BoatControls[player] = nil
+	BoatLastActivity[player] = nil
+	BoatSecurity.CleanupPlayer(player)
+	SubmarineStates[player] = nil
 end
 
 -- Process cleanup queue
 local function UpdateSubmarineStressMetrics(state)
-        if not state then
-                return 1, 1, 1, 0
-        end
+	if not state then
+		return 1, 1, 1, 0
+	end
 
-        local integrityRatio = 1
-        if state.maxHealth > 0 then
-                integrityRatio = math.clamp(state.health / state.maxHealth, 0, 1)
-        end
+	local integrityRatio = 1
+	if state.maxHealth > 0 then
+		integrityRatio = math.clamp(state.health / state.maxHealth, 0, 1)
+	end
 
-        local speedMultiplier = SUB_SPEED_MIN_MULTIPLIER + (1 - SUB_SPEED_MIN_MULTIPLIER) * integrityRatio
-        if integrityRatio >= 0.995 then
-                speedMultiplier = 1
-        end
+	local speedMultiplier = SUB_SPEED_MIN_MULTIPLIER + (1 - SUB_SPEED_MIN_MULTIPLIER) * integrityRatio
+	if integrityRatio >= 0.995 then
+		speedMultiplier = 1
+	end
 
-        local accelMultiplier = SUB_ACCEL_MIN_MULTIPLIER + (1 - SUB_ACCEL_MIN_MULTIPLIER) * integrityRatio
-        if integrityRatio >= 0.995 then
-                accelMultiplier = 1
-        end
+	local accelMultiplier = SUB_ACCEL_MIN_MULTIPLIER + (1 - SUB_ACCEL_MIN_MULTIPLIER) * integrityRatio
+	if integrityRatio >= 0.995 then
+		accelMultiplier = 1
+	end
 
-        local shakeIntensity = 0
-        if integrityRatio < SUB_SHAKE_START_RATIO then
-                shakeIntensity = math.clamp((SUB_SHAKE_START_RATIO - integrityRatio) / SUB_SHAKE_START_RATIO, 0, 1)
-        end
+	local shakeIntensity = 0
+	if integrityRatio < SUB_SHAKE_START_RATIO then
+		shakeIntensity = math.clamp((SUB_SHAKE_START_RATIO - integrityRatio) / SUB_SHAKE_START_RATIO, 0, 1)
+	end
 
-        state.integrityRatio = integrityRatio
-        state.speedMultiplier = speedMultiplier
-        state.accelMultiplier = accelMultiplier
-        state.shakeIntensity = shakeIntensity
+	state.integrityRatio = integrityRatio
+	state.speedMultiplier = speedMultiplier
+	state.accelMultiplier = accelMultiplier
+	state.shakeIntensity = shakeIntensity
 
-        return integrityRatio, speedMultiplier, accelMultiplier, shakeIntensity
+	return integrityRatio, speedMultiplier, accelMultiplier, shakeIntensity
 end
 
 local function GetOrCreateSubmarineState(player, config)
-        local state = SubmarineStates[player]
-        local maxHealth = (config and config.MaxHealth) or (state and state.maxHealth) or 100
+	local state = SubmarineStates[player]
+	local maxHealth = (config and config.MaxHealth) or (state and state.maxHealth) or 100
 
-        if not state then
-                state = {
-                        maxHealth = maxHealth,
-                        health = maxHealth,
-                        lastHealthPercentPrint = 100,
-                        timeOverDepth = 0,
-                        wasOverDepth = false,
-                        lastWarningTime = 0,
-                        lastSafeMessageTime = 0,
-                        isImploding = false,
-                        lastDepth = 0,
-                        integrityRatio = 1,
-                        speedMultiplier = 1,
-                        accelMultiplier = 1,
-                        shakeIntensity = 0,
-                        lastStressOffset = ZERO_VECTOR,
-                        currentJitterAllowance = 0,
-                        hullRadius = nil,
-                        hullRadiusPart = nil,
-                        lastStressOffsetDelta = 0,
-                        lastLeakEmissionRate = 0,
-                        lastWarningRange = 0,
-                        lastWarningBrightness = 0,
-                        lastCollisionTime = 0,
-                        recentCollisionParts = {},
-                        lastCollisionPrint = 0,
-                }
-                state.shakeRandom = Random.new()
-                state.warningPhase = math.random()
-                SubmarineStates[player] = state
-        else
-                if state.maxHealth ~= maxHealth then
-                        state.maxHealth = maxHealth
-                        state.health = math.clamp(state.health, 0, maxHealth)
-                end
+	if not state then
+		state = {
+			maxHealth = maxHealth,
+			health = maxHealth,
+			lastHealthPercentPrint = 100,
+			timeOverDepth = 0,
+			wasOverDepth = false,
+			lastWarningTime = 0,
+			lastSafeMessageTime = 0,
+			isImploding = false,
+			lastDepth = 0,
+			integrityRatio = 1,
+			speedMultiplier = 1,
+			accelMultiplier = 1,
+			shakeIntensity = 0,
+			lastStressOffset = ZERO_VECTOR,
+			currentJitterAllowance = 0,
+			hullRadius = nil,
+			hullRadiusPart = nil,
+			lastStressOffsetDelta = 0,
+			lastLeakEmissionRate = 0,
+			lastWarningRange = 0,
+			lastWarningBrightness = 0,
+			lastCollisionTime = 0,
+			recentCollisionParts = {},
+			lastCollisionPrint = 0,
+		}
+		state.shakeRandom = Random.new()
+		state.warningPhase = math.random()
+		SubmarineStates[player] = state
+	else
+		if state.maxHealth ~= maxHealth then
+			state.maxHealth = maxHealth
+			state.health = math.clamp(state.health, 0, maxHealth)
+		end
 
-                state.recentCollisionParts = state.recentCollisionParts or {}
-        end
+		state.recentCollisionParts = state.recentCollisionParts or {}
+	end
 
-        UpdateSubmarineStressMetrics(state)
-        return state
+	UpdateSubmarineStressMetrics(state)
+	return state
 end
 
 local INSTANT_KILL_ATTRIBUTE_NAMES = {
-        "SubInstantKill",
-        "InstantSubKill",
-        "InstantKill",
-        "KillOnTouch",
+	"SubInstantKill",
+	"InstantSubKill",
+	"InstantKill",
+	"KillOnTouch",
 }
 
 local INSTANT_KILL_TAGS = {
-        SubInstantKill = true,
-        InstantKill = true,
-        SubmarineInstantKill = true,
+	SubInstantKill = true,
+	InstantKill = true,
+	SubmarineInstantKill = true,
 }
 
 local function FindFirstAttributeInAncestors(instance, attributeName)
-        local current = instance
-        while current do
-                if current:GetAttribute(attributeName) ~= nil then
-                        return current:GetAttribute(attributeName), current
-                end
-                current = current.Parent
-        end
+	local current = instance
+	while current do
+		if current:GetAttribute(attributeName) ~= nil then
+			return current:GetAttribute(attributeName), current
+		end
+		current = current.Parent
+	end
 
-        return nil, nil
+	return nil, nil
 end
 
 local function DescribeInstantKill(part)
-        if not part or not part:IsA("BasePart") then
-                return nil
-        end
+	if not part or not part:IsA("BasePart") then
+		return nil
+	end
 
-        for _, attributeName in ipairs(INSTANT_KILL_ATTRIBUTE_NAMES) do
-                local value, source = FindFirstAttributeInAncestors(part, attributeName)
-                if value ~= nil then
-                        local sourceName = source and source:GetFullName() or part:GetFullName()
-                        return string.format("attribute '%s' on %s", attributeName, sourceName)
-                end
-        end
+	for _, attributeName in ipairs(INSTANT_KILL_ATTRIBUTE_NAMES) do
+		local value, source = FindFirstAttributeInAncestors(part, attributeName)
+		if value ~= nil then
+			local sourceName = source and source:GetFullName() or part:GetFullName()
+			return string.format("attribute '%s' on %s", attributeName, sourceName)
+		end
+	end
 
-        local success, tags = pcall(CollectionService.GetTags, CollectionService, part)
-        if success then
-                for _, tag in ipairs(tags) do
-                        if INSTANT_KILL_TAGS[tag] then
-                                return string.format("CollectionService tag '%s'", tag)
-                        end
-                end
-        end
+	local success, tags = pcall(CollectionService.GetTags, CollectionService, part)
+	if success then
+		for _, tag in ipairs(tags) do
+			if INSTANT_KILL_TAGS[tag] then
+				return string.format("CollectionService tag '%s'", tag)
+			end
+		end
+	end
 
-        return nil
+	return nil
 end
 
 local function GetCollisionDamageMultiplier(part)
-        if not part or not part:IsA("BasePart") then
-                return 1
-        end
+	if not part or not part:IsA("BasePart") then
+		return 1
+	end
 
-        local multiplier, source = FindFirstAttributeInAncestors(part, "SubDamageMultiplier")
-        if typeof(multiplier) == "number" and multiplier > 0 then
-                return multiplier
-        elseif typeof(multiplier) == "number" and multiplier == 0 and source then
-                return 0
-        end
+	local multiplier, source = FindFirstAttributeInAncestors(part, "SubDamageMultiplier")
+	if typeof(multiplier) == "number" and multiplier > 0 then
+		return multiplier
+	elseif typeof(multiplier) == "number" and multiplier == 0 and source then
+		return 0
+	end
 
-        return 1
+	return 1
 end
 
 local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, otherPart)
-        if not boat or not boat.Parent or not otherPart or not otherPart:IsA("BasePart") then
-                return
-        end
+	if not boat or not boat.Parent or not otherPart or not otherPart:IsA("BasePart") then
+		return
+	end
 
-        if ShouldIgnoreCollision(otherPart) then
-                return
-        end
+	if ShouldIgnoreCollision(otherPart) then
+		return
+	end
 
-        if otherPart:IsDescendantOf(boat) then
-                return
-        end
+	if otherPart:IsDescendantOf(boat) then
+		return
+	end
 
-        local primaryPart = boat.PrimaryPart
-        if not primaryPart then
-                return
-        end
+	local primaryPart = boat.PrimaryPart
+	if not primaryPart then
+		return
+	end
 
-        if otherPart == primaryPart or (otherPart.AssemblyRootPart and otherPart.AssemblyRootPart == primaryPart) then
-                return
-        end
+	if otherPart == primaryPart or (otherPart.AssemblyRootPart and otherPart.AssemblyRootPart == primaryPart) then
+		return
+	end
 
-        local otherParent = otherPart.Parent
-        if otherParent then
-                if Players:GetPlayerFromCharacter(otherParent) then
-                        return
-                end
+	local otherParent = otherPart.Parent
+	if otherParent then
+		if Players:GetPlayerFromCharacter(otherParent) then
+			return
+		end
 
-                local humanoid = otherParent:FindFirstChildOfClass("Humanoid")
-                if humanoid then
-                        return
-                end
-        end
+		local humanoid = otherParent:FindFirstChildOfClass("Humanoid")
+		if humanoid then
+			return
+		end
+	end
 
-        if otherPart.Material == Enum.Material.Water then
-                return
-        end
+	if otherPart.Material == Enum.Material.Water then
+		return
+	end
 
-        local otherName = string.lower(otherPart.Name or "")
-        if otherName == "water" or otherName == "ocean" or otherName == "sea" then
-                return
-        end
+	local otherName = string.lower(otherPart.Name or "")
+	if otherName == "water" or otherName == "ocean" or otherName == "sea" then
+		return
+	end
 
-        local state = GetOrCreateSubmarineState(player, config)
-        if not state or state.isImploding then
-                return
-        end
+	local state = GetOrCreateSubmarineState(player, config)
+	if not state or state.isImploding then
+		return
+	end
 
-        local now = tick()
-        if (now - (state.lastCollisionTime or 0)) < SUB_COLLISION_GLOBAL_COOLDOWN then
-                return
-        end
+	local now = tick()
+	if (now - (state.lastCollisionTime or 0)) < SUB_COLLISION_GLOBAL_COOLDOWN then
+		return
+	end
 
-        state.recentCollisionParts = state.recentCollisionParts or {}
-        for trackedPart, hitTime in pairs(state.recentCollisionParts) do
-                if not hitTime or (now - hitTime) > (SUB_COLLISION_PART_COOLDOWN * 2) or (trackedPart and not trackedPart.Parent) then
-                        state.recentCollisionParts[trackedPart] = nil
-                end
-        end
-        local lastForPart = state.recentCollisionParts[otherPart]
-        if lastForPart and (now - lastForPart) < SUB_COLLISION_PART_COOLDOWN then
-                return
-        end
+	state.recentCollisionParts = state.recentCollisionParts or {}
+	for trackedPart, hitTime in pairs(state.recentCollisionParts) do
+		if not hitTime or (now - hitTime) > (SUB_COLLISION_PART_COOLDOWN * 2) or (trackedPart and not trackedPart.Parent) then
+			state.recentCollisionParts[trackedPart] = nil
+		end
+	end
+	local lastForPart = state.recentCollisionParts[otherPart]
+	if lastForPart and (now - lastForPart) < SUB_COLLISION_PART_COOLDOWN then
+		return
+	end
 
-        state.lastCollisionTime = now
-        state.recentCollisionParts[otherPart] = now
+	state.lastCollisionTime = now
+	state.recentCollisionParts[otherPart] = now
 
-        local instantReason = DescribeInstantKill(otherPart)
-        if instantReason then
-                print(string.format(
-                        "[Submarine] Instant hull failure triggered by collision with %s (%s).",
-                        otherPart:GetFullName(),
-                        instantReason
-                ))
+	local instantReason = DescribeInstantKill(otherPart)
+	if instantReason then
+		print(string.format(
+			"[Submarine] Instant hull failure triggered by collision with %s (%s).",
+			otherPart:GetFullName(),
+			instantReason
+			))
 
-                state.health = 0
-                TriggerSubmarineImplosion(player, boat, config)
-                return
-        end
+		state.health = 0
+		TriggerSubmarineImplosion(player, boat, config)
+		return
+	end
 
-        if not state.maxHealth or state.maxHealth <= 0 then
-                return
-        end
+	if not state.maxHealth or state.maxHealth <= 0 then
+		return
+	end
 
-        local boatVelocity = primaryPart.AssemblyLinearVelocity or ZERO_VECTOR
-        local hitVelocity = hitPart and (hitPart.AssemblyLinearVelocity or hitPart.Velocity) or ZERO_VECTOR
-        if hitVelocity.Magnitude > boatVelocity.Magnitude then
-                boatVelocity = hitVelocity
-        elseif boatVelocity.Magnitude < 0.5 and primaryPart.Velocity then
-                boatVelocity = primaryPart.Velocity
-        end
+	local boatVelocity = primaryPart.AssemblyLinearVelocity or ZERO_VECTOR
+	local hitVelocity = hitPart and (hitPart.AssemblyLinearVelocity or hitPart.Velocity) or ZERO_VECTOR
+	if hitVelocity.Magnitude > boatVelocity.Magnitude then
+		boatVelocity = hitVelocity
+	elseif boatVelocity.Magnitude < 0.5 and primaryPart.Velocity then
+		boatVelocity = primaryPart.Velocity
+	end
 
-        local otherVelocity = otherPart.AssemblyLinearVelocity or otherPart.Velocity or ZERO_VECTOR
-        local relativeSpeed = (boatVelocity - otherVelocity).Magnitude
+	local otherVelocity = otherPart.AssemblyLinearVelocity or otherPart.Velocity or ZERO_VECTOR
+	local relativeSpeed = (boatVelocity - otherVelocity).Magnitude
 
-        local boatMass = primaryPart.AssemblyMass or primaryPart:GetMass()
-        local otherMass = otherPart.AssemblyMass or otherPart:GetMass()
-        local massFactor = 1
-        if boatMass and boatMass > 0 and otherMass and otherMass > 0 then
-                massFactor = math.clamp(otherMass / boatMass, 0.4, 2.5)
-        elseif otherPart.Anchored then
-                massFactor = 1.35
-        end
+	local boatMass = primaryPart.AssemblyMass or primaryPart:GetMass()
+	local otherMass = otherPart.AssemblyMass or otherPart:GetMass()
+	local massFactor = 1
+	if boatMass and boatMass > 0 and otherMass and otherMass > 0 then
+		massFactor = math.clamp(otherMass / boatMass, 0.4, 2.5)
+	elseif otherPart.Anchored then
+		massFactor = 1.35
+	end
 
-        local anchoredFactor = otherPart.Anchored and 1.2 or 1
-        local damageMultiplier = GetCollisionDamageMultiplier(otherPart)
+	local anchoredFactor = otherPart.Anchored and 1.2 or 1
+	local damageMultiplier = GetCollisionDamageMultiplier(otherPart)
 
-        local damage = state.maxHealth
-                * SUB_COLLISION_DAMAGE_RATIO
-                * massFactor
-                * anchoredFactor
-                * damageMultiplier
-        if damage <= 0 then
-                return
-        end
+	local damage = state.maxHealth
+		* SUB_COLLISION_DAMAGE_RATIO
+		* massFactor
+		* anchoredFactor
+		* damageMultiplier
+	if damage <= 0 then
+		return
+	end
 
-        state.health = math.max(state.health - damage, 0)
-        UpdateSubmarineStressMetrics(state)
+	state.health = math.max(state.health - damage, 0)
+	UpdateSubmarineStressMetrics(state)
 
-        local currentPercent = math.clamp(math.floor((state.health / state.maxHealth) * 100), 0, 100)
-        if state.health <= 0 then
-                local impactSource
-                if hitPart and hitPart.Parent == boat then
-                        impactSource = string.format("%s -> %s", hitPart:GetFullName(), otherPart:GetFullName())
-                else
-                        impactSource = otherPart:GetFullName()
-                end
+	local currentPercent = math.clamp(math.floor((state.health / state.maxHealth) * 100), 0, 100)
+	if state.health <= 0 then
+		local impactSource
+		if hitPart and hitPart.Parent == boat then
+			impactSource = string.format("%s -> %s", hitPart:GetFullName(), otherPart:GetFullName())
+		else
+			impactSource = otherPart:GetFullName()
+		end
 
-                print(string.format(
-                        "[Submarine] Hull collapsed after collision between %s (reported speed %.1f studs/s).",
-                        impactSource,
-                        relativeSpeed
-                ))
-                TriggerSubmarineImplosion(player, boat, config)
-                return
-        end
+		print(string.format(
+			"[Submarine] Hull collapsed after collision between %s (reported speed %.1f studs/s).",
+			impactSource,
+			relativeSpeed
+			))
+		TriggerSubmarineImplosion(player, boat, config)
+		return
+	end
 
-        if not state.lastHealthPercentPrint or currentPercent <= state.lastHealthPercentPrint - SUB_HEALTH_WARNING_STEP then
-                print(string.format(
-                        "[Submarine] Hull integrity at %d%% after collision with %s (reported speed %.1f).",
-                        currentPercent,
-                        otherPart:GetFullName(),
-                        relativeSpeed
-                ))
-                state.lastHealthPercentPrint = currentPercent
-        elseif (now - (state.lastCollisionPrint or 0)) > SUB_COLLISION_PRINT_COOLDOWN then
-                print(string.format(
-                        "[Submarine] Collision registered with %s (reported speed %.1f).",
-                        otherPart:GetFullName(),
-                        relativeSpeed
-                ))
-                state.lastCollisionPrint = now
-        end
+	if not state.lastHealthPercentPrint or currentPercent <= state.lastHealthPercentPrint - SUB_HEALTH_WARNING_STEP then
+		print(string.format(
+			"[Submarine] Hull integrity at %d%% after collision with %s (reported speed %.1f).",
+			currentPercent,
+			otherPart:GetFullName(),
+			relativeSpeed
+			))
+		state.lastHealthPercentPrint = currentPercent
+	elseif (now - (state.lastCollisionPrint or 0)) > SUB_COLLISION_PRINT_COOLDOWN then
+		print(string.format(
+			"[Submarine] Collision registered with %s (reported speed %.1f).",
+			otherPart:GetFullName(),
+			relativeSpeed
+			))
+		state.lastCollisionPrint = now
+	end
 end
 
 local function SetupSubmarineCollisionMonitoring(player, boat, config)
-        if not boat or not boat.PrimaryPart then
-                return
-        end
+	if not boat or not boat.PrimaryPart then
+		return
+	end
 
-        local state = GetOrCreateSubmarineState(player, config)
-        state.lastCollisionTime = 0
-        state.lastCollisionPrint = 0
-        state.recentCollisionParts = state.recentCollisionParts or {}
-        for trackedPart in pairs(state.recentCollisionParts) do
-                state.recentCollisionParts[trackedPart] = nil
-        end
+	local state = GetOrCreateSubmarineState(player, config)
+	state.lastCollisionTime = 0
+	state.lastCollisionPrint = 0
+	state.recentCollisionParts = state.recentCollisionParts or {}
+	for trackedPart in pairs(state.recentCollisionParts) do
+		state.recentCollisionParts[trackedPart] = nil
+	end
 
-        if state.collisionPollConnection then
-                state.collisionPollConnection:Disconnect()
-                state.collisionPollConnection = nil
-        end
+	if state.collisionPollConnection then
+		state.collisionPollConnection:Disconnect()
+		state.collisionPollConnection = nil
+	end
 
-        state.collisionPollParts = state.collisionPollParts or {}
-        clearTable(state.collisionPollParts)
-        state.collisionPollIndex = 0
-        state.nextCollisionPoll = 0
+	state.collisionPollParts = state.collisionPollParts or {}
+	clearTable(state.collisionPollParts)
+	state.collisionPollIndex = 0
+	state.nextCollisionPoll = 0
 
-        local connections = BoatConnections[player]
-        if not connections then
-                connections = {}
-                BoatConnections[player] = connections
-        end
+	local connections = BoatConnections[player]
+	if not connections then
+		connections = {}
+		BoatConnections[player] = connections
+	end
 
-        local hitboxParts = {}
-        for _, desc in ipairs(boat:GetDescendants()) do
-                if desc:IsA("BasePart") and string.lower(desc.Name) == "hitbox" then
-                        if desc.CanTouch == false then
-                                desc.CanTouch = true
-                        end
-                        local connection = desc.Touched:Connect(function(otherPart)
-                                ApplySubmarineCollisionDamage(player, boat, config, desc, otherPart)
-                        end)
-                        table.insert(connections, connection)
-                        table.insert(hitboxParts, desc)
-                end
-        end
+	local hitboxParts = {}
+	for _, desc in ipairs(boat:GetDescendants()) do
+		if desc:IsA("BasePart") and string.lower(desc.Name) == "hitbox" then
+			if desc.CanTouch == false then
+				desc.CanTouch = true
+			end
+			local connection = desc.Touched:Connect(function(otherPart)
+				ApplySubmarineCollisionDamage(player, boat, config, desc, otherPart)
+			end)
+			table.insert(connections, connection)
+			table.insert(hitboxParts, desc)
+		end
+	end
 
-        if #hitboxParts == 0 then
-                warn(string.format("[Submarine] No Hitbox part found for %s; collision damage may not register.", boat:GetFullName()))
-        else
-                state.collisionPollParts = hitboxParts
-                local function onBoatRemoved(_, parent)
-                        local currentParent = parent
-                        if currentParent == nil then
-                                currentParent = boat.Parent
-                        end
+	if #hitboxParts == 0 then
+		warn(string.format("[Submarine] No Hitbox part found for %s; collision damage may not register.", boat:GetFullName()))
+	else
+		state.collisionPollParts = hitboxParts
+		local function onBoatRemoved(_, parent)
+			local currentParent = parent
+			if currentParent == nil then
+				currentParent = boat.Parent
+			end
 
-                        if not currentParent then
-                                for _, part in ipairs(hitboxParts) do
-                                        state.recentCollisionParts[part] = nil
-                                end
-                                clearTable(hitboxParts)
-                                clearTable(state.collisionPollParts)
-                                state.collisionPollIndex = 0
-                        end
-                end
+			if not currentParent then
+				for _, part in ipairs(hitboxParts) do
+					state.recentCollisionParts[part] = nil
+				end
+				clearTable(hitboxParts)
+				clearTable(state.collisionPollParts)
+				state.collisionPollIndex = 0
+			end
+		end
 
-                local ancestryConnection
-                local ancestrySignal = boat.AncestryChanged
-                if ancestrySignal and typeof(ancestrySignal) == "RBXScriptSignal" then
-                        ancestryConnection = ancestrySignal:Connect(onBoatRemoved)
-                else
-                        ancestryConnection = boat:GetPropertyChangedSignal("Parent"):Connect(function()
-                                onBoatRemoved(nil, boat.Parent)
-                        end)
-                end
+		local ancestryConnection
+		local ancestrySignal = boat.AncestryChanged
+		if ancestrySignal and typeof(ancestrySignal) == "RBXScriptSignal" then
+			ancestryConnection = ancestrySignal:Connect(onBoatRemoved)
+		else
+			ancestryConnection = boat:GetPropertyChangedSignal("Parent"):Connect(function()
+				onBoatRemoved(nil, boat.Parent)
+			end)
+		end
 
-                if ancestryConnection then
-                        table.insert(connections, ancestryConnection)
-                end
+		if ancestryConnection then
+			table.insert(connections, ancestryConnection)
+		end
 
-                state.collisionPollConnection = RunService.Heartbeat:Connect(function()
-                        if state.isImploding then
-                                return
-                        end
+		state.collisionPollConnection = RunService.Heartbeat:Connect(function()
+			if state.isImploding then
+				return
+			end
 
-                        if not boat.Parent then
-                                return
-                        end
+			if not boat.Parent then
+				return
+			end
 
-                        local primaryPart = boat.PrimaryPart
-                        if not primaryPart then
-                                return
-                        end
+			local primaryPart = boat.PrimaryPart
+			if not primaryPart then
+				return
+			end
 
-                        if primaryPart:GetNetworkOwner() == nil then
-                                return
-                        end
+			if primaryPart:GetNetworkOwner() == nil then
+				return
+			end
 
-                        local now = tick()
-                        if now < (state.nextCollisionPoll or 0) then
-                                return
-                        end
+			local now = tick()
+			if now < (state.nextCollisionPoll or 0) then
+				return
+			end
 
-                        local pollParts = state.collisionPollParts
-                        local totalParts = pollParts and #pollParts or 0
-                        if totalParts == 0 then
-                                return
-                        end
+			local pollParts = state.collisionPollParts
+			local totalParts = pollParts and #pollParts or 0
+			if totalParts == 0 then
+				return
+			end
 
-                        state.nextCollisionPoll = now + SUB_COLLISION_POLL_INTERVAL
+			state.nextCollisionPoll = now + SUB_COLLISION_POLL_INTERVAL
 
-                        local index = state.collisionPollIndex or 0
-                        local checksRemaining = math.min(totalParts, SUB_COLLISION_POLL_PART_LIMIT)
-                        local checked = 0
+			local index = state.collisionPollIndex or 0
+			local checksRemaining = math.min(totalParts, SUB_COLLISION_POLL_PART_LIMIT)
+			local checked = 0
 
-                        while checked < checksRemaining and totalParts > 0 do
-                                index += 1
-                                if index > totalParts then
-                                        index = 1
-                                end
+			while checked < checksRemaining and totalParts > 0 do
+				index += 1
+				if index > totalParts then
+					index = 1
+				end
 
-                                local part = pollParts[index]
-                                if not part or not part.Parent or not part:IsDescendantOf(boat) then
-                                        table.remove(pollParts, index)
-                                        totalParts -= 1
-                                        if totalParts == 0 then
-                                                index = 0
-                                                break
-                                        end
-                                        if index > totalParts then
-                                                index = 0
-                                        else
-                                                index -= 1
-                                        end
-                                else
-                                        checked += 1
-                                        local contactBuffer = state.collisionContactBuffer
-                                        contactBuffer = GatherCollisionContacts(part, contactBuffer)
-                                        state.collisionContactBuffer = contactBuffer
+				local part = pollParts[index]
+				if not part or not part.Parent or not part:IsDescendantOf(boat) then
+					table.remove(pollParts, index)
+					totalParts -= 1
+					if totalParts == 0 then
+						index = 0
+						break
+					end
+					if index > totalParts then
+						index = 0
+					else
+						index -= 1
+					end
+				else
+					checked += 1
+					local contactBuffer = state.collisionContactBuffer
+					contactBuffer = GatherCollisionContacts(part, contactBuffer)
+					state.collisionContactBuffer = contactBuffer
 
-                                        if contactBuffer then
-                                                for otherPart in pairs(contactBuffer) do
-                                                        if otherPart and otherPart:IsA("BasePart") then
-                                                                ApplySubmarineCollisionDamage(player, boat, config, part, otherPart)
-                                                        end
-                                                        contactBuffer[otherPart] = nil
-                                                end
-                                        end
-                                end
-                        end
+					if contactBuffer then
+						for otherPart in pairs(contactBuffer) do
+							if otherPart and otherPart:IsA("BasePart") then
+								ApplySubmarineCollisionDamage(player, boat, config, part, otherPart)
+							end
+							contactBuffer[otherPart] = nil
+						end
+					end
+				end
+			end
 
-                        state.collisionPollIndex = index
-                end)
-                table.insert(connections, state.collisionPollConnection)
-        end
+			state.collisionPollIndex = index
+		end)
+		table.insert(connections, state.collisionPollConnection)
+	end
 end
 
 local function ApplySubmarineStressEffects(player, boat, config, targetCFrame, deltaTime)
-        local state = SubmarineStates[player]
-        if not state or state.isImploding or not boat or not boat.PrimaryPart then
-                if state then
-                        state.currentJitterAllowance = 0
-                        state.lastStressOffset = ZERO_VECTOR
-                        state.lastStressOffsetDelta = 0
-                end
-                return targetCFrame
-        end
+	local state = SubmarineStates[player]
+	if not state or state.isImploding or not boat or not boat.PrimaryPart then
+		if state then
+			state.currentJitterAllowance = 0
+			state.lastStressOffset = ZERO_VECTOR
+			state.lastStressOffsetDelta = 0
+		end
+		return targetCFrame
+	end
 
-        local integrityRatio = state.integrityRatio or 1
-        local primaryPart = boat.PrimaryPart
-        local baseCFrame = targetCFrame
-        local previousStressOffset = state.lastStressOffset or ZERO_VECTOR
-        local jitterAllowance = 0
+	local integrityRatio = state.integrityRatio or 1
+	local primaryPart = boat.PrimaryPart
+	local baseCFrame = targetCFrame
+	local previousStressOffset = state.lastStressOffset or ZERO_VECTOR
+	local jitterAllowance = 0
 
-        if state.shakeIntensity and state.shakeIntensity > 0 then
-                local randomGen = state.shakeRandom or Random.new()
-                state.shakeRandom = randomGen
+	if state.shakeIntensity and state.shakeIntensity > 0 then
+		local randomGen = state.shakeRandom or Random.new()
+		state.shakeRandom = randomGen
 
-                local offsetMagnitude = SUB_SHAKE_MAX_OFFSET * state.shakeIntensity
-                local angleMagnitude = SUB_SHAKE_MAX_ANGLE * state.shakeIntensity
+		local offsetMagnitude = SUB_SHAKE_MAX_OFFSET * state.shakeIntensity
+		local angleMagnitude = SUB_SHAKE_MAX_ANGLE * state.shakeIntensity
 
-                local offset = Vector3.new(
-                        randomGen:NextNumber(-offsetMagnitude, offsetMagnitude),
-                        randomGen:NextNumber(-offsetMagnitude, offsetMagnitude),
-                        randomGen:NextNumber(-offsetMagnitude, offsetMagnitude)
-                )
+		local offset = Vector3.new(
+			randomGen:NextNumber(-offsetMagnitude, offsetMagnitude),
+			randomGen:NextNumber(-offsetMagnitude, offsetMagnitude),
+			randomGen:NextNumber(-offsetMagnitude, offsetMagnitude)
+		)
 
-                local rotX = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
-                local rotY = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
-                local rotZ = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
+		local rotX = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
+		local rotY = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
+		local rotZ = randomGen:NextNumber(-angleMagnitude, angleMagnitude)
 
-                local stressOffsetWorld = baseCFrame:VectorToWorldSpace(offset)
-                targetCFrame = baseCFrame * CFrame.new(offset) * CFrame.Angles(rotX, rotY, rotZ)
+		local stressOffsetWorld = baseCFrame:VectorToWorldSpace(offset)
+		targetCFrame = baseCFrame * CFrame.new(offset) * CFrame.Angles(rotX, rotY, rotZ)
 
-                local hullRadius = state.hullRadius
-                if not hullRadius or state.hullRadiusPart ~= primaryPart then
-                        hullRadius = primaryPart.Size.Magnitude * 0.5
-                        state.hullRadius = hullRadius
-                        state.hullRadiusPart = primaryPart
-                end
+		local hullRadius = state.hullRadius
+		if not hullRadius or state.hullRadiusPart ~= primaryPart then
+			hullRadius = primaryPart.Size.Magnitude * 0.5
+			state.hullRadius = hullRadius
+			state.hullRadiusPart = primaryPart
+		end
 
-                local offsetDelta = (stressOffsetWorld - previousStressOffset).Magnitude
-                local baselineAllowance = offsetMagnitude * 0.35
-                if hullRadius then
-                        baselineAllowance = baselineAllowance + math.min(hullRadius, 1) * (angleMagnitude * 0.5)
-                end
+		local offsetDelta = (stressOffsetWorld - previousStressOffset).Magnitude
+		local baselineAllowance = offsetMagnitude * 0.35
+		if hullRadius then
+			baselineAllowance = baselineAllowance + math.min(hullRadius, 1) * (angleMagnitude * 0.5)
+		end
 
-                jitterAllowance = math.max(offsetDelta, baselineAllowance)
-                state.lastStressOffset = stressOffsetWorld
-                state.lastStressOffsetDelta = offsetDelta
-        end
+		jitterAllowance = math.max(offsetDelta, baselineAllowance)
+		state.lastStressOffset = stressOffsetWorld
+		state.lastStressOffsetDelta = offsetDelta
+	end
 
-        if integrityRatio < SUB_LEAK_THRESHOLD then
-                local attachment = state.damageAttachment
-                if not attachment or attachment.Parent ~= primaryPart then
-                        attachment = Instance.new("Attachment")
-                        attachment.Name = "HullLeakAttachment"
-                        attachment.Position = Vector3.new(0, -primaryPart.Size.Y * 0.4, 0)
-                        attachment.Parent = primaryPart
-                        state.damageAttachment = attachment
-                end
+	if integrityRatio < SUB_LEAK_THRESHOLD then
+		local attachment = state.damageAttachment
+		if not attachment or attachment.Parent ~= primaryPart then
+			attachment = Instance.new("Attachment")
+			attachment.Name = "HullLeakAttachment"
+			attachment.Position = Vector3.new(0, -primaryPart.Size.Y * 0.4, 0)
+			attachment.Parent = primaryPart
+			state.damageAttachment = attachment
+		end
 
-                local currentTime = tick()
-                if (currentTime - (state.lastLeakOffsetTime or 0)) > SUB_LEAK_OFFSET_INTERVAL then
-                        state.lastLeakOffsetTime = currentTime
-                        local randomGen = state.shakeRandom or Random.new()
-                        local offset = Vector3.new(
-                                randomGen:NextNumber(-primaryPart.Size.X * 0.45, primaryPart.Size.X * 0.45),
-                                randomGen:NextNumber(-primaryPart.Size.Y * 0.45, primaryPart.Size.Y * 0.2),
-                                randomGen:NextNumber(-primaryPart.Size.Z * 0.45, primaryPart.Size.Z * 0.45)
-                        )
-                        attachment.Position = offset
-                end
+		local currentTime = tick()
+		if (currentTime - (state.lastLeakOffsetTime or 0)) > SUB_LEAK_OFFSET_INTERVAL then
+			state.lastLeakOffsetTime = currentTime
+			local randomGen = state.shakeRandom or Random.new()
+			local offset = Vector3.new(
+				randomGen:NextNumber(-primaryPart.Size.X * 0.45, primaryPart.Size.X * 0.45),
+				randomGen:NextNumber(-primaryPart.Size.Y * 0.45, primaryPart.Size.Y * 0.2),
+				randomGen:NextNumber(-primaryPart.Size.Z * 0.45, primaryPart.Size.Z * 0.45)
+			)
+			attachment.Position = offset
+		end
 
-                local emitter = state.damageEmitter
-                if not emitter or emitter.Parent ~= attachment then
-                        emitter = Instance.new("ParticleEmitter")
-                        emitter.Name = "HullLeakBubbles"
-                        emitter.Rate = 0
-                        emitter.Speed = NumberRange.new(5, 9)
-                        emitter.Lifetime = NumberRange.new(0.8, 1.4)
-                        emitter.Size = NumberSequence.new({
-                                NumberSequenceKeypoint.new(0, 0.4),
-                                NumberSequenceKeypoint.new(0.5, 0.9),
-                                NumberSequenceKeypoint.new(1, 0.3)
-                        })
-                        emitter.Transparency = NumberSequence.new({
-                                NumberSequenceKeypoint.new(0, 0),
-                                NumberSequenceKeypoint.new(1, 1)
-                        })
-                        emitter.Color = ColorSequence.new(Color3.fromRGB(214, 238, 255))
-                        emitter.Acceleration = Vector3.new(0, 14, 0)
-                        emitter.SpreadAngle = Vector2.new(45, 45)
-                        emitter.Parent = attachment
-                        state.damageEmitter = emitter
-                        state.lastLeakEmissionRate = 0
-                end
+		local emitter = state.damageEmitter
+		if not emitter or emitter.Parent ~= attachment then
+			emitter = Instance.new("ParticleEmitter")
+			emitter.Name = "HullLeakBubbles"
+			emitter.Rate = 0
+			emitter.Speed = NumberRange.new(5, 9)
+			emitter.Lifetime = NumberRange.new(0.8, 1.4)
+			emitter.Size = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0.4),
+				NumberSequenceKeypoint.new(0.5, 0.9),
+				NumberSequenceKeypoint.new(1, 0.3)
+			})
+			emitter.Transparency = NumberSequence.new({
+				NumberSequenceKeypoint.new(0, 0),
+				NumberSequenceKeypoint.new(1, 1)
+			})
+			emitter.Color = ColorSequence.new(Color3.fromRGB(214, 238, 255))
+			emitter.Acceleration = Vector3.new(0, 14, 0)
+			emitter.SpreadAngle = Vector2.new(45, 45)
+			emitter.Parent = attachment
+			state.damageEmitter = emitter
+			state.lastLeakEmissionRate = 0
+		end
 
-                local emissionRate = math.clamp(30 + (1 - integrityRatio) * SUB_LEAK_MAX_RATE, 20, SUB_LEAK_MAX_RATE)
-                if math.abs((state.lastLeakEmissionRate or 0) - emissionRate) > 1 then
-                        state.damageEmitter.Rate = emissionRate
-                        state.lastLeakEmissionRate = emissionRate
-                end
+		local emissionRate = math.clamp(30 + (1 - integrityRatio) * SUB_LEAK_MAX_RATE, 20, SUB_LEAK_MAX_RATE)
+		if math.abs((state.lastLeakEmissionRate or 0) - emissionRate) > 1 then
+			state.damageEmitter.Rate = emissionRate
+			state.lastLeakEmissionRate = emissionRate
+		end
 
-                local shouldEnableEmitter = emissionRate > 0
-                if state.damageEmitter.Enabled ~= shouldEnableEmitter then
-                        state.damageEmitter.Enabled = shouldEnableEmitter
-                end
-        elseif state.damageEmitter then
-                if state.damageEmitter.Rate ~= 0 then
-                        state.damageEmitter.Rate = 0
-                end
-                if state.damageEmitter.Enabled then
-                        state.damageEmitter.Enabled = false
-                end
-                state.lastLeakEmissionRate = 0
-        end
+		local shouldEnableEmitter = emissionRate > 0
+		if state.damageEmitter.Enabled ~= shouldEnableEmitter then
+			state.damageEmitter.Enabled = shouldEnableEmitter
+		end
+	elseif state.damageEmitter then
+		if state.damageEmitter.Rate ~= 0 then
+			state.damageEmitter.Rate = 0
+		end
+		if state.damageEmitter.Enabled then
+			state.damageEmitter.Enabled = false
+		end
+		state.lastLeakEmissionRate = 0
+	end
 
-        if integrityRatio < SUB_WARNING_LIGHT_THRESHOLD then
-                local light = state.warningLight
-                if not light or light.Parent ~= primaryPart then
-                        light = Instance.new("PointLight")
-                        light.Name = "HullWarningLight"
-                        light.Color = SUB_WARNING_LIGHT_COLOR
-                        light.Shadows = false
-                        light.Range = SUB_WARNING_LIGHT_BASE_RANGE
-                        light.Brightness = SUB_WARNING_LIGHT_MIN_BRIGHTNESS
-                        light.Enabled = true
-                        light.Parent = primaryPart
-                        state.warningLight = light
-                        state.lastWarningRange = light.Range
-                        state.lastWarningBrightness = light.Brightness
-                end
+	if integrityRatio < SUB_WARNING_LIGHT_THRESHOLD then
+		local light = state.warningLight
+		if not light or light.Parent ~= primaryPart then
+			light = Instance.new("PointLight")
+			light.Name = "HullWarningLight"
+			light.Color = SUB_WARNING_LIGHT_COLOR
+			light.Shadows = false
+			light.Range = SUB_WARNING_LIGHT_BASE_RANGE
+			light.Brightness = SUB_WARNING_LIGHT_MIN_BRIGHTNESS
+			light.Enabled = true
+			light.Parent = primaryPart
+			state.warningLight = light
+			state.lastWarningRange = light.Range
+			state.lastWarningBrightness = light.Brightness
+		end
 
-                local pulse = 0.5 + 0.5 * math.sin((tick() * SUB_WARNING_LIGHT_PULSE_SPEED) + (state.warningPhase or 0))
-                local intensityFactor = (1 - integrityRatio)
-                if not light.Enabled then
-                        light.Enabled = true
-                end
+		local pulse = 0.5 + 0.5 * math.sin((tick() * SUB_WARNING_LIGHT_PULSE_SPEED) + (state.warningPhase or 0))
+		local intensityFactor = (1 - integrityRatio)
+		if not light.Enabled then
+			light.Enabled = true
+		end
 
-                local targetRange = SUB_WARNING_LIGHT_BASE_RANGE
-                        + intensityFactor * (SUB_WARNING_LIGHT_MAX_RANGE - SUB_WARNING_LIGHT_BASE_RANGE)
-                if math.abs((state.lastWarningRange or 0) - targetRange) > 0.25 then
-                        light.Range = targetRange
-                        state.lastWarningRange = targetRange
-                end
+		local targetRange = SUB_WARNING_LIGHT_BASE_RANGE
+			+ intensityFactor * (SUB_WARNING_LIGHT_MAX_RANGE - SUB_WARNING_LIGHT_BASE_RANGE)
+		if math.abs((state.lastWarningRange or 0) - targetRange) > 0.25 then
+			light.Range = targetRange
+			state.lastWarningRange = targetRange
+		end
 
-                local targetBrightness = SUB_WARNING_LIGHT_MIN_BRIGHTNESS
-                        + pulse * (SUB_WARNING_LIGHT_MAX_BRIGHTNESS - SUB_WARNING_LIGHT_MIN_BRIGHTNESS) * intensityFactor
-                if math.abs((state.lastWarningBrightness or 0) - targetBrightness) > 0.25 then
-                        light.Brightness = targetBrightness
-                        state.lastWarningBrightness = targetBrightness
-                end
+		local targetBrightness = SUB_WARNING_LIGHT_MIN_BRIGHTNESS
+			+ pulse * (SUB_WARNING_LIGHT_MAX_BRIGHTNESS - SUB_WARNING_LIGHT_MIN_BRIGHTNESS) * intensityFactor
+		if math.abs((state.lastWarningBrightness or 0) - targetBrightness) > 0.25 then
+			light.Brightness = targetBrightness
+			state.lastWarningBrightness = targetBrightness
+		end
 
-        elseif state.warningLight then
-                if state.warningLight.Enabled then
-                        state.warningLight.Enabled = false
-                end
-        end
+	elseif state.warningLight then
+		if state.warningLight.Enabled then
+			state.warningLight.Enabled = false
+		end
+	end
 
-        if jitterAllowance == 0 then
-                jitterAllowance = previousStressOffset.Magnitude
-                state.lastStressOffset = ZERO_VECTOR
-                state.lastStressOffsetDelta = jitterAllowance
-        end
+	if jitterAllowance == 0 then
+		jitterAllowance = previousStressOffset.Magnitude
+		state.lastStressOffset = ZERO_VECTOR
+		state.lastStressOffsetDelta = jitterAllowance
+	end
 
-        if jitterAllowance < 0.05 then
-                jitterAllowance = 0
-                state.lastStressOffsetDelta = 0
-        end
+	if jitterAllowance < 0.05 then
+		jitterAllowance = 0
+		state.lastStressOffsetDelta = 0
+	end
 
-        state.currentJitterAllowance = jitterAllowance
+	state.currentJitterAllowance = jitterAllowance
 
-        return targetCFrame
+	return targetCFrame
 end
 
 local function CreateSubmarineImplosionDebris(boat, primaryPart)
-        if not boat or not primaryPart then
-                return
-        end
+	if not boat or not primaryPart then
+		return
+	end
 
-        local randomGen = Random.new()
-        local created = 0
+	local randomGen = Random.new()
+	local created = 0
 
-        for _, desc in ipairs(boat:GetDescendants()) do
-                if created >= SUB_IMPL_DEBRIS_MAX_COUNT then
-                        break
-                end
+	for _, desc in ipairs(boat:GetDescendants()) do
+		if created >= SUB_IMPL_DEBRIS_MAX_COUNT then
+			break
+		end
 
-                if desc:IsA("BasePart") and desc.Transparency < 1 and desc.Size.Magnitude > 0 then
-                        local success, debrisPart = pcall(function()
-                                return desc:Clone()
-                        end)
+		if desc:IsA("BasePart") and desc.Transparency < 1 and desc.Size.Magnitude > 0 then
+			local success, debrisPart = pcall(function()
+				return desc:Clone()
+			end)
 
-                        if success and debrisPart and debrisPart:IsA("BasePart") then
-                                created += 1
+			if success and debrisPart and debrisPart:IsA("BasePart") then
+				created += 1
 
-                                debrisPart.Name = desc.Name .. "_Debris"
-                                debrisPart.Anchored = false
-                                debrisPart.CanCollide = false
-                                debrisPart.CanTouch = false
-                                debrisPart.CanQuery = false
-                                debrisPart.Massless = false
-                                debrisPart.CFrame = desc.CFrame
-                                debrisPart.Parent = workspace
-                                debrisPart:BreakJoints()
+				debrisPart.Name = desc.Name .. "_Debris"
+				debrisPart.Anchored = false
+				debrisPart.CanCollide = false
+				debrisPart.CanTouch = false
+				debrisPart.CanQuery = false
+				debrisPart.Massless = false
+				debrisPart.CFrame = desc.CFrame
+				debrisPart.Parent = workspace
+				debrisPart:BreakJoints()
 
-                                for _, child in ipairs(debrisPart:GetDescendants()) do
-                                        if child:IsA("Weld") or child:IsA("Motor6D") or child:IsA("Constraint") or child:IsA("BodyMover") then
-                                                child:Destroy()
-                                        elseif child:IsA("ParticleEmitter") then
-                                                child.Enabled = false
-                                                child.Rate = 0
-                                        elseif child:IsA("Light") then
-                                                child.Enabled = false
-                                        end
-                                end
+				for _, child in ipairs(debrisPart:GetDescendants()) do
+					if child:IsA("Weld") or child:IsA("Motor6D") or child:IsA("Constraint") or child:IsA("BodyMover") then
+						child:Destroy()
+					elseif child:IsA("ParticleEmitter") then
+						child.Enabled = false
+						child.Rate = 0
+					elseif child:IsA("Light") then
+						child.Enabled = false
+					end
+				end
 
-                                local direction = (debrisPart.Position - primaryPart.Position)
-                                if direction.Magnitude < 0.001 then
-                                        direction = Vector3.new(
-                                                randomGen:NextNumber(-1, 1),
-                                                randomGen:NextNumber(-1, 1),
-                                                randomGen:NextNumber(-1, 1)
-                                        )
-                                end
-                                direction = direction.Unit
+				local direction = (debrisPart.Position - primaryPart.Position)
+				if direction.Magnitude < 0.001 then
+					direction = Vector3.new(
+						randomGen:NextNumber(-1, 1),
+						randomGen:NextNumber(-1, 1),
+						randomGen:NextNumber(-1, 1)
+					)
+				end
+				direction = direction.Unit
 
-                                local speed = randomGen:NextNumber(SUB_IMPL_DEBRIS_MIN_SPEED, SUB_IMPL_DEBRIS_MAX_SPEED)
-                                local angular = SUB_IMPL_DEBRIS_MAX_ANGULAR
+				local speed = randomGen:NextNumber(SUB_IMPL_DEBRIS_MIN_SPEED, SUB_IMPL_DEBRIS_MAX_SPEED)
+				local angular = SUB_IMPL_DEBRIS_MAX_ANGULAR
 
-                                debrisPart.AssemblyLinearVelocity = direction * speed
-                                debrisPart.AssemblyAngularVelocity = Vector3.new(
-                                        randomGen:NextNumber(-angular, angular),
-                                        randomGen:NextNumber(-angular, angular),
-                                        randomGen:NextNumber(-angular, angular)
-                                )
+				debrisPart.AssemblyLinearVelocity = direction * speed
+				debrisPart.AssemblyAngularVelocity = Vector3.new(
+					randomGen:NextNumber(-angular, angular),
+					randomGen:NextNumber(-angular, angular),
+					randomGen:NextNumber(-angular, angular)
+				)
 
-                                if TweenService then
-                                        local fadeTween = TweenService:Create(
-                                                debrisPart,
-                                                TweenInfo.new(SUB_IMPL_DEBRIS_FADE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-                                                {Transparency = 1}
-                                        )
-                                        fadeTween:Play()
-                                end
+				if TweenService then
+					local fadeTween = TweenService:Create(
+						debrisPart,
+						TweenInfo.new(SUB_IMPL_DEBRIS_FADE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+						{Transparency = 1}
+					)
+					fadeTween:Play()
+				end
 
-                                Debris:AddItem(debrisPart, SUB_IMPL_DEBRIS_LIFETIME)
-                        elseif debrisPart then
-                                debrisPart:Destroy()
-                        end
-                end
-        end
+				Debris:AddItem(debrisPart, SUB_IMPL_DEBRIS_LIFETIME)
+			elseif debrisPart then
+				debrisPart:Destroy()
+			end
+		end
+	end
 end
 
 TriggerSubmarineImplosion = function(player, boat, config)
-        local state = SubmarineStates[player]
-        if state then
-                if state.isImploding then
-                        return
-                end
-                state.isImploding = true
-        end
+	local state = SubmarineStates[player]
+	if state then
+		if state.isImploding then
+			return
+		end
+		state.isImploding = true
+	end
 
-        local playerName = player and player.Name or "Unknown"
-        print(('[Submarine] CRITICAL: %s\'s submarine has imploded under pressure!'):format(playerName))
+	local playerName = player and player.Name or "Unknown"
+	print(('[Submarine] CRITICAL: %s\'s submarine has imploded under pressure!'):format(playerName))
 
-        local primaryPart = boat and boat.PrimaryPart
-        if primaryPart then
-                local effectPart = Instance.new("Part")
-                effectPart.Name = "SubImplosionEffect"
-                effectPart.Anchored = true
-                effectPart.CanCollide = false
-                effectPart.Transparency = 1
-                effectPart.Size = Vector3.new(1, 1, 1)
-                effectPart.CFrame = primaryPart.CFrame
-                effectPart.Parent = workspace
+	local primaryPart = boat and boat.PrimaryPart
+	if primaryPart then
+		local effectPart = Instance.new("Part")
+		effectPart.Name = "SubImplosionEffect"
+		effectPart.Anchored = true
+		effectPart.CanCollide = false
+		effectPart.Transparency = 1
+		effectPart.Size = Vector3.new(1, 1, 1)
+		effectPart.CFrame = primaryPart.CFrame
+		effectPart.Parent = workspace
 
-                local bubbleBurst = Instance.new("ParticleEmitter")
-                bubbleBurst.Name = "ImplosionBubbles"
-                bubbleBurst.Rate = 0
-                bubbleBurst.Speed = NumberRange.new(25, 35)
-                bubbleBurst.Lifetime = NumberRange.new(0.35, 0.6)
-                bubbleBurst.Size = NumberSequence.new({
-                        NumberSequenceKeypoint.new(0, 6),
-                        NumberSequenceKeypoint.new(1, 0)
-                })
-                bubbleBurst.Transparency = NumberSequence.new({
-                        NumberSequenceKeypoint.new(0, 0),
-                        NumberSequenceKeypoint.new(1, 1)
-                })
-                bubbleBurst.Acceleration = Vector3.new(0, -60, 0)
-                bubbleBurst.Color = ColorSequence.new(Color3.fromRGB(210, 235, 255), Color3.fromRGB(32, 120, 255))
-                bubbleBurst.SpreadAngle = Vector2.new(360, 360)
-                bubbleBurst.LightEmission = 0.8
-                bubbleBurst.Parent = effectPart
-                bubbleBurst:Emit(200)
+		local bubbleBurst = Instance.new("ParticleEmitter")
+		bubbleBurst.Name = "ImplosionBubbles"
+		bubbleBurst.Rate = 0
+		bubbleBurst.Speed = NumberRange.new(25, 35)
+		bubbleBurst.Lifetime = NumberRange.new(0.35, 0.6)
+		bubbleBurst.Size = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 6),
+			NumberSequenceKeypoint.new(1, 0)
+		})
+		bubbleBurst.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0),
+			NumberSequenceKeypoint.new(1, 1)
+		})
+		bubbleBurst.Acceleration = Vector3.new(0, -60, 0)
+		bubbleBurst.Color = ColorSequence.new(Color3.fromRGB(210, 235, 255), Color3.fromRGB(32, 120, 255))
+		bubbleBurst.SpreadAngle = Vector2.new(360, 360)
+		bubbleBurst.LightEmission = 0.8
+		bubbleBurst.Parent = effectPart
+		bubbleBurst:Emit(200)
 
-                local shockwave = Instance.new("ParticleEmitter")
-                shockwave.Name = "ImplosionShockwave"
-                shockwave.Rate = 0
-                shockwave.Speed = NumberRange.new(15, 18)
-                shockwave.Lifetime = NumberRange.new(0.2, 0.35)
-                shockwave.Size = NumberSequence.new({
-                        NumberSequenceKeypoint.new(0, 2),
-                        NumberSequenceKeypoint.new(0.3, 8),
-                        NumberSequenceKeypoint.new(1, 12)
-                })
-                shockwave.Transparency = NumberSequence.new({
-                        NumberSequenceKeypoint.new(0, 0),
-                        NumberSequenceKeypoint.new(1, 1)
-                })
-                shockwave.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
-                shockwave.LightEmission = 1
-                shockwave.Parent = effectPart
-                shockwave:Emit(35)
+		local shockwave = Instance.new("ParticleEmitter")
+		shockwave.Name = "ImplosionShockwave"
+		shockwave.Rate = 0
+		shockwave.Speed = NumberRange.new(15, 18)
+		shockwave.Lifetime = NumberRange.new(0.2, 0.35)
+		shockwave.Size = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 2),
+			NumberSequenceKeypoint.new(0.3, 8),
+			NumberSequenceKeypoint.new(1, 12)
+		})
+		shockwave.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0),
+			NumberSequenceKeypoint.new(1, 1)
+		})
+		shockwave.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
+		shockwave.LightEmission = 1
+		shockwave.Parent = effectPart
+		shockwave:Emit(35)
 
-                Debris:AddItem(effectPart, 3)
+		Debris:AddItem(effectPart, 3)
 
-                local implosionFlash = Instance.new("Explosion")
-                implosionFlash.Name = "SubImplosionFlash"
-                implosionFlash.BlastPressure = 0
-                implosionFlash.BlastRadius = 0
-                implosionFlash.DestroyJointRadiusPercent = 0
-                implosionFlash.Position = primaryPart.Position
-                implosionFlash.Visible = true
-                implosionFlash.Parent = workspace
+		local implosionFlash = Instance.new("Explosion")
+		implosionFlash.Name = "SubImplosionFlash"
+		implosionFlash.BlastPressure = 0
+		implosionFlash.BlastRadius = 0
+		implosionFlash.DestroyJointRadiusPercent = 0
+		implosionFlash.Position = primaryPart.Position
+		implosionFlash.Visible = true
+		implosionFlash.Parent = workspace
 
-                CreateSubmarineImplosionDebris(boat, primaryPart)
+		CreateSubmarineImplosionDebris(boat, primaryPart)
 
-                if state.damageEmitter then
-                        state.damageEmitter.Rate = 0
-                        state.damageEmitter.Enabled = false
-                end
-                if state.warningLight then
-                        state.warningLight.Enabled = false
-                end
+		if state.damageEmitter then
+			state.damageEmitter.Rate = 0
+			state.damageEmitter.Enabled = false
+		end
+		if state.warningLight then
+			state.warningLight.Enabled = false
+		end
 
-                for _, desc in ipairs(boat:GetDescendants()) do
-                        if desc:IsA("BasePart") then
-                                desc.CanCollide = false
-                                desc.Transparency = 1
-                        elseif desc:IsA("ParticleEmitter") then
-                                desc.Rate = 0
-                        end
-                end
-        end
+		for _, desc in ipairs(boat:GetDescendants()) do
+			if desc:IsA("BasePart") then
+				desc.CanCollide = false
+				desc.Transparency = 1
+			elseif desc:IsA("ParticleEmitter") then
+				desc.Rate = 0
+			end
+		end
+	end
 
-        task.defer(function()
-                CleanupBoat(player)
-        end)
+	task.defer(function()
+		CleanupBoat(player)
+	end)
 end
 
 local function ApplySubmarineDepthDamage(player, boat, config, targetPosition, deltaTime)
-        if not config or not config.MaxDepth then
-                return false
-        end
+	if not config or not config.MaxDepth then
+		return false
+	end
 
-        local state = GetOrCreateSubmarineState(player, config)
-        if state.isImploding then
-                return true
-        end
+	local state = GetOrCreateSubmarineState(player, config)
+	if state.isImploding then
+		return true
+	end
 
-        local depth = SubmarinePhysics.GetDepth(targetPosition)
-        state.lastDepth = depth
+	local depth = SubmarinePhysics.GetDepth(targetPosition)
+	state.lastDepth = depth
 
-        local overDepth = depth - config.MaxDepth
-        if overDepth <= 0 then
-                if state.wasOverDepth then
-                        state.wasOverDepth = false
-                        state.timeOverDepth = math.max(state.timeOverDepth - deltaTime, 0)
+	local overDepth = depth - config.MaxDepth
+	if overDepth <= 0 then
+		if state.wasOverDepth then
+			state.wasOverDepth = false
+			state.timeOverDepth = math.max(state.timeOverDepth - deltaTime, 0)
 
-                        if (tick() - (state.lastSafeMessageTime or 0)) > SUB_SAFE_RECOVERY_COOLDOWN then
-                                local playerName = player and player.Name or "Unknown"
-                                print(('[Submarine] Hull integrity stabilizing for %s\'s submarine.'):format(playerName))
-                                state.lastSafeMessageTime = tick()
-                        end
-                else
-                        state.timeOverDepth = math.max(state.timeOverDepth - deltaTime, 0)
-                end
+			if (tick() - (state.lastSafeMessageTime or 0)) > SUB_SAFE_RECOVERY_COOLDOWN then
+				local playerName = player and player.Name or "Unknown"
+				print(('[Submarine] Hull integrity stabilizing for %s\'s submarine.'):format(playerName))
+				state.lastSafeMessageTime = tick()
+			end
+		else
+			state.timeOverDepth = math.max(state.timeOverDepth - deltaTime, 0)
+		end
 
-                if state.health < state.maxHealth then
-                        local regenAmount = state.maxHealth * SUB_HEALTH_RECOVERY_RATE * deltaTime
-                        state.health = math.min(state.maxHealth, state.health + regenAmount)
-                        if state.health >= state.maxHealth then
-                                state.lastHealthPercentPrint = 100
-                        end
-                end
+		if state.health < state.maxHealth then
+			local regenAmount = state.maxHealth * SUB_HEALTH_RECOVERY_RATE * deltaTime
+			state.health = math.min(state.maxHealth, state.health + regenAmount)
+			if state.health >= state.maxHealth then
+				state.lastHealthPercentPrint = 100
+			end
+		end
 
-                UpdateSubmarineStressMetrics(state)
-                return false
-        end
+		UpdateSubmarineStressMetrics(state)
+		return false
+	end
 
-        state.wasOverDepth = true
-        state.timeOverDepth = state.timeOverDepth + deltaTime
+	state.wasOverDepth = true
+	state.timeOverDepth = state.timeOverDepth + deltaTime
 
-        if (tick() - (state.lastWarningTime or 0)) > SUB_DEPTH_WARNING_COOLDOWN then
-                local playerName = player and player.Name or "Unknown"
-                print(('[Submarine] WARNING: %s\'s submarine has exceeded its safe depth! Hull under extreme pressure.'):format(playerName))
-                state.lastWarningTime = tick()
-        end
+	if (tick() - (state.lastWarningTime or 0)) > SUB_DEPTH_WARNING_COOLDOWN then
+		local playerName = player and player.Name or "Unknown"
+		print(('[Submarine] WARNING: %s\'s submarine has exceeded its safe depth! Hull under extreme pressure.'):format(playerName))
+		state.lastWarningTime = tick()
+	end
 
-        local safeMaxDepth = math.max(config.MaxDepth, 1)
-        local depthRatio = overDepth / safeMaxDepth
-        local sustainedFactor = state.timeOverDepth * SUB_PRESSURE_TIME_MULTIPLIER
-        local damageRate = SUB_PRESSURE_BASE_DAMAGE + (depthRatio * SUB_PRESSURE_DEPTH_MULTIPLIER) + sustainedFactor
-        local damage = damageRate * deltaTime
-        state.health = math.max(state.health - damage, 0)
+	local safeMaxDepth = math.max(config.MaxDepth, 1)
+	local depthRatio = overDepth / safeMaxDepth
+	local sustainedFactor = state.timeOverDepth * SUB_PRESSURE_TIME_MULTIPLIER
+	local damageRate = SUB_PRESSURE_BASE_DAMAGE + (depthRatio * SUB_PRESSURE_DEPTH_MULTIPLIER) + sustainedFactor
+	local damage = damageRate * deltaTime
+	state.health = math.max(state.health - damage, 0)
 
-        local currentPercent = math.clamp(math.floor((state.health / state.maxHealth) * 100), 0, 100)
-        if not state.lastHealthPercentPrint or currentPercent <= state.lastHealthPercentPrint - SUB_HEALTH_WARNING_STEP then
-                local playerName = player and player.Name or "Unknown"
-                print(('[Submarine] Hull integrity at %d%% for %s\'s submarine.'):format(currentPercent, playerName))
-                state.lastHealthPercentPrint = currentPercent
-        end
+	local currentPercent = math.clamp(math.floor((state.health / state.maxHealth) * 100), 0, 100)
+	if not state.lastHealthPercentPrint or currentPercent <= state.lastHealthPercentPrint - SUB_HEALTH_WARNING_STEP then
+		local playerName = player and player.Name or "Unknown"
+		print(('[Submarine] Hull integrity at %d%% for %s\'s submarine.'):format(currentPercent, playerName))
+		state.lastHealthPercentPrint = currentPercent
+	end
 
-        UpdateSubmarineStressMetrics(state)
-        if state.health <= 0 then
-                TriggerSubmarineImplosion(player, boat, config)
-                return true
-        end
+	UpdateSubmarineStressMetrics(state)
+	if state.health <= 0 then
+		TriggerSubmarineImplosion(player, boat, config)
+		return true
+	end
 
-        return false
+	return false
 end
 
 -- Process cleanup queue
 local function ProcessCleanupQueue()
-        for _, player in ipairs(BOAT_CLEANUP_QUEUE) do
-                CleanupBoat(player)
-        end
-        BOAT_CLEANUP_QUEUE = {}
+	for _, player in ipairs(BOAT_CLEANUP_QUEUE) do
+		CleanupBoat(player)
+	end
+	BOAT_CLEANUP_QUEUE = {}
 end
 
 -- Spawn boat function with improved validation
@@ -1353,44 +1349,19 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 		return false, "Boat model not found"
 	end
 
-        local boat
-        local success = pcall(function()
-                boat = boatTemplate:Clone()
-        end)
+	local boat
+	local success = pcall(function()
+		boat = boatTemplate:Clone()
+	end)
 
-        if not success or not boat then
-                return false, "Failed to create boat"
-        end
+	if not success or not boat then
+		return false, "Failed to create boat"
+	end
 
-        local waterLevelPart = boat:FindFirstChild("WaterLevel", true)
-        if not waterLevelPart or not waterLevelPart:IsA("BasePart") then
-                boat:Destroy()
-                return false, "Boat model missing WaterLevel part"
-        end
-
-        if not boat.PrimaryPart then
-                local primaryCandidate = waterLevelPart:IsA("BasePart") and waterLevelPart or nil
-                if primaryCandidate then
-                        boat.PrimaryPart = primaryCandidate
-                end
-        end
-
-        local primaryPart = boat.PrimaryPart
-        if not primaryPart or not primaryPart:IsA("BasePart") then
-                boat:Destroy()
-                return false, "Boat model has no PrimaryPart"
-        end
-
-        local waterLevelLocalOffset = primaryPart.CFrame:PointToObjectSpace(waterLevelPart.Position)
-        local waterLevelOffset = {
-                vertical = -waterLevelLocalOffset.Y,
-                localOffset = waterLevelLocalOffset,
-        }
-
-        -- Set attributes
-        local boatId = HttpService:GenerateGUID(false)
-        boat:SetAttribute("BoatId", boatId)
-        boat:SetAttribute("OwnerId", tostring(player.UserId))
+	-- Set attributes
+	local boatId = HttpService:GenerateGUID(false)
+	boat:SetAttribute("BoatId", boatId)
+	boat:SetAttribute("OwnerId", tostring(player.UserId))
 	boat:SetAttribute("OwnerName", player.Name)
 	boat:SetAttribute("BoatType", boatType)
 	boat:SetAttribute("SpawnTime", tick())
@@ -1425,38 +1396,41 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 		end
 	end
 
-        local waterLevel = getWaterLevel(spawnPosition)
-        local targetWaterOffset = waterLevelOffset.vertical
-        if targetWaterOffset == nil then
-                targetWaterOffset = config.Type == "Submarine" and -1 or 2
-        end
-        spawnPosition = Vector3.new(spawnPosition.X, waterLevel + targetWaterOffset, spawnPosition.Z)
+	local waterLevel = getWaterLevel(spawnPosition)
+	if config.Type == "Submarine" then
+		spawnPosition = Vector3.new(spawnPosition.X, waterLevel - 1, spawnPosition.Z)
+	else
+		spawnPosition = Vector3.new(spawnPosition.X, waterLevel + 2, spawnPosition.Z)
+	end
 
-        local desiredYaw = math.atan2(spawnDirection.X, -spawnDirection.Z)
-        boat:SetPrimaryPartCFrame(CFrame.new(spawnPosition) * CFrame.Angles(0, desiredYaw, 0))
+	local desiredYaw = math.atan2(spawnDirection.X, -spawnDirection.Z)
+	boat:SetPrimaryPartCFrame(CFrame.new(spawnPosition) * CFrame.Angles(0, desiredYaw, 0))
 
-        -- Set up physics
-        for _, part in pairs(boat:GetDescendants()) do
-                if part:IsA("BasePart") and part.Name ~= "BoatControlPart" then
-                        local originalCanCollide = part.CanCollide
-                        part:SetAttribute("OriginalCanCollide", originalCanCollide)
-                        part.Anchored = false
+	-- Set up physics
+	for _, part in pairs(boat:GetDescendants()) do
+		if part:IsA("BasePart") and part.Name ~= "BoatControlPart" then
+			local originalCanCollide = part.CanCollide
+			part:SetAttribute("OriginalCanCollide", originalCanCollide)
+			part.Anchored = false
 
-                        if part == primaryPart then
-                                part.RootPriority = config.Type == "Submarine" and 127 or 100
+			if part == boat.PrimaryPart then
+				part.Massless = false
+				part.RootPriority = config.Type == "Submarine" and 127 or 100
 
-                                local density = 0.3 + (config.Weight * 0.05)
-                                local properties = PhysicalProperties.new(
-                                        config.Type == "Submarine" and density * 1.5 or density,
-                                        0.3,
-                                        0.1,
-                                        1,
-                                        1
-                                )
-                                part.CustomPhysicalProperties = properties
-                        end
-                end
-        end
+				local density = 0.3 + (config.Weight * 0.05)
+				local properties = PhysicalProperties.new(
+					config.Type == "Submarine" and density * 1.5 or density,
+					0.3,
+					0.1,
+					1,
+					1
+				)
+				part.CustomPhysicalProperties = properties
+			else
+				part.Massless = true
+			end
+		end
+	end
 
 	local controlPart = SetupBoatPhysics(boat, config)
 	if not controlPart then
@@ -1482,30 +1456,28 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 	seat.Anchored = false
 
 	-- Initialize acceleration system for this boat
-        InitializeBoatAcceleration(player, boatType)
+	InitializeBoatAcceleration(player, boatType)
 
-        ActiveBoats[player] = boat
-        BoatWaterLevelOffsets[boat] = waterLevelOffset
-        boat:SetAttribute("WaterLevelTargetOffset", waterLevelOffset.vertical)
-        BoatConnections[player] = {}
-        BoatLastActivity[player] = tick()
+	ActiveBoats[player] = boat
+	BoatConnections[player] = {}
+	BoatLastActivity[player] = tick()
 
-        if config.Type == "Submarine" then
-                local state = GetOrCreateSubmarineState(player, config)
-                state.health = state.maxHealth
-                state.lastHealthPercentPrint = 100
-                state.timeOverDepth = 0
-                state.wasOverDepth = false
-                local now = tick()
-                state.lastWarningTime = now - SUB_DEPTH_WARNING_COOLDOWN
-                state.lastSafeMessageTime = now
-                state.isImploding = false
-        else
-                SubmarineStates[player] = nil
-        end
+	if config.Type == "Submarine" then
+		local state = GetOrCreateSubmarineState(player, config)
+		state.health = state.maxHealth
+		state.lastHealthPercentPrint = 100
+		state.timeOverDepth = 0
+		state.wasOverDepth = false
+		local now = tick()
+		state.lastWarningTime = now - SUB_DEPTH_WARNING_COOLDOWN
+		state.lastSafeMessageTime = now
+		state.isImploding = false
+	else
+		SubmarineStates[player] = nil
+	end
 
-        local function onOccupantChanged()
-                local humanoid = seat.Occupant
+	local function onOccupantChanged()
+		local humanoid = seat.Occupant
 		if humanoid then
 			local seatPlayer = Players:GetPlayerFromCharacter(humanoid.Parent)
 			if seatPlayer and seatPlayer ~= player then
@@ -1524,37 +1496,37 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 	end
 
 	BoatConnections[player].occupant = seat:GetPropertyChangedSignal("Occupant"):Connect(onOccupantChanged)
-        boat.Parent = workspace
+	boat.Parent = workspace
 
-        if config.Type == "Submarine" then
-                SetupSubmarineCollisionMonitoring(player, boat, config)
-        end
+	if config.Type == "Submarine" then
+		SetupSubmarineCollisionMonitoring(player, boat, config)
+	end
 
-        local teleportPart = boat:FindFirstChild("TeleportPart", true)
-        if teleportPart and teleportPart:IsA("BasePart") then
-                BoatSecurity.RegisterSafeTeleport(player, boat.PrimaryPart and boat.PrimaryPart.Position or teleportPart.Position)
+	local teleportPart = boat:FindFirstChild("TeleportPart", true)
+	if teleportPart and teleportPart:IsA("BasePart") then
+		BoatSecurity.RegisterSafeTeleport(player, boat.PrimaryPart and boat.PrimaryPart.Position or teleportPart.Position)
 
-                task.defer(function()
-                        local character = player.Character
-                        if not character then
-                                return
-                        end
+		task.defer(function()
+			local character = player.Character
+			if not character then
+				return
+			end
 
-                        local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
-                        if not humanoidRootPart then
-                                return
-                        end
+			local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+			if not humanoidRootPart then
+				return
+			end
 
-                        local teleportCFrame = teleportPart.CFrame
-                        if character.Parent then
-                                character:PivotTo(teleportCFrame)
-                        else
-                                humanoidRootPart.CFrame = teleportCFrame
-                        end
-                end)
-        end
+			local teleportCFrame = teleportPart.CFrame
+			if character.Parent then
+				character:PivotTo(teleportCFrame)
+			else
+				humanoidRootPart.CFrame = teleportCFrame
+			end
+		end)
+	end
 
-        return true
+	return true
 end
 
 -- Despawn function
@@ -1565,245 +1537,224 @@ end
 
 -- ENHANCED CONTROL UPDATE WITH BETTER VALIDATION
 local function sanitizeControlAxis(value)
-        if typeof(value) ~= "number" then
-                return 0
-        end
+	if typeof(value) ~= "number" then
+		return 0
+	end
 
-        if value ~= value or math.abs(value) == math.huge then
-                return 0
-        end
+	if value ~= value or math.abs(value) == math.huge then
+		return 0
+	end
 
-        return math.clamp(value, -1, 1)
+	return math.clamp(value, -1, 1)
 end
 
 local function UpdateBoatControl(player, controls)
-        -- Better rate limiting
-        if not BoatSecurity.CheckRemoteRateLimit(player, "UpdateBoatControl", MAX_CONTROL_RATE) then
-                return
-        end
+	-- Better rate limiting
+	if not BoatSecurity.CheckRemoteRateLimit(player, "UpdateBoatControl", MAX_CONTROL_RATE) then
+		return
+	end
 
-        local boat = ActiveBoats[player]
-        if not boat or not boat.Parent then
-                return
-        end
+	local boat = ActiveBoats[player]
+	if not boat or not boat.Parent then
+		return
+	end
 
-        if not BoatSecurity.ValidateOwnership(player, boat) then
-                return
-        end
+	if not BoatSecurity.ValidateOwnership(player, boat) then
+		return
+	end
 
-        if not BoatControllers[player] or not BoatControllers[player].Parent then
-                return
-        end
+	if not BoatControllers[player] or not BoatControllers[player].Parent then
+		return
+	end
 
-        local boatType = boat:GetAttribute("BoatType")
-        local boatConfig = boatType and BoatConfig.GetBoatData(boatType) or nil
-        local isSubmarine = boatConfig and boatConfig.Type == "Submarine"
+	local boatType = boat:GetAttribute("BoatType")
+	local boatConfig = boatType and BoatConfig.GetBoatData(boatType) or nil
+	local isSubmarine = boatConfig and boatConfig.Type == "Submarine"
 
-        -- Validate inputs
-        local throttle = sanitizeControlAxis(controls.throttle)
-        local steer = sanitizeControlAxis(controls.steer)
-        local ascend = sanitizeControlAxis(controls.ascend)
-        local pitch = sanitizeControlAxis(controls.pitch)
-        local roll = sanitizeControlAxis(controls.roll)
+	-- Validate inputs
+	local throttle = sanitizeControlAxis(controls.throttle)
+	local steer = sanitizeControlAxis(controls.steer)
+	local ascend = sanitizeControlAxis(controls.ascend)
+	local pitch = sanitizeControlAxis(controls.pitch)
+	local roll = sanitizeControlAxis(controls.roll)
 
-        -- Validate speed from client with stricter checks
-        local clientSpeed = controls.currentSpeed
-        if clientSpeed ~= nil then
-                if typeof(clientSpeed) ~= "number" or clientSpeed ~= clientSpeed or math.abs(clientSpeed) == math.huge then
-                        warn("Invalid speed value from", player.Name)
-                        return
-                end
+	-- Validate speed from client with stricter checks
+	local clientSpeed = controls.currentSpeed
+	if clientSpeed ~= nil then
+		if typeof(clientSpeed) ~= "number" or clientSpeed ~= clientSpeed or math.abs(clientSpeed) == math.huge then
+			warn("Invalid speed value from", player.Name)
+			return
+		end
 
-        end
+	end
 
-        local accelData = BoatAccelerationData[player]
-        if clientSpeed and accelData then
-                local baseMax = math.abs(accelData.baseMaxSpeed or accelData.maxSpeed or 0)
-                local maxAllowed = math.abs(accelData.maxSpeed or baseMax)
+	local accelData = BoatAccelerationData[player]
+	if clientSpeed and accelData then
+		local baseMax = math.abs(accelData.baseMaxSpeed or accelData.maxSpeed or 0)
+		local maxAllowed = math.abs(accelData.maxSpeed or baseMax)
 
-                if isSubmarine then
-                        local stressMax = math.abs(accelData.currentStressMaxSpeed or accelData.maxSpeed or baseMax)
-                        maxAllowed = math.max(baseMax, stressMax)
-                        if maxAllowed == 0 then
-                                maxAllowed = baseMax
-                        end
+		if isSubmarine then
+			local stressMax = math.abs(accelData.currentStressMaxSpeed or accelData.maxSpeed or baseMax)
+			maxAllowed = math.max(baseMax, stressMax)
+			if maxAllowed == 0 then
+				maxAllowed = baseMax
+			end
 
-                        local margin = math.max(baseMax * SUB_CLIENT_SPEED_TOLERANCE, SUB_CLIENT_SPEED_MIN_MARGIN)
-                        maxAllowed += margin
-                end
+			local margin = math.max(baseMax * SUB_CLIENT_SPEED_TOLERANCE, SUB_CLIENT_SPEED_MIN_MARGIN)
+			maxAllowed += margin
+		end
 
-                if maxAllowed > 0 and math.abs(clientSpeed) > maxAllowed then
-                        -- Track violations
-                        PlayerViolations[player] = (PlayerViolations[player] or 0) + 1
+		if maxAllowed > 0 and math.abs(clientSpeed) > maxAllowed then
+			-- Track violations
+			PlayerViolations[player] = (PlayerViolations[player] or 0) + 1
 
-                        if PlayerViolations[player] > 50 then
-                                warn("Excessive speed violations from", player.Name)
-                                player:Kick("Movement security violation")
-                        end
-                        return
-                elseif PlayerViolations[player] then
-                        PlayerViolations[player] = math.max(PlayerViolations[player] - 0.25, 0)
-                end
-        end
+			if PlayerViolations[player] > 50 then
+				warn("Excessive speed violations from", player.Name)
+				player:Kick("Movement security violation")
+			end
+			return
+		elseif PlayerViolations[player] then
+			PlayerViolations[player] = math.max(PlayerViolations[player] - 0.25, 0)
+		end
+	end
 
 	if not BoatSecurity.ValidateInput(throttle, steer) then
 		warn("Invalid boat control input from", player.Name)
 		return
 	end
 
-        BoatControls[player] = {
-                throttle = throttle,
-                steer = steer,
-                ascend = ascend,
-                pitch = pitch,
-                roll = roll
+	BoatControls[player] = {
+		throttle = throttle,
+		steer = steer,
+		ascend = ascend,
+		pitch = pitch,
+		roll = roll
 	}
 
 	BoatLastActivity[player] = tick()
 end
 
 -- ENHANCED PHYSICS UPDATE WITH PERFORMANCE OPTIMIZATIONS
-local function UpdateBoatPhysics(player, boat, deltaTime, processedCharacters)
-        processedCharacters = processedCharacters or {}
-        if not boat or not boat.Parent then
-                CleanupBoat(player)
-                return
-        end
+local function UpdateBoatPhysics(player, boat, deltaTime)
+	if not boat or not boat.Parent then
+		CleanupBoat(player)
+		return
+	end
 
 	if not ValidateBoat(boat) then
 		CleanupBoat(player)
 		return
 	end
 
-        local controlPart = BoatControllers[player]
-        if not controlPart or not controlPart.Parent then
-                CleanupBoat(player)
-                return
-        end
+	local controlPart = BoatControllers[player]
+	if not controlPart or not controlPart.Parent then
+		CleanupBoat(player)
+		return
+	end
 
-        local seat = boat:FindFirstChildOfClass("VehicleSeat")
-        if not seat then
-                CleanupBoat(player)
-                return
-        end
+	local seat = boat:FindFirstChildOfClass("VehicleSeat")
+	if not seat then
+		CleanupBoat(player)
+		return
+	end
 
-        local config = BoatConfig.GetBoatData(boat:GetAttribute("BoatType"))
-        if not config then return end
+	local config = BoatConfig.GetBoatData(boat:GetAttribute("BoatType"))
+	if not config then return end
 
-        local accelData = BoatAccelerationData[player]
-        if not accelData then
-                InitializeBoatAcceleration(player, boat:GetAttribute("BoatType"))
-                accelData = BoatAccelerationData[player]
-                if not accelData then return end
-        end
+	local accelData = BoatAccelerationData[player]
+	if not accelData then
+		InitializeBoatAcceleration(player, boat:GetAttribute("BoatType"))
+		accelData = BoatAccelerationData[player]
+		if not accelData then return end
+	end
 
-        local primaryPart = boat.PrimaryPart
-        if not primaryPart then
-                CleanupBoat(player)
-                return
-        end
+	local primaryPart = boat.PrimaryPart
+	if not primaryPart then
+		CleanupBoat(player)
+		return
+	end
 
-        -- Performance: Check distance to nearest player for physics throttling
-        local shouldThrottle = true
-        local nearestPlayerDistance = math.huge
-        for _, otherPlayer in pairs(Players:GetPlayers()) do
-                if otherPlayer.Character and otherPlayer.Character:FindFirstChild("HumanoidRootPart") then
-                        local distance = (primaryPart.Position - otherPlayer.Character.HumanoidRootPart.Position).Magnitude
-                        if distance < nearestPlayerDistance then
-                                nearestPlayerDistance = distance
-                        end
-                        if distance < PHYSICS_THROTTLE_DISTANCE then
-                                shouldThrottle = false
-                                if distance <= PASSIVE_WAVE_DISTANCE then
-                                        break
-                                end
-                        end
-                end
-        end
+	-- Performance: Check distance to nearest player for physics throttling
+	local shouldThrottle = true
+	local nearestPlayerDistance = math.huge
+	for _, otherPlayer in pairs(Players:GetPlayers()) do
+		if otherPlayer.Character and otherPlayer.Character:FindFirstChild("HumanoidRootPart") then
+			local distance = (primaryPart.Position - otherPlayer.Character.HumanoidRootPart.Position).Magnitude
+			if distance < nearestPlayerDistance then
+				nearestPlayerDistance = distance
+			end
+			if distance < PHYSICS_THROTTLE_DISTANCE then
+				shouldThrottle = false
+				if distance <= PASSIVE_WAVE_DISTANCE then
+					break
+				end
+			end
+		end
+	end
 
-        local isPlayerNearby = nearestPlayerDistance <= PASSIVE_WAVE_DISTANCE
+	local isPlayerNearby = nearestPlayerDistance <= PASSIVE_WAVE_DISTANCE
 
-        -- Skip some physics updates for far boats
-        if shouldThrottle and math.random() > 0.3 then
-                return
-        end
+	-- Skip some physics updates for far boats
+	if shouldThrottle and math.random() > 0.3 then
+		return
+	end
 
 	-- Check activity
 	local lastActivity = BoatLastActivity[player] or tick()
 	local isIdle = (tick() - lastActivity) > IDLE_THRESHOLD
 
-        local waveBoatType = config.Type == "Submarine" and "Submarine" or "Surface"
-        local targetOffsetData = BoatWaterLevelOffsets[boat]
-        local targetOffsetValue
-        if typeof(targetOffsetData) == "table" then
-                targetOffsetValue = targetOffsetData.vertical
-        else
-                targetOffsetValue = targetOffsetData
-        end
+	local waveBoatType = config.Type == "Submarine" and "Submarine" or "Surface"
 
-        if targetOffsetValue == nil then
-                targetOffsetValue = config.Type == "Submarine" and -1 or 2
-        end
+	local function syncToBoatWithPassiveWaves()
+		local boatCFrame = primaryPart.CFrame
+		local targetCFrame = boatCFrame
 
-        local targetOffset = targetOffsetData or targetOffsetValue
+		if isPlayerNearby then
+			local floatingCFrame, applied = WaterPhysics.ApplyFloatingPhysics(boatCFrame, waveBoatType, deltaTime)
+			if applied then
+				targetCFrame = floatingCFrame
+			end
+		end
 
-        local function syncToBoatWithPassiveWaves()
-                local boatCFrame = primaryPart.CFrame
-                local targetCFrame = boatCFrame
+		if (controlPart.CFrame.Position - boatCFrame.Position).Magnitude > 5 then
+			targetCFrame = boatCFrame
+		end
 
-                if isPlayerNearby then
-                        local floatingCFrame, applied = WaterPhysics.ApplyFloatingPhysics(
-                                boatCFrame,
-                                waveBoatType,
-                                deltaTime,
-                                targetOffset
-                        )
-                        if applied then
-                                targetCFrame = floatingCFrame
-                        end
-                end
+		if config.Type == "Submarine" then
+			targetCFrame = ApplySubmarineStressEffects(player, boat, config, targetCFrame, deltaTime)
+		end
 
-                if (controlPart.CFrame.Position - boatCFrame.Position).Magnitude > 5 then
-                        targetCFrame = boatCFrame
-                end
+		controlPart.CFrame = targetCFrame
 
-                if config.Type == "Submarine" then
-                        targetCFrame = ApplySubmarineStressEffects(player, boat, config, targetCFrame, deltaTime)
-                end
+		local bodyVel = primaryPart:FindFirstChild("BoatBodyVelocity")
+		if bodyVel then
+			bodyVel.Velocity = Vector3.new(0, 0, 0)
+		end
 
-                controlPart.CFrame = targetCFrame
+		BoatSpeeds[player] = 0
+		BoatTurnSpeeds[player] = 0
+	end
 
-                local bodyVel = primaryPart:FindFirstChild("BoatBodyVelocity")
-                if bodyVel then
-                        bodyVel.Velocity = Vector3.new(0, 0, 0)
-                end
+	if isIdle and not seat.Occupant then
+		syncToBoatWithPassiveWaves()
+		return
+	end
 
-                BoatSpeeds[player] = 0
-                BoatTurnSpeeds[player] = 0
+	local isSubmarine = config.Type == "Submarine"
+	local stressState
+	local integrityRatio = 1
+	local stressSpeedMultiplier = 1
+	local stressAccelMultiplier = 1
 
-                PassengerMovement.Update(boat, targetCFrame, deltaTime, processedCharacters)
-        end
+	if isSubmarine then
+		stressState = GetOrCreateSubmarineState(player, config)
+		integrityRatio, stressSpeedMultiplier, stressAccelMultiplier = UpdateSubmarineStressMetrics(stressState)
+	end
 
-        if isIdle and not seat.Occupant then
-                syncToBoatWithPassiveWaves()
-                return
-        end
-
-        local isSubmarine = config.Type == "Submarine"
-        local stressState
-        local integrityRatio = 1
-        local stressSpeedMultiplier = 1
-        local stressAccelMultiplier = 1
-
-        if isSubmarine then
-                stressState = GetOrCreateSubmarineState(player, config)
-                integrityRatio, stressSpeedMultiplier, stressAccelMultiplier = UpdateSubmarineStressMetrics(stressState)
-        end
-
-        -- Get inputs
-        local throttle = 0
-        local steer = 0
-        local ascend = 0
+	-- Get inputs
+	local throttle = 0
+	local steer = 0
+	local ascend = 0
 	local pitch = 0
 	local roll = 0
 	local hasDriver = false
@@ -1825,158 +1776,157 @@ local function UpdateBoatPhysics(player, boat, deltaTime, processedCharacters)
 			pitch = BoatControls[player].pitch or 0
 			roll = BoatControls[player].roll or 0
 		end
-        else
-                syncToBoatWithPassiveWaves()
-                return
-        end
+	else
+		syncToBoatWithPassiveWaves()
+		return
+	end
 
 	-- CALCULATE ACCELERATION
 	local currentSpeed = BoatSpeeds[player] or 0
 	local currentTurnSpeed = BoatTurnSpeeds[player] or 0
 
-        local baseMaxSpeed = accelData.baseMaxSpeed or accelData.maxSpeed or 0
-        local effectiveMaxSpeed = accelData.maxSpeed or baseMaxSpeed
-        if isSubmarine then
-                effectiveMaxSpeed = baseMaxSpeed * stressSpeedMultiplier
-                accelData.maxSpeed = effectiveMaxSpeed
-                accelData.currentStressMaxSpeed = effectiveMaxSpeed
-        else
-                accelData.currentStressMaxSpeed = effectiveMaxSpeed
-        end
+	local baseMaxSpeed = accelData.baseMaxSpeed or accelData.maxSpeed or 0
+	local effectiveMaxSpeed = accelData.maxSpeed or baseMaxSpeed
+	if isSubmarine then
+		effectiveMaxSpeed = baseMaxSpeed * stressSpeedMultiplier
+		accelData.maxSpeed = effectiveMaxSpeed
+		accelData.currentStressMaxSpeed = effectiveMaxSpeed
+	else
+		accelData.currentStressMaxSpeed = effectiveMaxSpeed
+	end
 
-        local targetSpeed = throttle * effectiveMaxSpeed
+	local targetSpeed = throttle * effectiveMaxSpeed
 
-        local baseTurnSpeed = config.TurnSpeed or 0
-        if isSubmarine then
-                baseTurnSpeed = baseTurnSpeed * stressSpeedMultiplier
-        end
-        local targetTurnSpeed = steer * baseTurnSpeed
+	local baseTurnSpeed = config.TurnSpeed or 0
+	if isSubmarine then
+		baseTurnSpeed = baseTurnSpeed * stressSpeedMultiplier
+	end
+	local targetTurnSpeed = steer * baseTurnSpeed
 
-        local accelerationRate = accelData.baseAccelerationRate or accelData.accelerationRate
-        local decelerationRate = accelData.baseDecelerationRate or accelData.decelerationRate
-        local turnAccelerationRate = accelData.baseTurnAccelerationRate or accelData.turnAccelerationRate
+	local accelerationRate = accelData.baseAccelerationRate or accelData.accelerationRate
+	local decelerationRate = accelData.baseDecelerationRate or accelData.decelerationRate
+	local turnAccelerationRate = accelData.baseTurnAccelerationRate or accelData.turnAccelerationRate
 
-        if isSubmarine then
-                accelerationRate = accelerationRate * stressAccelMultiplier
-                decelerationRate = decelerationRate * math.max(stressAccelMultiplier, 0.5)
-                turnAccelerationRate = turnAccelerationRate * math.max(stressAccelMultiplier, 0.6)
-        end
+	if isSubmarine then
+		accelerationRate = accelerationRate * stressAccelMultiplier
+		decelerationRate = decelerationRate * math.max(stressAccelMultiplier, 0.5)
+		turnAccelerationRate = turnAccelerationRate * math.max(stressAccelMultiplier, 0.6)
+	end
 
-        -- Apply acceleration/deceleration
-        if math.abs(targetSpeed) > math.abs(currentSpeed) then
-                -- Accelerating
-                local speedDiff = targetSpeed - currentSpeed
-                local speedChange = math.sign(speedDiff) * accelerationRate * deltaTime
+	-- Apply acceleration/deceleration
+	if math.abs(targetSpeed) > math.abs(currentSpeed) then
+		-- Accelerating
+		local speedDiff = targetSpeed - currentSpeed
+		local speedChange = math.sign(speedDiff) * accelerationRate * deltaTime
 
-                if math.abs(speedChange) > math.abs(speedDiff) then
-                        currentSpeed = targetSpeed
-                else
-                        currentSpeed = currentSpeed + speedChange
-                end
-        else
-                -- Decelerating
-                local speedDiff = targetSpeed - currentSpeed
-                local speedChange = math.sign(speedDiff) * decelerationRate * deltaTime
+		if math.abs(speedChange) > math.abs(speedDiff) then
+			currentSpeed = targetSpeed
+		else
+			currentSpeed = currentSpeed + speedChange
+		end
+	else
+		-- Decelerating
+		local speedDiff = targetSpeed - currentSpeed
+		local speedChange = math.sign(speedDiff) * decelerationRate * deltaTime
 
-                if math.abs(speedChange) > math.abs(speedDiff) then
-                        currentSpeed = targetSpeed
-                else
-                        currentSpeed = currentSpeed + speedChange
-                end
-        end
+		if math.abs(speedChange) > math.abs(speedDiff) then
+			currentSpeed = targetSpeed
+		else
+			currentSpeed = currentSpeed + speedChange
+		end
+	end
 
-        -- Apply turn acceleration
-        local turnDiff = targetTurnSpeed - currentTurnSpeed
-        local turnChange = math.sign(turnDiff) * turnAccelerationRate * deltaTime
+	-- Apply turn acceleration
+	local turnDiff = targetTurnSpeed - currentTurnSpeed
+	local turnChange = math.sign(turnDiff) * turnAccelerationRate * deltaTime
 
-        if math.abs(turnChange) > math.abs(turnDiff) then
-                currentTurnSpeed = targetTurnSpeed
-        else
-                currentTurnSpeed = currentTurnSpeed + turnChange
-        end
+	if math.abs(turnChange) > math.abs(turnDiff) then
+		currentTurnSpeed = targetTurnSpeed
+	else
+		currentTurnSpeed = currentTurnSpeed + turnChange
+	end
 
-        if isSubmarine then
-                local maxSpeed = effectiveMaxSpeed
-                if maxSpeed and maxSpeed > 0 then
-                        currentSpeed = math.clamp(currentSpeed, -maxSpeed, maxSpeed)
-                end
+	if isSubmarine then
+		local maxSpeed = effectiveMaxSpeed
+		if maxSpeed and maxSpeed > 0 then
+			currentSpeed = math.clamp(currentSpeed, -maxSpeed, maxSpeed)
+		end
 
-                local maxTurn = baseTurnSpeed
-                if maxTurn ~= 0 then
-                        currentTurnSpeed = math.clamp(currentTurnSpeed, -math.abs(maxTurn), math.abs(maxTurn))
-                end
-        end
+		local maxTurn = baseTurnSpeed
+		if maxTurn ~= 0 then
+			currentTurnSpeed = math.clamp(currentTurnSpeed, -math.abs(maxTurn), math.abs(maxTurn))
+		end
+	end
 
-        -- Store updated speeds
-        BoatSpeeds[player] = currentSpeed
-        BoatTurnSpeeds[player] = currentTurnSpeed
+	-- Store updated speeds
+	BoatSpeeds[player] = currentSpeed
+	BoatTurnSpeeds[player] = currentTurnSpeed
 
-        -- CALCULATE MOVEMENT WITH ACTUAL SPEED
+	-- CALCULATE MOVEMENT WITH ACTUAL SPEED
 	local currentCFrame = controlPart.CFrame
 	local newCFrame
 
-        if isSubmarine then
-                local throttleInput = 0
-                if effectiveMaxSpeed ~= 0 then
-                        throttleInput = currentSpeed / effectiveMaxSpeed
-                end
+	if isSubmarine then
+		local throttleInput = 0
+		if effectiveMaxSpeed ~= 0 then
+			throttleInput = currentSpeed / effectiveMaxSpeed
+		end
 
-                local steerInput = 0
-                local turnSpeedValue = baseTurnSpeed ~= 0 and baseTurnSpeed or (config.TurnSpeed or 0)
-                if turnSpeedValue ~= 0 then
-                        steerInput = currentTurnSpeed / turnSpeedValue
-                end
+		local steerInput = 0
+		local turnSpeedValue = baseTurnSpeed ~= 0 and baseTurnSpeed or (config.TurnSpeed or 0)
+		if turnSpeedValue ~= 0 then
+			steerInput = currentTurnSpeed / turnSpeedValue
+		end
 
-                local controlMultiplier = isSubmarine and math.max(stressAccelMultiplier, SUB_CONTROL_MIN_MULTIPLIER) or 1
+		local controlMultiplier = isSubmarine and math.max(stressAccelMultiplier, SUB_CONTROL_MIN_MULTIPLIER) or 1
 
-                local adjustedInputs = {
-                        throttle = throttleInput,
-                        steer = steerInput,
-                        ascend = ascend * controlMultiplier,
-                        pitch = pitch * controlMultiplier,
-                        roll = roll * controlMultiplier
-                }
+		local adjustedInputs = {
+			throttle = throttleInput,
+			steer = steerInput,
+			ascend = ascend * controlMultiplier,
+			pitch = pitch * controlMultiplier,
+			roll = roll * controlMultiplier
+		}
 
-                local subConfig = {}
-                for k, v in pairs(config) do
-                        subConfig[k] = v
-                end
+		local subConfig = {}
+		for k, v in pairs(config) do
+			subConfig[k] = v
+		end
 
-                local baseSpeedValue = (subConfig.Speed or subConfig.MaxSpeed or 28)
-                local controlSpeedMultiplier = isSubmarine and stressSpeedMultiplier or 1
-                local controlTurnMultiplier = isSubmarine and math.max(stressAccelMultiplier, SUB_CONTROL_MIN_MULTIPLIER) or 1
+		local baseSpeedValue = (subConfig.Speed or subConfig.MaxSpeed or 28)
+		local controlSpeedMultiplier = isSubmarine and stressSpeedMultiplier or 1
+		local controlTurnMultiplier = isSubmarine and math.max(stressAccelMultiplier, SUB_CONTROL_MIN_MULTIPLIER) or 1
 
-                subConfig.Speed = baseSpeedValue * controlSpeedMultiplier
-                subConfig.MaxSpeed = (subConfig.MaxSpeed or baseSpeedValue) * controlSpeedMultiplier
-                subConfig.TurnSpeed = (subConfig.TurnSpeed or 1.8) * controlSpeedMultiplier
-                subConfig.PitchSpeed = (subConfig.PitchSpeed or 1.5) * controlTurnMultiplier
-                subConfig.RollSpeed = (subConfig.RollSpeed or 1.0) * controlTurnMultiplier
-                subConfig.VerticalSpeed = (subConfig.VerticalSpeed or 18) * controlMultiplier
+		subConfig.Speed = baseSpeedValue * controlSpeedMultiplier
+		subConfig.MaxSpeed = (subConfig.MaxSpeed or baseSpeedValue) * controlSpeedMultiplier
+		subConfig.TurnSpeed = (subConfig.TurnSpeed or 1.8) * controlSpeedMultiplier
+		subConfig.PitchSpeed = (subConfig.PitchSpeed or 1.5) * controlTurnMultiplier
+		subConfig.RollSpeed = (subConfig.RollSpeed or 1.0) * controlTurnMultiplier
+		subConfig.VerticalSpeed = (subConfig.VerticalSpeed or 18) * controlMultiplier
 
-                newCFrame = SubmarinePhysics.CalculateMovement(
-                        currentCFrame,
-                        adjustedInputs,
-                        subConfig,
+		newCFrame = SubmarinePhysics.CalculateMovement(
+			currentCFrame,
+			adjustedInputs,
+			subConfig,
 			deltaTime,
 			math.abs(ascend) > 0.01,
 			false
 		)
 
-                if SubmarinePhysics.ShouldAutoSurface(newCFrame.Position) then
-                local floatingCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
-                        newCFrame,
-                        "Surface",
-                        deltaTime,
-                        targetOffset
-                )
-                        newCFrame = floatingCFrame
-                end
+		if SubmarinePhysics.ShouldAutoSurface(newCFrame.Position) then
+			local floatingCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
+				newCFrame,
+				"Surface",
+				deltaTime
+			)
+			newCFrame = floatingCFrame
+		end
 
-                newCFrame = ApplySubmarineStressEffects(player, boat, config, newCFrame, deltaTime)
-        else
-                -- Calculate turning with actual turn speed
-                local turnAmount = currentTurnSpeed * deltaTime
-                local newRotation = currentCFrame * CFrame.Angles(0, -turnAmount, 0)
+		newCFrame = ApplySubmarineStressEffects(player, boat, config, newCFrame, deltaTime)
+	else
+		-- Calculate turning with actual turn speed
+		local turnAmount = currentTurnSpeed * deltaTime
+		local newRotation = currentCFrame * CFrame.Angles(0, -turnAmount, 0)
 
 		-- Calculate forward movement with actual speed
 		local moveDirection = newRotation.LookVector
@@ -1986,89 +1936,87 @@ local function UpdateBoatPhysics(player, boat, deltaTime, processedCharacters)
 		newCFrame = CFrame.new(newPosition) * newRotation.Rotation
 
 		-- Apply water physics
-                newCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
-                        newCFrame,
-                        "Surface",
-                        deltaTime,
-                        targetOffset
-                )
-        end
+		newCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
+			newCFrame,
+			"Surface",
+			deltaTime
+		)
+	end
 
-        if isSubmarine then
-                if ApplySubmarineDepthDamage(player, boat, config, newCFrame.Position, deltaTime) then
-                        return
-                end
-        end
+	if isSubmarine then
+		if ApplySubmarineDepthDamage(player, boat, config, newCFrame.Position, deltaTime) then
+			return
+		end
+	end
 
-        -- Validate movement
-        local securityOptions
-        if isSubmarine and stressState then
-                local jitterAllowance = stressState.currentJitterAllowance or 0
-                if jitterAllowance > 0 then
-                        securityOptions = {
-                                jitterAllowance = jitterAllowance,
-                                shakeDelta = stressState.lastStressOffsetDelta or jitterAllowance,
-                        }
-                end
-        end
+	-- Validate movement
+	local securityOptions
+	if isSubmarine and stressState then
+		local jitterAllowance = stressState.currentJitterAllowance or 0
+		if jitterAllowance > 0 then
+			securityOptions = {
+				jitterAllowance = jitterAllowance,
+				shakeDelta = stressState.lastStressOffsetDelta or jitterAllowance,
+			}
+		end
+	end
 
-        local valid, message, shouldKick = BoatSecurity.ValidateBoatMovement(
-                player, boat, newCFrame.Position, deltaTime, securityOptions
-        )
+	local valid, message, shouldKick = BoatSecurity.ValidateBoatMovement(
+		player, boat, newCFrame.Position, deltaTime, securityOptions
+	)
 
-        if not valid then
-                if message then
-                        warn("Rejected boat movement for", player.Name, "-", message)
-                end
+	if not valid then
+		if message then
+			warn("Rejected boat movement for", player.Name, "-", message)
+		end
 
-                PlayerViolations[player] = (PlayerViolations[player] or 0) + 1
+		PlayerViolations[player] = (PlayerViolations[player] or 0) + 1
 
-                if shouldKick then
-                        PlayerViolations[player] = PlayerViolations[player] + 9
-                end
+		if shouldKick then
+			PlayerViolations[player] = PlayerViolations[player] + 9
+		end
 
-                if PlayerViolations[player] > 100 or shouldKick then
-                        if shouldKick then
-                                player:Kick("Movement security violation")
-                        end
-                        CleanupBoat(player)
-                        return
-                end
+		if PlayerViolations[player] > 100 or shouldKick then
+			if shouldKick then
+				player:Kick("Movement security violation")
+			end
+			CleanupBoat(player)
+			return
+		end
 
-                local lastValidPosition = BoatSecurity.GetLastValidPosition(player)
-                if lastValidPosition then
-                        local fallbackCFrame = CFrame.new(lastValidPosition, lastValidPosition + currentCFrame.LookVector)
-                        controlPart.CFrame = fallbackCFrame
-                else
-                        controlPart.CFrame = currentCFrame
-                end
+		local lastValidPosition = BoatSecurity.GetLastValidPosition(player)
+		if lastValidPosition then
+			local fallbackCFrame = CFrame.new(lastValidPosition, lastValidPosition + currentCFrame.LookVector)
+			controlPart.CFrame = fallbackCFrame
+		else
+			controlPart.CFrame = currentCFrame
+		end
 
-                if boat.PrimaryPart then
-                        local bodyVel = boat.PrimaryPart:FindFirstChild("BoatBodyVelocity")
-                        if bodyVel then
-                                bodyVel.Velocity = Vector3.new(0, 0, 0)
-                        end
-                end
+		if boat.PrimaryPart then
+			local bodyVel = boat.PrimaryPart:FindFirstChild("BoatBodyVelocity")
+			if bodyVel then
+				bodyVel.Velocity = Vector3.new(0, 0, 0)
+			end
+		end
 
-                return
-        end
+		return
+	end
 
-        -- Update position
-        controlPart.CFrame = newCFrame
-        PassengerMovement.Update(boat, newCFrame, deltaTime, processedCharacters)
+	-- Update position
+	controlPart.CFrame = newCFrame
 
-        -- Update BodyVelocity for momentum
-        if boat.PrimaryPart then
-                local bodyVel = boat.PrimaryPart:FindFirstChild("BoatBodyVelocity")
-                if bodyVel then
-                        local velocityDirection = newCFrame.LookVector
-                        local momentumFactor = 0.3 * (1 + config.Weight * 0.05)
-                        local targetVelocity = velocityDirection * currentSpeed * momentumFactor
-                        bodyVel.Velocity = bodyVel.Velocity:Lerp(targetVelocity, 0.1)
-                end
-        end
+	-- Update BodyVelocity for momentum
+	if boat.PrimaryPart then
+		local bodyVel = boat.PrimaryPart:FindFirstChild("BoatBodyVelocity")
+		if bodyVel then
+			local velocityDirection = newCFrame.LookVector
+			local momentumFactor = 0.3 * (1 + config.Weight * 0.05)
+			local targetVelocity = velocityDirection * currentSpeed * momentumFactor
+			bodyVel.Velocity = bodyVel.Velocity:Lerp(targetVelocity, 0.1)
+		end
+	end
 
-        BoatLastActivity[player] = tick()
+	BoatLastActivity[player] = tick()
 end
 
 -- Main update loop
@@ -2118,23 +2066,20 @@ local function UpdateAllBoats(deltaTime)
 					end
 				end
 
-                                if not ownerFound then
-                                        -- Clean up physics objects first
-                                        local physicsObjs = BoatPhysicsObjects[obj]
-                                        if physicsObjs then
-                                                for _, physObj in pairs(physicsObjs) do
-                                                        pcall(function() physObj:Destroy() end)
-                                                end
-                                                BoatPhysicsObjects[obj] = nil
-                                        end
+				if not ownerFound then
+					-- Clean up physics objects first
+					local physicsObjs = BoatPhysicsObjects[obj]
+					if physicsObjs then
+						for _, physObj in pairs(physicsObjs) do
+							pcall(function() physObj:Destroy() end)
+						end
+						BoatPhysicsObjects[obj] = nil
+					end
 
-                                        PassengerMovement.ReleaseBoat(obj)
-                                        BoatWaterLevelOffsets[obj] = nil
-
-                                        pcall(function() obj:Destroy() end)
-                                        orphanCount = orphanCount + 1
-                                end
-                        end
+					pcall(function() obj:Destroy() end)
+					orphanCount = orphanCount + 1
+				end
+			end
 		end
 
 		if orphanCount > 0 then
@@ -2143,14 +2088,13 @@ local function UpdateAllBoats(deltaTime)
 	end
 
 	-- Update all boats
-        local processedCharacters = {}
-        for player, boat in pairs(ActiveBoats) do
-                if player.Parent then -- Check if player is still in game
-                        UpdateBoatPhysics(player, boat, deltaTime, processedCharacters)
-                else
-                        CleanupBoat(player)
-                end
-        end
+	for player, boat in pairs(ActiveBoats) do
+		if player.Parent then -- Check if player is still in game
+			UpdateBoatPhysics(player, boat, deltaTime)
+		else
+			CleanupBoat(player)
+		end
+	end
 end
 
 -- Get player's boat
@@ -2237,14 +2181,12 @@ function BoatManager.Initialize()
 	end)
 
 	-- Character handling
-        local function OnCharacterDied(character)
-                PassengerMovement.ReleaseCharacter(character)
-
-                local player = Players:GetPlayerFromCharacter(character)
-                if player and ActiveBoats[player] then
-                        CleanupBoat(player)
-                end
-        end
+	local function OnCharacterDied(character)
+		local player = Players:GetPlayerFromCharacter(character)
+		if player and ActiveBoats[player] then
+			CleanupBoat(player)
+		end
+	end
 
 	local function OnCharacterAdded(character)
 		local humanoid = character:WaitForChild("Humanoid", 5)
@@ -2276,12 +2218,9 @@ function BoatManager.Initialize()
 		player.CharacterAdded:Connect(OnCharacterAdded)
 	end)
 
-        Players.PlayerRemoving:Connect(function(player)
-                if player.Character then
-                        PassengerMovement.ReleaseCharacter(player.Character)
-                end
-                CleanupBoat(player)
-        end)
+	Players.PlayerRemoving:Connect(function(player)
+		CleanupBoat(player)
+	end)
 
 	print("Enhanced BoatManager initialized with full fixes")
 end

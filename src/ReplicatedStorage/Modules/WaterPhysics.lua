@@ -267,7 +267,12 @@ function WaterPhysics.ComputeBuoyancyForce(part: BasePart, surfaceY: number)
         return Vector3.new(0, upwardForce, 0), displacementRatio
 end
 
-function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: string, deltaTime: number)
+function WaterPhysics.ApplyFloatingPhysics(
+        currentCFrame: CFrame,
+        boatType: string,
+        deltaTime: number,
+        targetOffsetOverride: any
+)
         local position = currentCFrame.Position
         local surfaceSample = WaveRegistry.SampleSurface(position)
         local surfaceY
@@ -346,37 +351,77 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
                 return currentCFrame, false
         end
 
-        local targetOffset = 0
-        if boatType == "Surface" then
-                targetOffset = 2
-        elseif boatType == "Submarine" then
-                targetOffset = -1
+        local offsetScalar
+        local offsetLocal
+        local overrideType = typeof(targetOffsetOverride)
+        if overrideType == "table" then
+                offsetScalar = targetOffsetOverride.vertical or targetOffsetOverride.target or targetOffsetOverride.offset
+                offsetLocal = targetOffsetOverride.localOffset
+                        or targetOffsetOverride["local"]
+                        or targetOffsetOverride.vector
+        elseif overrideType == "number" then
+                offsetScalar = targetOffsetOverride
         end
 
-        local targetY = surfaceY + targetOffset
-        local yDifference = targetY - position.Y
+        local _, currentYaw, _ = currentCFrame:ToOrientation()
+
+        local rotation: CFrame
+        if leanStrength <= BOAT_MIN_LEAN_THRESHOLD then
+                rotation = CFrame.Angles(0, currentYaw, 0)
+        else
+                local targetOrientation = CFrame.new(position)
+                        * CFrame.Angles(0, currentYaw, 0)
+                        * CFrame.Angles(targetPitch, 0, 0)
+                        * CFrame.Angles(0, 0, targetRoll)
+                local responsivenessDriver = math.max(leanStrength, leanIntensityScale, intensityScale * 0.1, 0.05)
+                local responsivenessScale = BOAT_LEAN_RESPONSIVENESS_MIN_SCALE
+                        + (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * responsivenessDriver
+                local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS * responsivenessScale, 0, 1)
+                local blendedOrientation = currentCFrame:Lerp(targetOrientation, alpha)
+                rotation = blendedOrientation - blendedOrientation.Position
+        end
+
+        local targetOffset = offsetScalar
+        if targetOffset == nil then
+                if boatType == "Surface" then
+                        targetOffset = 2
+                elseif boatType == "Submarine" then
+                        targetOffset = -1
+                else
+                        targetOffset = 0
+                end
+        end
+
+	local targetHeight = surfaceY + targetOffset
+        if offsetLocal then
+                local offsetVector: Vector3?
+                local offsetType = typeof(offsetLocal)
+
+                if offsetType == "Vector3" then
+                        offsetVector = offsetLocal
+                elseif offsetType == "CFrame" then
+                        offsetVector = offsetLocal.Position
+                elseif offsetType == "table" then
+                        local x = offsetLocal.X or offsetLocal.x
+                        local y = offsetLocal.Y or offsetLocal.y
+                        local z = offsetLocal.Z or offsetLocal.z
+
+                        if type(x) == "number" and type(y) == "number" and type(z) == "number" then
+                                offsetVector = Vector3.new(x, y, z)
+                        end
+                end
+
+                if offsetVector then
+                        local rotatedOffset = rotation:VectorToWorldSpace(offsetVector)
+                        targetHeight = surfaceY - rotatedOffset.Y
+                end
+        end
+
+        local yDifference = targetHeight - position.Y
         local stiffness = boatType == "Submarine" and 2 or 5
         local buoyancySpeed = math.clamp(yDifference * stiffness, -10, 10)
         local newY = position.Y + (buoyancySpeed * deltaTime)
-
-        local _, currentYaw, _ = currentCFrame:ToOrientation()
         local basePosition = Vector3.new(position.X, newY, position.Z)
-
-        if leanStrength <= BOAT_MIN_LEAN_THRESHOLD then
-                local newCFrame = CFrame.new(basePosition) * CFrame.Angles(0, currentYaw, 0)
-                return newCFrame, true
-        end
-
-        local targetOrientation = CFrame.new(basePosition)
-                * CFrame.Angles(0, currentYaw, 0)
-                * CFrame.Angles(targetPitch, 0, 0)
-                * CFrame.Angles(0, 0, targetRoll)
-        local responsivenessDriver = math.max(leanStrength, leanIntensityScale, intensityScale * 0.1, 0.05)
-        local responsivenessScale = BOAT_LEAN_RESPONSIVENESS_MIN_SCALE
-                + (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * responsivenessDriver
-        local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS * responsivenessScale, 0, 1)
-        local blendedOrientation = currentCFrame:Lerp(targetOrientation, alpha)
-        local rotation = blendedOrientation - blendedOrientation.Position
 
         local finalCFrame = CFrame.new(basePosition) * rotation
         return finalCFrame, true

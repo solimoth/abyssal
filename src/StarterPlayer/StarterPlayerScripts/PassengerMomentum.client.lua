@@ -6,6 +6,7 @@ local LOCAL_PLAYER = Players.LocalPlayer
 local RAYCAST_DISTANCE = 10
 local UPDATE_INTERVAL = 0.05
 local DATA_EXPIRATION = 0.35
+local AIRBORNE_TIMEOUT = 1.5
 
 local character
 local humanoid
@@ -28,6 +29,7 @@ local heartbeatConnection
 local stateChangedConnection
 local characterConnections = {}
 local updateAccumulator = 0
+local maintainMomentum = false
 
 local function clearCharacterConnections()
 	for _, connection in ipairs(characterConnections) do
@@ -37,13 +39,16 @@ local function clearCharacterConnections()
 end
 
 local function resetGroundedInfo()
-	if lastGroundedInfo then
-		lastGroundedInfo.boat = nil
-		lastGroundedInfo.relativeVelocity = nil
-		lastGroundedInfo.boatVelocity = nil
-		lastGroundedInfo.lastUpdate = nil
-	end
-	lastGroundedInfo = nil
+        if lastGroundedInfo then
+                lastGroundedInfo.boat = nil
+                lastGroundedInfo.relativeVelocity = nil
+                lastGroundedInfo.boatVelocity = nil
+                lastGroundedInfo.lastUpdate = nil
+                lastGroundedInfo.airStartTime = nil
+                lastGroundedInfo.isAirborne = nil
+        end
+        lastGroundedInfo = nil
+        maintainMomentum = false
 end
 
 local function getBoatFromInstance(instance)
@@ -86,20 +91,27 @@ local function findBoatBelow()
 end
 
 local function updateGroundedBoat(now)
-	if not humanoid or humanoid.Health <= 0 then
-		resetGroundedInfo()
-		return
-	end
+        if not humanoid or humanoid.Health <= 0 then
+                resetGroundedInfo()
+                return
+        end
 
-	if humanoid.Sit then
-		resetGroundedInfo()
-		return
-	end
+        if humanoid.Sit then
+                resetGroundedInfo()
+                return
+        end
 
-	local boat = findBoatBelow()
-	if boat and boat.PrimaryPart and rootPart then
-		local boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(rootPart.Position)
-		local rootVelocity = rootPart.AssemblyLinearVelocity
+        if lastGroundedInfo and lastGroundedInfo.isAirborne then
+                if now - (lastGroundedInfo.airStartTime or 0) > AIRBORNE_TIMEOUT then
+                        resetGroundedInfo()
+                end
+                return
+        end
+
+        local boat = findBoatBelow()
+        if boat and boat.PrimaryPart and rootPart then
+                local boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(rootPart.Position)
+                local rootVelocity = rootPart.AssemblyLinearVelocity
 
 		if not lastGroundedInfo then
 			lastGroundedInfo = {}
@@ -125,54 +137,125 @@ local function updateGroundedBoat(now)
 end
 
 local function applyBoatMomentum()
-	if not rootPart or not lastGroundedInfo or not lastGroundedInfo.lastUpdate then
-		return
-	end
+        if not rootPart or not lastGroundedInfo or not lastGroundedInfo.lastUpdate then
+                return
+        end
 
-	local now = os.clock()
-	if now - lastGroundedInfo.lastUpdate > DATA_EXPIRATION then
-		resetGroundedInfo()
-		return
-	end
+        local now = os.clock()
+        if now - lastGroundedInfo.lastUpdate > DATA_EXPIRATION then
+                resetGroundedInfo()
+                return
+        end
 
-	local boatVelocity = lastGroundedInfo.boatVelocity
-	local boat = lastGroundedInfo.boat
-	if boat and boat.Parent and boat.PrimaryPart then
-		boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(rootPart.Position)
-	end
+        local boatVelocity = lastGroundedInfo.boatVelocity
+        local boat = lastGroundedInfo.boat
+        if boat and boat.Parent and boat.PrimaryPart then
+                boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(rootPart.Position)
+        end
 
-	if not boatVelocity then
-		resetGroundedInfo()
-		return
-	end
+        if not boatVelocity then
+                resetGroundedInfo()
+                return
+        end
 
-	local relativeVelocity = lastGroundedInfo.relativeVelocity or Vector3.zero
-	local currentVelocity = rootPart.AssemblyLinearVelocity
+        local relativeVelocity = lastGroundedInfo.relativeVelocity or Vector3.zero
+        local currentVelocity = rootPart.AssemblyLinearVelocity
 
-	local horizontalBoat = Vector3.new(boatVelocity.X, 0, boatVelocity.Z)
-	local newHorizontal = horizontalBoat + relativeVelocity
-	local newVelocity = Vector3.new(newHorizontal.X, currentVelocity.Y, newHorizontal.Z)
+        local horizontalBoat = Vector3.new(boatVelocity.X, 0, boatVelocity.Z)
+        local newHorizontal = horizontalBoat + relativeVelocity
+        local newVelocity = Vector3.new(newHorizontal.X, currentVelocity.Y, newHorizontal.Z)
 
-	rootPart.AssemblyLinearVelocity = newVelocity
-	resetGroundedInfo()
+        rootPart.AssemblyLinearVelocity = newVelocity
+        maintainMomentum = true
+        lastGroundedInfo.boatVelocity = boatVelocity
+        lastGroundedInfo.isAirborne = true
+        lastGroundedInfo.airStartTime = now
 end
 
 local function onHumanoidStateChanged(_, newState)
-	if newState == Enum.HumanoidStateType.Freefall
-		or newState == Enum.HumanoidStateType.Jumping
-		or newState == Enum.HumanoidStateType.FallingDown then
-		applyBoatMomentum()
-	elseif newState == Enum.HumanoidStateType.Seated
-		or newState == Enum.HumanoidStateType.Dead then
-		resetGroundedInfo()
-	end
+        if newState == Enum.HumanoidStateType.Freefall
+                or newState == Enum.HumanoidStateType.Jumping
+                or newState == Enum.HumanoidStateType.FallingDown then
+                applyBoatMomentum()
+        elseif newState == Enum.HumanoidStateType.Seated
+                or newState == Enum.HumanoidStateType.Dead then
+                resetGroundedInfo()
+        elseif maintainMomentum then
+                resetGroundedInfo()
+        end
+end
+
+local function maintainBoatMomentum()
+        if not maintainMomentum or not lastGroundedInfo or not lastGroundedInfo.isAirborne then
+                return
+        end
+
+        if not humanoid or humanoid.Health <= 0 or humanoid.Sit then
+                resetGroundedInfo()
+                return
+        end
+
+        local now = os.clock()
+        if now - (lastGroundedInfo.airStartTime or 0) > AIRBORNE_TIMEOUT then
+                resetGroundedInfo()
+                return
+        end
+
+        if humanoid:GetState() ~= Enum.HumanoidStateType.Freefall
+                and humanoid:GetState() ~= Enum.HumanoidStateType.Jumping
+                and humanoid:GetState() ~= Enum.HumanoidStateType.FallingDown then
+                resetGroundedInfo()
+                return
+        end
+
+        local boat = lastGroundedInfo.boat
+        if not boat or not boat.Parent or not boat.PrimaryPart then
+                resetGroundedInfo()
+                return
+        end
+
+        if not rootPart then
+                resetGroundedInfo()
+                return
+        end
+
+        local boatVelocity = boat.PrimaryPart:GetVelocityAtPosition(rootPart.Position)
+        if not boatVelocity then
+                resetGroundedInfo()
+                return
+        end
+
+        local currentVelocity = rootPart.AssemblyLinearVelocity
+        local previousBoatVelocity = lastGroundedInfo.boatVelocity or boatVelocity
+        local previousBoatHorizontal = Vector3.new(previousBoatVelocity.X, 0, previousBoatVelocity.Z)
+        local storedRelative = lastGroundedInfo.relativeVelocity or Vector3.zero
+        local expectedHorizontal = previousBoatHorizontal + storedRelative
+        local currentHorizontal = Vector3.new(currentVelocity.X, 0, currentVelocity.Z)
+        local delta = currentHorizontal - expectedHorizontal
+
+        if delta.Magnitude > 0.01 then
+                lastGroundedInfo.relativeVelocity = storedRelative + delta
+                storedRelative = lastGroundedInfo.relativeVelocity
+        end
+
+        local horizontalBoat = Vector3.new(boatVelocity.X, 0, boatVelocity.Z)
+        local desiredHorizontal = horizontalBoat + storedRelative
+        local newVelocity = Vector3.new(desiredHorizontal.X, currentVelocity.Y, desiredHorizontal.Z)
+
+        if (newVelocity - currentVelocity).Magnitude > 0.01 then
+                rootPart.AssemblyLinearVelocity = newVelocity
+        end
+
+        lastGroundedInfo.boatVelocity = boatVelocity
 end
 
 local function onHeartbeat(dt)
-	updateAccumulator += dt
-	if updateAccumulator < UPDATE_INTERVAL then
-		return
-	end
+        maintainBoatMomentum()
+
+        updateAccumulator += dt
+        if updateAccumulator < UPDATE_INTERVAL then
+                return
+        end
 
 	updateAccumulator = 0
 

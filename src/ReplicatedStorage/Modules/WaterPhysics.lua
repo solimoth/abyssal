@@ -35,6 +35,7 @@ local BOAT_LEAN_CALM_INTENSITY_THRESHOLD = 0.9
 local BOAT_LEAN_CALM_INTENSITY_EXPONENT = 2.5
 local BOAT_LEAN_CALM_RESIDUAL_SCALE = 0.035
 local BOAT_LEAN_CALM_BASELINE_SCALE = 0.1
+local WATER_LEVEL_ALIGNMENT_SPEED = 40
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -271,7 +272,7 @@ function WaterPhysics.ApplyFloatingPhysics(
         currentCFrame: CFrame,
         boatType: string,
         deltaTime: number,
-        targetOffsetOverride: number?
+        targetOffsetOverride: any
 )
         local position = currentCFrame.Position
         local surfaceSample = WaveRegistry.SampleSurface(position)
@@ -351,7 +352,17 @@ function WaterPhysics.ApplyFloatingPhysics(
                 return currentCFrame, false
         end
 
-        local targetOffset = targetOffsetOverride
+        local offsetScalar
+        local offsetLocal
+        local overrideType = typeof(targetOffsetOverride)
+        if overrideType == "table" then
+                offsetScalar = targetOffsetOverride.vertical or targetOffsetOverride.target or targetOffsetOverride.offset
+                offsetLocal = targetOffsetOverride.localOffset or targetOffsetOverride.local or targetOffsetOverride.vector
+        elseif overrideType == "number" then
+                offsetScalar = targetOffsetOverride
+        end
+
+        local targetOffset = offsetScalar
         if targetOffset == nil then
                 if boatType == "Surface" then
                         targetOffset = 2
@@ -371,8 +382,29 @@ function WaterPhysics.ApplyFloatingPhysics(
         local _, currentYaw, _ = currentCFrame:ToOrientation()
         local basePosition = Vector3.new(position.X, newY, position.Z)
 
+        local function applyOffsetCorrection(cframe: CFrame)
+                if not offsetLocal then
+                        return cframe
+                end
+
+                local worldWaterPoint = cframe:PointToWorldSpace(offsetLocal)
+                local correction = surfaceY - worldWaterPoint.Y
+
+                if math.abs(correction) < 1e-3 then
+                        return cframe
+                end
+
+                local maxAdjust = WATER_LEVEL_ALIGNMENT_SPEED * deltaTime
+                if maxAdjust > 0 then
+                        correction = math.clamp(correction, -maxAdjust, maxAdjust)
+                end
+
+                return cframe + Vector3.new(0, correction, 0)
+        end
+
         if leanStrength <= BOAT_MIN_LEAN_THRESHOLD then
                 local newCFrame = CFrame.new(basePosition) * CFrame.Angles(0, currentYaw, 0)
+                newCFrame = applyOffsetCorrection(newCFrame)
                 return newCFrame, true
         end
 
@@ -388,6 +420,7 @@ function WaterPhysics.ApplyFloatingPhysics(
         local rotation = blendedOrientation - blendedOrientation.Position
 
         local finalCFrame = CFrame.new(basePosition) * rotation
+        finalCFrame = applyOffsetCorrection(finalCFrame)
         return finalCFrame, true
 end
 

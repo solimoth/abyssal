@@ -26,6 +26,8 @@ local BoatLastActivity = {}
 local BoatPhysicsObjects = {} -- NEW: Track physics objects
 local SubmarineStates = {}
 local BoatWaterLevelOffsets = {}
+local StandingPassengersByBoat = {}
+local StandingPassengerAssignments = {}
 
 -- ACCELERATION SYSTEM STORAGE
 local BoatSpeeds = {}
@@ -170,7 +172,7 @@ local function GatherCollisionContacts(part, buffer)
         return buffer
 end
 
-local function AlignCharacterOrientationWithBoat(character, referenceCFrame)
+local function AlignCharacterOrientationWithBoat(character, referenceCFrame, state)
         if not character or not referenceCFrame then
                 return
         end
@@ -187,39 +189,74 @@ local function AlignCharacterOrientationWithBoat(character, referenceCFrame)
 
         local boatUp = referenceCFrame.UpVector
         local currentCFrame = humanoidRootPart.CFrame
+        local currentPosition = currentCFrame.Position
         local lookVector = currentCFrame.LookVector
         local projectedLook = lookVector - boatUp * lookVector:Dot(boatUp)
 
         if projectedLook.Magnitude < 1e-3 then
-                local fallbackLook = referenceCFrame.LookVector
-                fallbackLook = fallbackLook - boatUp * fallbackLook:Dot(boatUp)
-
-                if fallbackLook.Magnitude > 1e-3 then
-                        projectedLook = fallbackLook
+                if state and state.lastProjectedLook and state.lastProjectedLook.Magnitude > 1e-3 then
+                        projectedLook = state.lastProjectedLook
                 else
-                        local alternative = referenceCFrame.RightVector - boatUp * referenceCFrame.RightVector:Dot(boatUp)
-                        if alternative.Magnitude > 1e-3 then
-                                projectedLook = alternative
+                        local fallbackLook = referenceCFrame.LookVector
+                        fallbackLook = fallbackLook - boatUp * fallbackLook:Dot(boatUp)
+
+                        if fallbackLook.Magnitude > 1e-3 then
+                                projectedLook = fallbackLook
                         else
-                                projectedLook = Vector3.new(0, 0, -1)
+                                local alternative = referenceCFrame.RightVector - boatUp * referenceCFrame.RightVector:Dot(boatUp)
+                                if alternative.Magnitude > 1e-3 then
+                                        projectedLook = alternative
+                                else
+                                        projectedLook = Vector3.new(0, 0, -1)
+                                end
                         end
                 end
         end
 
         projectedLook = projectedLook.Unit
-        local rightVector = boatUp:Cross(projectedLook)
-        if rightVector.Magnitude < 1e-3 then
-                local fallback = boatUp:Cross(Vector3.new(0, 0, -1))
-                if fallback.Magnitude < 1e-3 then
-                        fallback = boatUp:Cross(Vector3.new(1, 0, 0))
-                end
-                rightVector = fallback
+
+        if state then
+                state.lastProjectedLook = projectedLook
         end
 
-        rightVector = rightVector.Unit
-        projectedLook = rightVector:Cross(boatUp).Unit
+        local targetCFrame = CFrame.lookAt(currentPosition, currentPosition + projectedLook, boatUp)
+        local currentLook = currentCFrame.LookVector
+        local currentUp = currentCFrame.UpVector
+        if currentLook:Dot(targetCFrame.LookVector) > 0.999 and currentUp:Dot(targetCFrame.UpVector) > 0.999 then
+                return
+        end
 
-        humanoidRootPart.CFrame = CFrame.fromMatrix(currentCFrame.Position, projectedLook, boatUp)
+        if state then
+                state.lastProjectedLook = targetCFrame.LookVector
+                state.lastUpVector = targetCFrame.UpVector
+        end
+
+        humanoidRootPart.CFrame = targetCFrame
+end
+
+local function releaseStandingPassenger(boat, character)
+        local tracked = StandingPassengersByBoat[boat]
+        if tracked then
+                tracked[character] = nil
+                if not next(tracked) then
+                        StandingPassengersByBoat[boat] = nil
+                end
+        end
+
+        StandingPassengerAssignments[character] = nil
+end
+
+local function releaseBoatStandingPassengers(boat)
+        local tracked = StandingPassengersByBoat[boat]
+        if not tracked then
+                return
+        end
+
+        for character in pairs(tracked) do
+                StandingPassengerAssignments[character] = nil
+        end
+
+        StandingPassengersByBoat[boat] = nil
 end
 
 local function UpdateStandingPassengers(boat, referenceCFrame, processedCharacters)
@@ -231,6 +268,13 @@ local function UpdateStandingPassengers(boat, referenceCFrame, processedCharacte
         standingRaycastParams.FilterDescendantsInstances = { boat }
 
         local boatPosition = referenceCFrame.Position
+        local tracked = StandingPassengersByBoat[boat]
+        if not tracked then
+                tracked = {}
+                StandingPassengersByBoat[boat] = tracked
+        end
+
+        local seenCharacters = {}
 
         for _, otherPlayer in ipairs(Players:GetPlayers()) do
                 local character = otherPlayer.Character
@@ -264,8 +308,31 @@ local function UpdateStandingPassengers(boat, referenceCFrame, processedCharacte
                 )
 
                 if rayResult and rayResult.Instance and rayResult.Instance:IsDescendantOf(boat) then
-                        AlignCharacterOrientationWithBoat(character, referenceCFrame)
                         processedCharacters[character] = true
+                        seenCharacters[character] = true
+
+                        local previousBoat = StandingPassengerAssignments[character]
+                        if previousBoat and previousBoat ~= boat then
+                                releaseStandingPassenger(previousBoat, character)
+                        end
+
+                        StandingPassengerAssignments[character] = boat
+
+                        local state = tracked[character]
+                        if not state then
+                                state = {}
+                                tracked[character] = state
+                        end
+
+                        AlignCharacterOrientationWithBoat(character, referenceCFrame, state)
+                end
+        end
+
+        for character in pairs(tracked) do
+                if not seenCharacters[character]
+                        or not character.Parent
+                        or not character:FindFirstChild("HumanoidRootPart") then
+                        releaseStandingPassenger(boat, character)
                 end
         end
 end
@@ -481,20 +548,22 @@ local function CleanupBoat(player)
 	PlayerViolations[player] = nil
 
 	-- Clean up boat and physics
-	local boat = ActiveBoats[player]
-	if boat then
-		-- Clean up physics objects first
-		local physicsObjs = BoatPhysicsObjects[boat]
-		if physicsObjs then
+        local boat = ActiveBoats[player]
+        if boat then
+                -- Clean up physics objects first
+                local physicsObjs = BoatPhysicsObjects[boat]
+                if physicsObjs then
 			for _, obj in pairs(physicsObjs) do
 				if obj and obj.Parent then
 					pcall(function() obj:Destroy() end)
 				end
 			end
-			BoatPhysicsObjects[boat] = nil
-		end
+                        BoatPhysicsObjects[boat] = nil
+                end
 
-		-- Clean up boat parts
+                releaseBoatStandingPassengers(boat)
+
+                -- Clean up boat parts
                 pcall(function()
                         RestoreCanCollideStates(boat)
                         for _, desc in pairs(boat:GetDescendants()) do
@@ -1485,7 +1554,11 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
                 return false, "Boat model has no PrimaryPart"
         end
 
-        local waterLevelOffset = -(waterLevelPart.Position.Y - primaryPart.Position.Y)
+        local waterLevelLocalOffset = primaryPart.CFrame:PointToObjectSpace(waterLevelPart.Position)
+        local waterLevelOffset = {
+                vertical = -waterLevelLocalOffset.Y,
+                localOffset = waterLevelLocalOffset,
+        }
 
         -- Set attributes
         local boatId = HttpService:GenerateGUID(false)
@@ -1526,7 +1599,7 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 	end
 
         local waterLevel = getWaterLevel(spawnPosition)
-        local targetWaterOffset = waterLevelOffset
+        local targetWaterOffset = waterLevelOffset.vertical
         if targetWaterOffset == nil then
                 targetWaterOffset = config.Type == "Submarine" and -1 or 2
         end
@@ -1586,7 +1659,7 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 
         ActiveBoats[player] = boat
         BoatWaterLevelOffsets[boat] = waterLevelOffset
-        boat:SetAttribute("WaterLevelTargetOffset", waterLevelOffset)
+        boat:SetAttribute("WaterLevelTargetOffset", waterLevelOffset.vertical)
         BoatConnections[player] = {}
         BoatLastActivity[player] = tick()
 
@@ -1833,10 +1906,19 @@ local function UpdateBoatPhysics(player, boat, deltaTime, processedCharacters)
 	local isIdle = (tick() - lastActivity) > IDLE_THRESHOLD
 
         local waveBoatType = config.Type == "Submarine" and "Submarine" or "Surface"
-        local targetOffset = BoatWaterLevelOffsets[boat]
-        if targetOffset == nil then
-                targetOffset = config.Type == "Submarine" and -1 or 2
+        local targetOffsetData = BoatWaterLevelOffsets[boat]
+        local targetOffsetValue
+        if typeof(targetOffsetData) == "table" then
+                targetOffsetValue = targetOffsetData.vertical
+        else
+                targetOffsetValue = targetOffsetData
         end
+
+        if targetOffsetValue == nil then
+                targetOffsetValue = config.Type == "Submarine" and -1 or 2
+        end
+
+        local targetOffset = targetOffsetData or targetOffsetValue
 
         local function syncToBoatWithPassiveWaves()
                 local boatCFrame = primaryPart.CFrame
@@ -2209,9 +2291,9 @@ local function UpdateAllBoats(deltaTime)
 					end
 				end
 
-				if not ownerFound then
-					-- Clean up physics objects first
-					local physicsObjs = BoatPhysicsObjects[obj]
+                                if not ownerFound then
+                                        -- Clean up physics objects first
+                                        local physicsObjs = BoatPhysicsObjects[obj]
                                         if physicsObjs then
                                                 for _, physObj in pairs(physicsObjs) do
                                                         pcall(function() physObj:Destroy() end)
@@ -2219,6 +2301,7 @@ local function UpdateAllBoats(deltaTime)
                                                 BoatPhysicsObjects[obj] = nil
                                         end
 
+                                        releaseBoatStandingPassengers(obj)
                                         BoatWaterLevelOffsets[obj] = nil
 
                                         pcall(function() obj:Destroy() end)

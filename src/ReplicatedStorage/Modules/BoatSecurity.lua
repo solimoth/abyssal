@@ -27,6 +27,8 @@ local LastValidPositions = {}
 local SafeTeleportAllowance = {}
 
 -- Initialize player data
+local WATER_SURFACE_OFFSET_ATTRIBUTE = "WaterSurfaceOffset"
+
 local function InitializePlayer(player)
 	if not PlayerData[player] then
 		PlayerData[player] = {
@@ -265,11 +267,38 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime,
 	-- slightly behind the server controlled "target" position. When checking
 	-- for suspicious movement we therefore compare against the last validated
 	-- target position if we have one instead of the boat's physical location.
-	local referencePosition = LastValidPositions[player] or boat.PrimaryPart.Position
-        local rawDistance = (newPosition - referencePosition).Magnitude
-        local effectiveDistance = rawDistance
+        local referencePosition = LastValidPositions[player] or boat.PrimaryPart.Position
+        local delta = newPosition - referencePosition
+        local horizontalDistance = Vector3.new(delta.X, 0, delta.Z).Magnitude
+        local verticalDistance = math.abs(delta.Y)
+
+        local waterSurfaceOffset
+        if boat and boat.PrimaryPart then
+                waterSurfaceOffset = boat:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+                        or boat.PrimaryPart:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+        end
+
+        local trimmedVertical = verticalDistance
+        local rawDistance
+        local distanceForSpeed
+
+        local verticalAllowance = 0
+        if typeof(waterSurfaceOffset) == "number" then
+                verticalAllowance = math.max(math.abs(waterSurfaceOffset) * 0.75, 0.5)
+        end
+
+        if verticalAllowance > 0 then
+                trimmedVertical = math.max(verticalDistance - verticalAllowance, 0)
+                rawDistance = math.sqrt((horizontalDistance * horizontalDistance) + (trimmedVertical * trimmedVertical))
+                distanceForSpeed = horizontalDistance + trimmedVertical
+        else
+                rawDistance = delta.Magnitude
+                distanceForSpeed = rawDistance
+        end
+
+        local effectiveDistance = distanceForSpeed
         if shakeDelta > 0 then
-                effectiveDistance = math.max(rawDistance - shakeDelta, 0)
+                effectiveDistance = math.max(distanceForSpeed - shakeDelta, 0)
         end
 
         -- Store position history

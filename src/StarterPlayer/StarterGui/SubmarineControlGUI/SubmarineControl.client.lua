@@ -119,14 +119,21 @@ local function updateTelemetry()
     local config = currentConfig
     if not config then
         config = getBoatConfig(boat)
-        if not config or config.Type ~= "Submarine" then
+        if not config then
+            return
+        end
+        if config.Type ~= "Submarine" then
             stopTracking()
             return
         end
         currentConfig = config
     end
 
-    local info = SubmarinePhysics.GetSubmarineInfo(boat, config)
+    local success, info = pcall(SubmarinePhysics.GetSubmarineInfo, boat, config)
+    if not success then
+        warn("Failed to fetch submarine info", info)
+        return
+    end
 
     local healthPercent = boat:GetAttribute("SubmarineHealthPercent")
     if typeof(healthPercent) ~= "number" then
@@ -210,6 +217,7 @@ local function startTracking(boat, seat)
         end
     end)
 
+    controlFrame.Visible = true
     startUpdating()
 end
 
@@ -226,7 +234,7 @@ local function onSeated(active, seat)
     end
 
     local ownerId = seat:GetAttribute("BoatOwner")
-    if ownerId and ownerId ~= tostring(player.UserId) then
+    if ownerId and tostring(ownerId) ~= tostring(player.UserId) then
         stopTracking()
         return
     end
@@ -237,8 +245,8 @@ local function onSeated(active, seat)
         return
     end
 
-    local boatType = boat:GetAttribute("BoatType")
-    if boatType ~= "Submarine" then
+    local boatType = seat:GetAttribute("BoatType") or boat:GetAttribute("BoatType")
+    if boatType and boatType ~= "Submarine" then
         stopTracking()
         return
     end

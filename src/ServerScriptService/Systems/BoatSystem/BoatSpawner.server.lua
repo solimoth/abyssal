@@ -143,17 +143,23 @@ local function SetupDockSpawnButton(dock)
 				local config = BoatConfig.GetBoatData(dockBoatType)
 				boatTypeToShow = config and config.DisplayName or dockBoatType
 			else
-				-- Get player's selected type
-				local getBoatTypeRemote = ReplicatedStorage.Remotes.BoatRemotes:FindFirstChild("GetSelectedBoatType")
-				if getBoatTypeRemote then
-					local success, selectedType = pcall(function()
-						return getBoatTypeRemote:InvokeClient(playerShowing)
-					end)
+				local selectedType = BoatManager.GetPlayerSelectedBoatType(playerShowing)
+				if not selectedType then
+					local getBoatTypeRemote = ReplicatedStorage.Remotes.BoatRemotes:FindFirstChild("GetSelectedBoatType")
+					if getBoatTypeRemote then
+						local success, value = pcall(function()
+							return getBoatTypeRemote:InvokeClient(playerShowing)
+						end)
 
-					if success and selectedType then
-						local config = BoatConfig.GetBoatData(selectedType)
-						boatTypeToShow = config and config.DisplayName or selectedType
+						if success then
+							selectedType = value
+						end
 					end
+				end
+
+				if selectedType then
+					local config = BoatConfig.GetBoatData(selectedType)
+					boatTypeToShow = config and config.DisplayName or selectedType
 				end
 			end
 
@@ -210,28 +216,36 @@ function OnDockPromptTriggered(player, dock, spawnButton)
 			directionFromButton = Vector3.new(directionFromButton.X, 0, directionFromButton.Z).Unit
 
 			local spawnCFrame = CFrame.lookAt(spawnPosition, spawnPosition + directionFromButton)
-                else
-                        -- Fallback: Use the old offset system if no spawn zone exists
-                        local spawnOffset = dock:GetAttribute("SpawnOffset") or Vector3.new(0, 0, -30)
-                        spawnPosition = spawnButton.Position + spawnOffset
-                        local surfaceY = WaterPhysics.GetWaterLevel(spawnPosition)
-                        spawnPosition = Vector3.new(spawnPosition.X, surfaceY + 2, spawnPosition.Z)
-                end
+		else
+			-- Fallback: Use the old offset system if no spawn zone exists
+			local spawnOffset = dock:GetAttribute("SpawnOffset") or Vector3.new(0, 0, -30)
+			spawnPosition = spawnButton.Position + spawnOffset
+			local surfaceY = WaterPhysics.GetWaterLevel(spawnPosition)
+			spawnPosition = Vector3.new(spawnPosition.X, surfaceY + 2, spawnPosition.Z)
+		end
 
 		-- Get the selected boat type from the client
-		local boatType = "StarterRaft"
+		local boatType = BoatManager.GetPlayerSelectedBoatType(player) or "StarterRaft"
 
-		-- Try to get player's selected boat type
-		local getBoatTypeRemote = ReplicatedStorage.Remotes.BoatRemotes:FindFirstChild("GetSelectedBoatType")
-		if getBoatTypeRemote then
-			local success, selectedType = pcall(function()
-				return getBoatTypeRemote:InvokeClient(player)
-			end)
+		if boatType then
+			local config = BoatConfig.GetBoatData(boatType)
+			if not config then
+				boatType = "StarterRaft"
+			end
+		end
 
-			if success and selectedType then
-				local config = BoatConfig.GetBoatData(selectedType)
-				if config then
-					boatType = selectedType
+		if boatType == "StarterRaft" then
+			local getBoatTypeRemote = ReplicatedStorage.Remotes.BoatRemotes:FindFirstChild("GetSelectedBoatType")
+			if getBoatTypeRemote then
+				local success, selectedType = pcall(function()
+					return getBoatTypeRemote:InvokeClient(player)
+				end)
+
+				if success and selectedType then
+					local config = BoatConfig.GetBoatData(selectedType)
+					if config then
+						boatType = selectedType
+					end
 				end
 			end
 		end

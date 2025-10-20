@@ -98,6 +98,18 @@ end
 -- Check if submarine should auto-surface
 function SubmarinePhysics.ShouldAutoSurface(target, waterSurfaceOffset)
         local depth = SubmarinePhysics.GetDepth(target, waterSurfaceOffset)
+
+        if depth < 0 then
+                local tolerance = 0.5
+                if typeof(waterSurfaceOffset) == "number" then
+                        tolerance = math.max(tolerance, math.min(math.abs(waterSurfaceOffset) * 0.25, SURFACE_DETECTION_RANGE * 0.5))
+                end
+
+                if math.abs(depth) <= tolerance then
+                        depth = 0
+                end
+        end
+
         return depth >= 0 and depth <= SURFACE_DETECTION_RANGE
 end
 

@@ -1752,7 +1752,7 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
         boat:SetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE, waterSurfaceOffset)
 
         local waterLevel = getWaterLevel(spawnPosition)
-        if waterSurfaceOffset then
+        if waterSurfaceOffset ~= nil then
                 spawnPosition = Vector3.new(spawnPosition.X, waterLevel - waterSurfaceOffset, spawnPosition.Z)
         elseif config.Type == "Submarine" then
                 spawnPosition = Vector3.new(spawnPosition.X, waterLevel - 1, spawnPosition.Z)

@@ -1,0 +1,13 @@
+{
+  "$className": "TextLabel",
+  "AnchorPoint": [0.0, 0.5],
+  "BackgroundTransparency": 1,
+  "Font": "GothamBold",
+  "Position": [0.06, 0, 0.58, 0],
+  "Size": [0.3, 0, 0.1, 0],
+  "Text": "100% HEALTH",
+  "TextColor3": [0.992, 0.356, 0.388],
+  "TextScaled": true,
+  "TextXAlignment": "Left",
+  "ZIndex": 4
+}

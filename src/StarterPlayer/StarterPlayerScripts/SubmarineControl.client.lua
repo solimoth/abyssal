@@ -33,6 +33,16 @@ local currentSeat
 local updateAccumulator = 0
 local UPDATE_INTERVAL = 0.05
 
+local zeroCoordinateText = "0, 0, 0"
+
+local COORDINATE_ORIGIN = Vector3.new(304.32, 0, -26.161)
+local COORDINATE_DECIMALS = 2
+
+local function round(value, decimals)
+    local multiplier = 10 ^ decimals
+    return math.floor(value * multiplier + 0.5) / multiplier
+end
+
 local function setBarSize(bar, ratio, baseSize)
     if not bar or not baseSize then
         return
@@ -65,7 +75,7 @@ local function resetUi()
         depthLabel.Text = "0m"
     end
     if coordinatesLabel then
-        coordinatesLabel.Text = "0, 0, 0"
+        coordinatesLabel.Text = zeroCoordinateText
     end
     if compassNeedle then
         compassNeedle.Rotation = 0
@@ -155,8 +165,20 @@ local function getBoatConfig(boat)
 end
 
 local function formatCoordinate(value)
-    return math.floor(value + 0.5)
+    local rounded = round(value, COORDINATE_DECIMALS)
+    local epsilon = 0.5 / (10 ^ COORDINATE_DECIMALS)
+    if math.abs(rounded) < epsilon then
+        rounded = 0
+    end
+    return string.format("%." .. COORDINATE_DECIMALS .. "f", rounded)
 end
+
+zeroCoordinateText = string.format(
+    "%s, %s, %s",
+    formatCoordinate(0),
+    formatCoordinate(0),
+    formatCoordinate(0)
+)
 
 local function ensureGui()
     if controlFrame and controlFrame.Parent then
@@ -258,6 +280,11 @@ local function updateTelemetry()
 
     local depthMeters = math.max(math.floor((info.depth or 0) + 0.5), 0)
     local position = primaryPart.Position
+    local relativePosition = Vector3.new(
+        position.X - COORDINATE_ORIGIN.X,
+        position.Y - COORDINATE_ORIGIN.Y,
+        position.Z - COORDINATE_ORIGIN.Z
+    )
 
     if healthLabel then
         healthLabel.Text = string.format("%d%% HEALTH", healthPercent)
@@ -273,10 +300,10 @@ local function updateTelemetry()
     end
     if coordinatesLabel then
         coordinatesLabel.Text = string.format(
-            "%d, %d, %d",
-            formatCoordinate(position.X),
-            formatCoordinate(position.Y),
-            formatCoordinate(position.Z)
+            "%s, %s, %s",
+            formatCoordinate(relativePosition.X),
+            formatCoordinate(relativePosition.Y),
+            formatCoordinate(relativePosition.Z)
         )
     end
 

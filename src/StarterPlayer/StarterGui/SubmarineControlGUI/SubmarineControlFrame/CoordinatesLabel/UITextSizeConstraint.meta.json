@@ -1,0 +1,5 @@
+{
+  "$className": "UITextSizeConstraint",
+  "MaxTextSize": 22,
+  "MinTextSize": 10
+}

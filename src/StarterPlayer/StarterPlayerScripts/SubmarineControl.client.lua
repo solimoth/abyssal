@@ -12,9 +12,7 @@ local gui
 local controlFrame
 local compassNeedle
 local healthBar
-local healthGradient
 local speedBar
-local speedGradient
 local healthLabel
 local speedLabel
 local pressureLabel
@@ -42,41 +40,50 @@ local function round(value, decimals)
     return math.floor(value * multiplier + 0.5) / multiplier
 end
 
-local HEALTH_FULL_COLOR = Color3.fromRGB(255, 255, 255)
-local HEALTH_EMPTY_COLOR = Color3.fromRGB(113, 113, 114)
-local SPEED_FULL_COLOR = Color3.fromRGB(255, 255, 255)
-local SPEED_EMPTY_COLOR = Color3.fromRGB(150, 150, 151)
+-- Semi-circular wheels swing 90° left/right from centre as their percentages change.
+local METER_SWING = 90
 
 local lastHealthPercent
 local lastSpeedPercent
 
-local function applyBarFill(gradient, percent, fullColor, emptyColor)
-    if not gradient then
+local function centerAnchor(frame)
+    if not frame then
         return
     end
 
-    local clampedPercent = math.clamp(percent, 0, 100)
-    local ratio = clampedPercent / 100
-
-    if ratio <= 0 then
-        gradient.Color = ColorSequence.new(emptyColor, emptyColor)
+    local currentAnchor = frame.AnchorPoint
+    if currentAnchor.X == 0.5 and currentAnchor.Y == 0.5 then
         return
     end
 
-    if ratio >= 1 then
-        gradient.Color = ColorSequence.new(fullColor, fullColor)
+    local size = frame.Size
+    local position = frame.Position
+    local targetAnchor = Vector2.new(0.5, 0.5)
+
+    local deltaScaleX = (targetAnchor.X - currentAnchor.X) * size.X.Scale
+    local deltaOffsetX = (targetAnchor.X - currentAnchor.X) * size.X.Offset
+    local deltaScaleY = (targetAnchor.Y - currentAnchor.Y) * size.Y.Scale
+    local deltaOffsetY = (targetAnchor.Y - currentAnchor.Y) * size.Y.Offset
+
+    frame.AnchorPoint = targetAnchor
+    frame.Position = UDim2.new(
+        position.X.Scale + deltaScaleX,
+        position.X.Offset + deltaOffsetX,
+        position.Y.Scale + deltaScaleY,
+        position.Y.Offset + deltaOffsetY
+    )
+end
+
+local function setMeterRotation(wheel, percent)
+    if not wheel then
         return
     end
 
-    local epsilon = 0.001
-    local transition = math.clamp(ratio - epsilon, 0, 1)
+    centerAnchor(wheel)
 
-    gradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, fullColor),
-        ColorSequenceKeypoint.new(transition, fullColor),
-        ColorSequenceKeypoint.new(ratio, emptyColor),
-        ColorSequenceKeypoint.new(1, emptyColor),
-    })
+    local ratio = math.clamp(percent, 0, 100) / 100
+    local rotation = -METER_SWING + (METER_SWING * 2) * ratio
+    wheel.Rotation = rotation
 end
 
 local function resetUi()
@@ -85,13 +92,13 @@ local function resetUi()
     end
 
     if healthLabel then
-        healthLabel.Text = "100%"
+        healthLabel.Text = "100% HEALTH"
     end
     if speedLabel then
-        speedLabel.Text = "0%"
+        speedLabel.Text = "0% SPEED"
     end
     if pressureLabel then
-        pressureLabel.Text = "0%"
+        pressureLabel.Text = "0% PRESSURE"
     end
     if depthLabel then
         depthLabel.Text = "0m"
@@ -103,8 +110,8 @@ local function resetUi()
         compassNeedle.Rotation = 0
     end
 
-    applyBarFill(healthGradient, 100, HEALTH_FULL_COLOR, HEALTH_EMPTY_COLOR)
-    applyBarFill(speedGradient, 0, SPEED_FULL_COLOR, SPEED_EMPTY_COLOR)
+    setMeterRotation(healthBar, 100)
+    setMeterRotation(speedBar, 0)
 
     lastHealthPercent = nil
     lastSpeedPercent = nil
@@ -151,8 +158,6 @@ local function clearGuiReferences()
     pressureLabel = nil
     coordinatesLabel = nil
     depthLabel = nil
-    healthGradient = nil
-    speedGradient = nil
     lastHealthPercent = nil
     lastSpeedPercent = nil
 end
@@ -221,9 +226,7 @@ local function ensureGui()
     controlFrame = guiInstance:WaitForChild("SubmarineControlFrame")
     compassNeedle = controlFrame:WaitForChild("CompassNeedle")
     healthBar = controlFrame:WaitForChild("HealthAmountLine")
-    healthGradient = healthBar:FindFirstChildOfClass("UIGradient")
     speedBar = controlFrame:WaitForChild("SpeedAmountLine")
-    speedGradient = speedBar:FindFirstChildOfClass("UIGradient")
     healthLabel = controlFrame:WaitForChild("HealthPercentLabel")
     speedLabel = controlFrame:WaitForChild("SpeedPercentLabel")
     pressureLabel = controlFrame:WaitForChild("HullPressurePercentLabel")
@@ -309,13 +312,13 @@ local function updateTelemetry()
     )
 
     if healthLabel then
-        healthLabel.Text = string.format("%d%%", healthPercent)
+        healthLabel.Text = string.format("%d%% HEALTH", healthPercent)
     end
     if speedLabel then
-        speedLabel.Text = string.format("%d%%", speedPercent)
+        speedLabel.Text = string.format("%d%% SPEED", speedPercent)
     end
     if pressureLabel then
-        pressureLabel.Text = string.format("%d%%", pressurePercent)
+        pressureLabel.Text = string.format("%d%% PRESSURE", pressurePercent)
     end
     if depthLabel then
         depthLabel.Text = string.format("%dm", depthMeters)
@@ -329,14 +332,14 @@ local function updateTelemetry()
         )
     end
 
-    if healthGradient and healthPercent ~= lastHealthPercent then
-        applyBarFill(healthGradient, healthPercent, HEALTH_FULL_COLOR, HEALTH_EMPTY_COLOR)
+    if healthBar and healthPercent ~= lastHealthPercent then
+        setMeterRotation(healthBar, healthPercent)
         lastHealthPercent = healthPercent
     end
 
     local clampedSpeedPercent = math.clamp(speedPercent, 0, 100)
-    if speedGradient and clampedSpeedPercent ~= lastSpeedPercent then
-        applyBarFill(speedGradient, clampedSpeedPercent, SPEED_FULL_COLOR, SPEED_EMPTY_COLOR)
+    if speedBar and clampedSpeedPercent ~= lastSpeedPercent then
+        setMeterRotation(speedBar, clampedSpeedPercent)
         lastSpeedPercent = clampedSpeedPercent
     end
 

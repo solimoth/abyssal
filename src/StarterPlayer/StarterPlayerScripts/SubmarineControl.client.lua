@@ -311,7 +311,7 @@ local function startUpdating()
     updateTelemetry()
 end
 
-local function startTracking(boat, seat)
+local function startTracking(boat, seat, config)
     if currentBoat == boat then
         return
     end
@@ -322,7 +322,7 @@ local function startTracking(boat, seat)
 
     currentBoat = boat
     currentSeat = seat
-    currentConfig = nil
+    currentConfig = config
 
     disconnectBoatConnection()
     boatConnection = boat.AncestryChanged:Connect(function(_, parent)
@@ -362,13 +362,13 @@ local function onSeated(active, seat)
         return
     end
 
-    local boatType = seat:GetAttribute("BoatType") or boat:GetAttribute("BoatType")
-    if boatType and boatType ~= "Submarine" then
+    local config = getBoatConfig(boat)
+    if not config or config.Type ~= "Submarine" then
         stopTracking()
         return
     end
 
-    startTracking(boat, seat)
+    startTracking(boat, seat, config)
 end
 
 local function bindHumanoid(humanoid)

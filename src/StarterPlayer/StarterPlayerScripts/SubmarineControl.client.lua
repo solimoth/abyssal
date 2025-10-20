@@ -43,30 +43,47 @@ end
 -- Semi-circular wheels swing 90° left/right from centre as their percentages change.
 local METER_SWING = 90
 
-local METER_MIN_ROTATION = 0
-local METER_MAX_ROTATION = 180
-
 local lastHealthPercent
 local lastSpeedPercent
+
+local function centerAnchor(frame)
+    if not frame then
+        return
+    end
+
+    local currentAnchor = frame.AnchorPoint
+    if currentAnchor.X == 0.5 and currentAnchor.Y == 0.5 then
+        return
+    end
+
+    local size = frame.Size
+    local position = frame.Position
+    local targetAnchor = Vector2.new(0.5, 0.5)
+
+    local deltaScaleX = (targetAnchor.X - currentAnchor.X) * size.X.Scale
+    local deltaOffsetX = (targetAnchor.X - currentAnchor.X) * size.X.Offset
+    local deltaScaleY = (targetAnchor.Y - currentAnchor.Y) * size.Y.Scale
+    local deltaOffsetY = (targetAnchor.Y - currentAnchor.Y) * size.Y.Offset
+
+    frame.AnchorPoint = targetAnchor
+    frame.Position = UDim2.new(
+        position.X.Scale + deltaScaleX,
+        position.X.Offset + deltaOffsetX,
+        position.Y.Scale + deltaScaleY,
+        position.Y.Offset + deltaOffsetY
+    )
+end
 
 local function setMeterRotation(wheel, percent)
     if not wheel then
         return
     end
 
+    centerAnchor(wheel)
+
     local ratio = math.clamp(percent, 0, 100) / 100
     local rotation = -METER_SWING + (METER_SWING * 2) * ratio
     wheel.Rotation = rotation
-end
-
-local function setMeterRotation(gradient, percent)
-    if not gradient then
-        return
-    end
-
-    local ratio = math.clamp(percent, 0, 100) / 100
-    local rotation = METER_MIN_ROTATION + (METER_MAX_ROTATION - METER_MIN_ROTATION) * ratio
-    gradient.Rotation = rotation
 end
 
 local function resetUi()

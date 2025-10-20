@@ -12,15 +12,14 @@ local gui
 local controlFrame
 local compassNeedle
 local healthBar
+local healthGradient
 local speedBar
+local speedGradient
 local healthLabel
 local speedLabel
 local pressureLabel
 local coordinatesLabel
 local depthLabel
-
-local healthBarFullSize
-local speedBarFullSize
 
 local updateConnection
 local boatConnection
@@ -43,18 +42,41 @@ local function round(value, decimals)
     return math.floor(value * multiplier + 0.5) / multiplier
 end
 
-local function setBarSize(bar, ratio, baseSize)
-    if not bar or not baseSize then
+local HEALTH_FULL_COLOR = Color3.fromRGB(212, 59, 71)
+local HEALTH_EMPTY_COLOR = Color3.fromRGB(127, 22, 32)
+local SPEED_FULL_COLOR = Color3.fromRGB(59, 152, 86)
+local SPEED_EMPTY_COLOR = Color3.fromRGB(21, 83, 50)
+
+local lastHealthPercent
+local lastSpeedPercent
+
+local function applyBarFill(gradient, percent, fullColor, emptyColor)
+    if not gradient then
         return
     end
 
-    ratio = math.clamp(ratio, 0, 1)
-    bar.Size = UDim2.new(
-        baseSize.X.Scale * ratio,
-        baseSize.X.Offset * ratio,
-        baseSize.Y.Scale,
-        baseSize.Y.Offset
-    )
+    local clampedPercent = math.clamp(percent, 0, 100)
+    local ratio = clampedPercent / 100
+
+    if ratio <= 0 then
+        gradient.Color = ColorSequence.new(emptyColor, emptyColor)
+        return
+    end
+
+    if ratio >= 1 then
+        gradient.Color = ColorSequence.new(fullColor, fullColor)
+        return
+    end
+
+    local epsilon = 0.001
+    local transition = math.clamp(ratio - epsilon, 0, 1)
+
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0, fullColor),
+        ColorSequenceKeypoint.new(transition, fullColor),
+        ColorSequenceKeypoint.new(ratio, emptyColor),
+        ColorSequenceKeypoint.new(1, emptyColor),
+    })
 end
 
 local function resetUi()
@@ -63,13 +85,13 @@ local function resetUi()
     end
 
     if healthLabel then
-        healthLabel.Text = "100% HEALTH"
+        healthLabel.Text = "100%"
     end
     if speedLabel then
-        speedLabel.Text = "0% SPEED"
+        speedLabel.Text = "0%"
     end
     if pressureLabel then
-        pressureLabel.Text = "0% PRESSURE"
+        pressureLabel.Text = "0%"
     end
     if depthLabel then
         depthLabel.Text = "0m"
@@ -81,12 +103,11 @@ local function resetUi()
         compassNeedle.Rotation = 0
     end
 
-    if healthBar and healthBarFullSize then
-        healthBar.Size = healthBarFullSize
-    end
-    if speedBar and speedBarFullSize then
-        speedBar.Size = UDim2.new(0, 0, speedBarFullSize.Y.Scale, speedBarFullSize.Y.Offset)
-    end
+    applyBarFill(healthGradient, 100, HEALTH_FULL_COLOR, HEALTH_EMPTY_COLOR)
+    applyBarFill(speedGradient, 0, SPEED_FULL_COLOR, SPEED_EMPTY_COLOR)
+
+    lastHealthPercent = nil
+    lastSpeedPercent = nil
 
     controlFrame.Visible = false
 end
@@ -130,8 +151,10 @@ local function clearGuiReferences()
     pressureLabel = nil
     coordinatesLabel = nil
     depthLabel = nil
-    healthBarFullSize = nil
-    speedBarFullSize = nil
+    healthGradient = nil
+    speedGradient = nil
+    lastHealthPercent = nil
+    lastSpeedPercent = nil
 end
 
 local function getBoatFromSeat(seat)
@@ -198,15 +221,14 @@ local function ensureGui()
     controlFrame = guiInstance:WaitForChild("SubmarineControlFrame")
     compassNeedle = controlFrame:WaitForChild("CompassNeedle")
     healthBar = controlFrame:WaitForChild("HealthAmountLine")
+    healthGradient = healthBar:FindFirstChildOfClass("UIGradient")
     speedBar = controlFrame:WaitForChild("SpeedAmountLine")
+    speedGradient = speedBar:FindFirstChildOfClass("UIGradient")
     healthLabel = controlFrame:WaitForChild("HealthPercentLabel")
     speedLabel = controlFrame:WaitForChild("SpeedPercentLabel")
     pressureLabel = controlFrame:WaitForChild("HullPressurePercentLabel")
     coordinatesLabel = controlFrame:WaitForChild("CoordinatesLabel")
     depthLabel = controlFrame:WaitForChild("DepthAmountLabel")
-
-    healthBarFullSize = healthBar.Size
-    speedBarFullSize = speedBar.Size
 
     guiAncestryConnection = guiInstance.AncestryChanged:Connect(function(_, parent)
         if not parent then
@@ -287,13 +309,13 @@ local function updateTelemetry()
     )
 
     if healthLabel then
-        healthLabel.Text = string.format("%d%% HEALTH", healthPercent)
+        healthLabel.Text = string.format("%d%%", healthPercent)
     end
     if speedLabel then
-        speedLabel.Text = string.format("%d%% SPEED", speedPercent)
+        speedLabel.Text = string.format("%d%%", speedPercent)
     end
     if pressureLabel then
-        pressureLabel.Text = string.format("%d%% PRESSURE", pressurePercent)
+        pressureLabel.Text = string.format("%d%%", pressurePercent)
     end
     if depthLabel then
         depthLabel.Text = string.format("%dm", depthMeters)
@@ -307,8 +329,16 @@ local function updateTelemetry()
         )
     end
 
-    setBarSize(healthBar, healthPercent / 100, healthBarFullSize)
-    setBarSize(speedBar, math.clamp(speedPercent / 100, 0, 1), speedBarFullSize)
+    if healthGradient and healthPercent ~= lastHealthPercent then
+        applyBarFill(healthGradient, healthPercent, HEALTH_FULL_COLOR, HEALTH_EMPTY_COLOR)
+        lastHealthPercent = healthPercent
+    end
+
+    local clampedSpeedPercent = math.clamp(speedPercent, 0, 100)
+    if speedGradient and clampedSpeedPercent ~= lastSpeedPercent then
+        applyBarFill(speedGradient, clampedSpeedPercent, SPEED_FULL_COLOR, SPEED_EMPTY_COLOR)
+        lastSpeedPercent = clampedSpeedPercent
+    end
 
     if compassNeedle then
         local lookVector = primaryPart.CFrame.LookVector

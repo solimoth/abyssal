@@ -42,10 +42,10 @@ local function round(value, decimals)
     return math.floor(value * multiplier + 0.5) / multiplier
 end
 
-local HEALTH_FULL_COLOR = Color3.fromRGB(212, 59, 71)
-local HEALTH_EMPTY_COLOR = Color3.fromRGB(127, 22, 32)
-local SPEED_FULL_COLOR = Color3.fromRGB(59, 152, 86)
-local SPEED_EMPTY_COLOR = Color3.fromRGB(21, 83, 50)
+local HEALTH_FULL_COLOR = Color3.fromRGB(255, 255, 255)
+local HEALTH_EMPTY_COLOR = Color3.fromRGB(113, 113, 114)
+local SPEED_FULL_COLOR = Color3.fromRGB(255, 255, 255)
+local SPEED_EMPTY_COLOR = Color3.fromRGB(150, 150, 151)
 
 local lastHealthPercent
 local lastSpeedPercent

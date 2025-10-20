@@ -40,38 +40,68 @@ local function round(value, decimals)
     return math.floor(value * multiplier + 0.5) / multiplier
 end
 
--- Semi-circular wheels swing 90° left/right from centre as their percentages change.
-local METER_SWING = 90
+-- Meters rotate across a 180° arc by default unless overridden via attributes.
+local DEFAULT_METER_RANGE = 180
 
 local lastHealthPercent
 local lastSpeedPercent
 
-local function centerAnchor(frame)
-    if not frame then
-        return
+local meterStates = {}
+
+local function configureMeter(wheel, referencePercent)
+    if not wheel then
+        return nil
     end
 
-    local currentAnchor = frame.AnchorPoint
-    if currentAnchor.X == 0.5 and currentAnchor.Y == 0.5 then
-        return
+    local state = meterStates[wheel]
+    if state then
+        return state
     end
 
-    local size = frame.Size
-    local position = frame.Position
+    local currentAnchor = wheel.AnchorPoint
     local targetAnchor = Vector2.new(0.5, 0.5)
+    if currentAnchor.X ~= targetAnchor.X or currentAnchor.Y ~= targetAnchor.Y then
+        local size = wheel.Size
+        local position = wheel.Position
 
-    local deltaScaleX = (targetAnchor.X - currentAnchor.X) * size.X.Scale
-    local deltaOffsetX = (targetAnchor.X - currentAnchor.X) * size.X.Offset
-    local deltaScaleY = (targetAnchor.Y - currentAnchor.Y) * size.Y.Scale
-    local deltaOffsetY = (targetAnchor.Y - currentAnchor.Y) * size.Y.Offset
+        wheel.AnchorPoint = targetAnchor
+        wheel.Position = UDim2.new(
+            position.X.Scale + (targetAnchor.X - currentAnchor.X) * size.X.Scale,
+            position.X.Offset + (targetAnchor.X - currentAnchor.X) * size.X.Offset,
+            position.Y.Scale + (targetAnchor.Y - currentAnchor.Y) * size.Y.Scale,
+            position.Y.Offset + (targetAnchor.Y - currentAnchor.Y) * size.Y.Offset
+        )
+    end
 
-    frame.AnchorPoint = targetAnchor
-    frame.Position = UDim2.new(
-        position.X.Scale + deltaScaleX,
-        position.X.Offset + deltaOffsetX,
-        position.Y.Scale + deltaScaleY,
-        position.Y.Offset + deltaOffsetY
-    )
+    local range = wheel:GetAttribute("MeterRange")
+    if typeof(range) ~= "number" or range <= 0 then
+        range = DEFAULT_METER_RANGE
+    end
+
+    local minRotation = wheel:GetAttribute("MeterMinRotation")
+    local maxRotation = wheel:GetAttribute("MeterMaxRotation")
+    if typeof(minRotation) == "number" and typeof(maxRotation) == "number" then
+        range = maxRotation - minRotation
+        if range < 0 then
+            range = -range
+            minRotation, maxRotation = maxRotation, minRotation
+        end
+        state = {
+            baseRotation = minRotation,
+            referencePercent = 0,
+            range = range,
+        }
+    else
+        local basePercent = typeof(referencePercent) == "number" and referencePercent or nil
+        state = {
+            baseRotation = wheel.Rotation,
+            referencePercent = basePercent,
+            range = range,
+        }
+    end
+
+    meterStates[wheel] = state
+    return state
 end
 
 local function setMeterRotation(wheel, percent)
@@ -79,11 +109,25 @@ local function setMeterRotation(wheel, percent)
         return
     end
 
-    centerAnchor(wheel)
+    local clamped = math.clamp(percent, 0, 100)
+    local state = meterStates[wheel]
+    if not state then
+        state = configureMeter(wheel, clamped)
+    end
+    if not state then
+        return
+    end
 
-    local ratio = math.clamp(percent, 0, 100) / 100
-    local rotation = -METER_SWING + (METER_SWING * 2) * ratio
-    wheel.Rotation = rotation
+    if state.referencePercent == nil then
+        state.referencePercent = clamped
+        state.baseRotation = wheel.Rotation
+    end
+
+    local offsetPercent = clamped - state.referencePercent
+    local rotation = state.baseRotation + (offsetPercent / 100) * state.range
+    if wheel.Rotation ~= rotation then
+        wheel.Rotation = rotation
+    end
 end
 
 local function resetUi()
@@ -160,6 +204,7 @@ local function clearGuiReferences()
     depthLabel = nil
     lastHealthPercent = nil
     lastSpeedPercent = nil
+    meterStates = {}
 end
 
 local function getBoatFromSeat(seat)
@@ -232,6 +277,9 @@ local function ensureGui()
     pressureLabel = controlFrame:WaitForChild("HullPressurePercentLabel")
     coordinatesLabel = controlFrame:WaitForChild("CoordinatesLabel")
     depthLabel = controlFrame:WaitForChild("DepthAmountLabel")
+
+    configureMeter(healthBar)
+    configureMeter(speedBar)
 
     guiAncestryConnection = guiInstance.AncestryChanged:Connect(function(_, parent)
         if not parent then

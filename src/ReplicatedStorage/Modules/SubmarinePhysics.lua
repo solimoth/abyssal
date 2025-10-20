@@ -290,6 +290,11 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
         end
 
         local function getForwardDistance()
+                local currentSpeed = inputs.currentSpeed
+                if typeof(currentSpeed) == "number" then
+                        return currentSpeed * deltaTime
+                end
+
                 local clampedThrottle = math.clamp(throttle, -1, 1)
                 if maxSpeed ~= nil then
                         return clampedThrottle * maxSpeed * deltaTime

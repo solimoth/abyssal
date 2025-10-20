@@ -2266,27 +2266,19 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
 	local newCFrame
 
 	if isSubmarine then
-		local throttleInput = 0
-		if effectiveMaxSpeed ~= 0 then
-			throttleInput = currentSpeed / effectiveMaxSpeed
-		end
-
-		local steerInput = 0
-		local turnSpeedValue = baseTurnSpeed ~= 0 and baseTurnSpeed or (config.TurnSpeed or 0)
-		if turnSpeedValue ~= 0 then
-			steerInput = currentTurnSpeed / turnSpeedValue
-		end
-
-		local controlMultiplier = isSubmarine and math.max(stressAccelMultiplier, SUB_CONTROL_MIN_MULTIPLIER) or 1
+                local controlMultiplier = isSubmarine and math.max(stressAccelMultiplier, SUB_CONTROL_MIN_MULTIPLIER) or 1
+                local turnSpeedValue = baseTurnSpeed ~= 0 and baseTurnSpeed or (config.TurnSpeed or 0)
 
                 local adjustedInputs = {
-                        throttle = throttleInput,
-                        steer = steerInput,
+                        throttle = throttle,
+                        steer = steer,
                         ascend = ascend * controlMultiplier,
                         pitch = pitch * controlMultiplier,
                         roll = roll * controlMultiplier,
                         currentSpeed = currentSpeed,
                         effectiveMaxSpeed = effectiveMaxSpeed,
+                        currentTurnSpeed = currentTurnSpeed,
+                        baseTurnSpeed = turnSpeedValue,
                 }
 
                 local subConfig = {}

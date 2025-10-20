@@ -369,12 +369,24 @@ function SubmarinePhysics.GetSubmarineInfo(submarine, config)
 	local cf = primaryPart.CFrame
 	local x, y, z = cf:ToEulerAnglesYXZ()
 
-	return {
-		depth = math.floor(depth),
-		speed = primaryPart.AssemblyLinearVelocity.Magnitude,
-		heading = math.deg(y),
-		pitch = math.deg(x),
-		roll = math.deg(z),
+        local speed = submarine:GetAttribute("SubmarineSpeed")
+        if typeof(speed) ~= "number" then
+                speed = primaryPart.AssemblyLinearVelocity.Magnitude
+                if speed <= 0 then
+                        speed = primaryPart.Velocity.Magnitude
+                end
+        end
+
+        if speed < 0 then
+                speed = 0
+        end
+
+        return {
+                depth = math.floor(depth),
+                speed = speed,
+                heading = math.deg(y),
+                pitch = math.deg(x),
+                roll = math.deg(z),
 		depthPercent = (depth / config.MaxDepth) * 100,
 		mode = shouldSurface and "surface" or "dive"
 	}

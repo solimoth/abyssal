@@ -518,7 +518,7 @@ local function SetBoatAttributeIfChanged(boat, attributeName, value)
         boat:SetAttribute(attributeName, value)
 end
 
-local function UpdateSubmarineTelemetryAttributes(boat, state, config)
+local function UpdateSubmarineTelemetryAttributes(player, boat, state, config)
         if not boat or not state or not config then
                 return
         end
@@ -548,9 +548,30 @@ local function UpdateSubmarineTelemetryAttributes(boat, state, config)
         local integrityRatio = state.integrityRatio or (maxHealth > 0 and math.clamp(state.health / maxHealth, 0, 1) or 1)
         integrityRatio = math.floor(integrityRatio * 1000 + 0.5) / 1000
 
+        local currentSpeed = 0
+        if player then
+                currentSpeed = math.abs(BoatSpeeds[player] or 0)
+        end
+
+        if currentSpeed <= 0 and boat.PrimaryPart then
+                local primaryPart = boat.PrimaryPart
+                currentSpeed = primaryPart.AssemblyLinearVelocity.Magnitude
+                if currentSpeed <= 0 then
+                        currentSpeed = primaryPart.Velocity.Magnitude
+                end
+        end
+
+        if currentSpeed < 0 then
+                currentSpeed = 0
+        end
+
+        -- Round to two decimal places to reduce attribute churn while keeping precision
+        currentSpeed = math.floor(currentSpeed * 100 + 0.5) / 100
+
         SetBoatAttributeIfChanged(boat, "SubmarineHealthPercent", healthPercent)
         SetBoatAttributeIfChanged(boat, "SubmarinePressurePercent", pressurePercent)
         SetBoatAttributeIfChanged(boat, "SubmarineIntegrityRatio", integrityRatio)
+        SetBoatAttributeIfChanged(boat, "SubmarineSpeed", currentSpeed)
 end
 
 local INSTANT_KILL_ATTRIBUTE_NAMES = {
@@ -736,7 +757,7 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
 
         state.health = math.max(state.health - damage, 0)
         UpdateSubmarineStressMetrics(state)
-        UpdateSubmarineTelemetryAttributes(boat, state, config)
+        UpdateSubmarineTelemetryAttributes(player, boat, state, config)
 
         local currentPercent = math.clamp(math.floor((state.health / state.maxHealth) * 100), 0, 100)
 	if state.health <= 0 then
@@ -1194,7 +1215,7 @@ TriggerSubmarineImplosion = function(player, boat, config)
                 end
                 state.isImploding = true
                 state.health = 0
-                UpdateSubmarineTelemetryAttributes(boat, state, config)
+                UpdateSubmarineTelemetryAttributes(player, boat, state, config)
         end
 
         local playerName = player and player.Name or "Unknown"
@@ -1323,7 +1344,7 @@ local function ApplySubmarineDepthDamage(player, boat, config, targetPosition, d
                 end
 
                 UpdateSubmarineStressMetrics(state)
-                UpdateSubmarineTelemetryAttributes(boat, state, config)
+                UpdateSubmarineTelemetryAttributes(player, boat, state, config)
                 return false
         end
 
@@ -1351,7 +1372,7 @@ local function ApplySubmarineDepthDamage(player, boat, config, targetPosition, d
 	end
 
         UpdateSubmarineStressMetrics(state)
-        UpdateSubmarineTelemetryAttributes(boat, state, config)
+        UpdateSubmarineTelemetryAttributes(player, boat, state, config)
         if state.health <= 0 then
                 TriggerSubmarineImplosion(player, boat, config)
                 return true
@@ -1525,7 +1546,7 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
                 state.lastWarningTime = now - SUB_DEPTH_WARNING_COOLDOWN
                 state.lastSafeMessageTime = now
                 state.isImploding = false
-                UpdateSubmarineTelemetryAttributes(boat, state, config)
+                UpdateSubmarineTelemetryAttributes(player, boat, state, config)
         else
                 SubmarineStates[player] = nil
         end
@@ -1803,7 +1824,7 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
         if isSubmarine then
                 stressState = GetOrCreateSubmarineState(player, config)
                 integrityRatio, stressSpeedMultiplier, stressAccelMultiplier = UpdateSubmarineStressMetrics(stressState)
-                UpdateSubmarineTelemetryAttributes(boat, stressState, config)
+                UpdateSubmarineTelemetryAttributes(player, boat, stressState, config)
         end
 
         -- Get inputs

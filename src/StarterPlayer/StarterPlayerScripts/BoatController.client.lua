@@ -13,6 +13,8 @@ local player = Players.LocalPlayer
 local BoatConfig = require(ReplicatedStorage.Modules.BoatConfig)
 local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 
+local WATER_SURFACE_OFFSET_ATTRIBUTE = "WaterSurfaceOffset"
+
 -- Variables
 local currentBoat = nil
 local currentSeat = nil
@@ -78,6 +80,26 @@ local rollAccelerationRate = 2
 local inputSmoothness = 0.15
 local smoothedThrottle = 0
 local smoothedSteer = 0
+
+local function getWaterSurfaceOffset(boat)
+        if not boat then
+                return 0
+        end
+
+        local offset = boat:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+        if offset == nil then
+                local primaryPart = boat.PrimaryPart
+                if primaryPart then
+                        offset = primaryPart:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+                end
+        end
+
+        if typeof(offset) == "number" then
+                return offset
+        end
+
+        return 0
+end
 
 -- Helper functions
 local function GetBoatFromSeat(seat)
@@ -606,8 +628,9 @@ local function OnCharacterSeated(active, seatPart)
 
 					if isSubmarine and currentBoat.PrimaryPart then
 						ResolveFirstPersonCameraPart()
-						local surfaceY = WaterPhysics.GetWaterLevel(currentBoat.PrimaryPart.Position)
-						local depth = surfaceY - currentBoat.PrimaryPart.Position.Y
+                                                local surfaceY = WaterPhysics.GetWaterLevel(currentBoat.PrimaryPart.Position)
+                                                local waterSurfaceOffset = getWaterSurfaceOffset(currentBoat)
+                                                local depth = surfaceY - (currentBoat.PrimaryPart.Position.Y + waterSurfaceOffset)
 						submarineMode = depth > 8 and "dive" or "surface"
 					end
 
@@ -651,7 +674,8 @@ local function OnCharacterAdded(character)
 		while character.Parent do
                         if isControlling and isSubmarine and currentBoat and currentBoat.PrimaryPart then
                                 local surfaceY = WaterPhysics.GetWaterLevel(currentBoat.PrimaryPart.Position)
-                                local depth = surfaceY - currentBoat.PrimaryPart.Position.Y
+                                local waterSurfaceOffset = getWaterSurfaceOffset(currentBoat)
+                                local depth = surfaceY - (currentBoat.PrimaryPart.Position.Y + waterSurfaceOffset)
 
 				if depth < 5 and submarineMode == "dive" and 
 					not activeDiveTask and 

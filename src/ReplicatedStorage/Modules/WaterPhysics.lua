@@ -271,7 +271,7 @@ function WaterPhysics.ComputeBuoyancyForce(part: BasePart, surfaceY: number)
 	return Vector3.new(0, upwardForce, 0), displacementRatio
 end
 
-function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: string, deltaTime: number)
+function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: string, deltaTime: number, waterSurfaceOffset: number?)
 	local position = currentCFrame.Position
 	local surfaceSample = WaveRegistry.SampleSurface(position)
 	local surfaceY
@@ -350,14 +350,18 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
 		return currentCFrame, false
 	end
 
-	local targetOffset = 0
-	if boatType == "Surface" then
-		targetOffset = 2
-	elseif boatType == "Submarine" then
-		targetOffset = -1
-	end
+        local targetOffset
+        if waterSurfaceOffset ~= nil then
+                targetOffset = -waterSurfaceOffset
+        elseif boatType == "Surface" then
+                targetOffset = 2
+        elseif boatType == "Submarine" then
+                targetOffset = -1
+        else
+                targetOffset = 0
+        end
 
-	local targetY = surfaceY + targetOffset
+        local targetY = surfaceY + targetOffset
 	local yDifference = targetY - position.Y
 	local stiffness = boatType == "Submarine" and 2 or 5
 	local buoyancySpeed = math.clamp(yDifference * stiffness, -10, 10)

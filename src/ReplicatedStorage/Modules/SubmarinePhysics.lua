@@ -256,11 +256,15 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
         local ascend = inputs.ascend or 0
         local pitch = inputs.pitch or 0
         local roll = inputs.roll or 0
+        local currentSpeedValue = inputs.currentSpeed
+        if typeof(currentSpeedValue) ~= "number" then
+                currentSpeedValue = nil
+        end
 
-	-- Handle both Speed and MaxSpeed properties
-	local speed = config.Speed or config.MaxSpeed or 28
-	local turnSpeed = config.TurnSpeed or 1.8
-	local pitchSpeed = config.PitchSpeed or 1.5
+        -- Handle both Speed and MaxSpeed properties
+        local speed = config.Speed or config.MaxSpeed or 28
+        local turnSpeed = config.TurnSpeed or 1.8
+        local pitchSpeed = config.PitchSpeed or 1.5
 	local rollSpeed = config.RollSpeed or 1.0
 	local verticalSpeed = config.VerticalSpeed or 18
 
@@ -282,6 +286,28 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
         local configSurfaceOffset = waterSurfaceOffset
         if configSurfaceOffset == nil and config then
                 configSurfaceOffset = config.WaterSurfaceOffset
+        end
+
+        local effectiveMaxSpeed = inputs.effectiveMaxSpeed
+        if typeof(effectiveMaxSpeed) ~= "number" then
+                effectiveMaxSpeed = config.MaxSpeed or speed
+        end
+        if effectiveMaxSpeed and effectiveMaxSpeed > 0 and currentSpeedValue then
+                currentSpeedValue = math.clamp(currentSpeedValue, -effectiveMaxSpeed, effectiveMaxSpeed)
+        end
+
+        local function getForwardSpeed()
+                if currentSpeedValue then
+                        return currentSpeedValue
+                end
+
+                local maxReference = effectiveMaxSpeed or speed
+                if maxReference and maxReference > 0 then
+                        local clampedThrottle = math.clamp(throttle, -1, 1)
+                        return clampedThrottle * (speed or maxReference)
+                end
+
+                return throttle * speed
         end
 
         if isIdle and math.abs(throttle) < 0.01 and math.abs(steer) < 0.01 then
@@ -309,17 +335,18 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
 
 		local yawAmount = steer * turnSpeed * deltaTime
 
-		local moveDirection = currentCFrame.LookVector
-		local horizontalDir = Vector3.new(moveDirection.X, 0, moveDirection.Z)
-		if horizontalDir.Magnitude > 0 then
-			moveDirection = horizontalDir.Unit
-		end
-		local moveDistance = throttle * speed * deltaTime
+                local moveDirection = currentCFrame.LookVector
+                local horizontalDir = Vector3.new(moveDirection.X, 0, moveDirection.Z)
+                if horizontalDir.Magnitude > 0 then
+                        moveDirection = horizontalDir.Unit
+                end
+                local forwardSpeed = getForwardSpeed()
+                local moveDistance = forwardSpeed * deltaTime
 
-		local newPosition = Vector3.new(
-			currentCFrame.Position.X + (moveDirection.X * moveDistance),
-			currentCFrame.Position.Y + surfaceSpeed,
-			currentCFrame.Position.Z + (moveDirection.Z * moveDistance)
+                local newPosition = Vector3.new(
+                        currentCFrame.Position.X + (moveDirection.X * moveDistance),
+                        currentCFrame.Position.Y + surfaceSpeed,
+                        currentCFrame.Position.Z + (moveDirection.Z * moveDistance)
 		)
 
 		if newPosition.Y > targetY then
@@ -342,13 +369,14 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
 			* CFrame.Angles(-pitchAmount, 0, 0)
 			* CFrame.Angles(0, 0, rollAmount)
 
-		local moveDirection = newRotation.LookVector
-		local moveDistance = throttle * speed * deltaTime
+                local moveDirection = newRotation.LookVector
+                local forwardSpeed = getForwardSpeed()
+                local moveDistance = forwardSpeed * deltaTime
 
-		local verticalMovement = 0
-		if math.abs(ascend) > 0.01 then
-			verticalMovement = ascend * verticalSpeed * deltaTime
-		elseif math.abs(pitch) > 0.01 and math.abs(throttle) > 0.01 then
+                local verticalMovement = 0
+                if math.abs(ascend) > 0.01 then
+                        verticalMovement = ascend * verticalSpeed * deltaTime
+                elseif math.abs(pitch) > 0.01 and math.abs(throttle) > 0.01 then
 			local pitchVertical = moveDirection.Y * moveDistance
 			verticalMovement = pitchVertical
 		end

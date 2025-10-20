@@ -2279,13 +2279,15 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
 
 		local controlMultiplier = isSubmarine and math.max(stressAccelMultiplier, SUB_CONTROL_MIN_MULTIPLIER) or 1
 
-		local adjustedInputs = {
-			throttle = throttleInput,
-			steer = steerInput,
-			ascend = ascend * controlMultiplier,
-			pitch = pitch * controlMultiplier,
-			roll = roll * controlMultiplier
-		}
+                local adjustedInputs = {
+                        throttle = throttleInput,
+                        steer = steerInput,
+                        ascend = ascend * controlMultiplier,
+                        pitch = pitch * controlMultiplier,
+                        roll = roll * controlMultiplier,
+                        currentSpeed = currentSpeed,
+                        effectiveMaxSpeed = effectiveMaxSpeed,
+                }
 
                 local subConfig = {}
                 for k, v in pairs(config) do
@@ -2316,14 +2318,14 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
                 )
 
                 if SubmarinePhysics.ShouldAutoSurface(newCFrame.Position, waterSurfaceOffset) then
-                local floatingCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
+                        local floatingCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
                                 newCFrame,
                                 "Surface",
                                 deltaTime,
                                 waterSurfaceOffset
                         )
-			newCFrame = floatingCFrame
-		end
+                        newCFrame = floatingCFrame
+                end
 
 		newCFrame = ApplySubmarineStressEffects(player, boat, config, newCFrame, deltaTime)
 	else

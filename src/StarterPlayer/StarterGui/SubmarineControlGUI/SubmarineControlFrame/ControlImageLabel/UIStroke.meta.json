@@ -1,0 +1,6 @@
+{
+  "$className": "UIStroke",
+  "ApplyStrokeMode": "Border",
+  "Color": [0.196, 0.267, 0.333],
+  "Thickness": 2
+}

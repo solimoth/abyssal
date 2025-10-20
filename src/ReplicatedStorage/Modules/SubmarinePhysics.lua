@@ -12,6 +12,8 @@ local SURFACE_DETECTION_RANGE = 8
 local SURFACE_PULL_STRENGTH = 15
 local DEPTH_PRESSURE_DAMAGE = 1
 
+local WATER_SURFACE_OFFSET_ATTRIBUTE = "WaterSurfaceOffset"
+
 -- Cache for parsed center of mass values
 local CenterOfMassCache = {}
 
@@ -50,25 +52,58 @@ local function GetCenterOfMass(boat)
 	return nil
 end
 
+local function resolvePositionAndOffset(target, explicitOffset)
+        local offset = explicitOffset or 0
+
+        if typeof(target) == "Instance" then
+                if target:IsA("BasePart") then
+                        local attributeOffset = target:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+                        if attributeOffset ~= nil then
+                                offset = explicitOffset or attributeOffset
+                        end
+                        return target.Position, offset
+                elseif target:IsA("Model") then
+                        local primaryPart = target.PrimaryPart
+                        if primaryPart then
+                                local attributeOffset = target:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+                                        or primaryPart:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+                                if attributeOffset ~= nil then
+                                        offset = explicitOffset or attributeOffset
+                                end
+                                return primaryPart.Position, offset
+                        end
+                end
+                return Vector3.zero, offset
+        end
+
+        if typeof(target) ~= "Vector3" then
+                return Vector3.zero, offset
+        end
+
+        return target, offset
+end
+
 -- Clean up cache when boat is destroyed
 local function ClearCacheForBoat(boat)
 	CenterOfMassCache[boat] = nil
 end
 
 -- Helper function to get depth
-function SubmarinePhysics.GetDepth(position)
-        return WaterPhysics.GetWaterLevel(position) - position.Y
+function SubmarinePhysics.GetDepth(target, waterSurfaceOffset)
+        local position, offset = resolvePositionAndOffset(target, waterSurfaceOffset)
+        local surfaceY = WaterPhysics.GetWaterLevel(position)
+        return surfaceY - (position.Y + offset)
 end
 
 -- Check if submarine should auto-surface
-function SubmarinePhysics.ShouldAutoSurface(position)
-	local depth = SubmarinePhysics.GetDepth(position)
-	return depth >= 0 and depth <= SURFACE_DETECTION_RANGE
+function SubmarinePhysics.ShouldAutoSurface(target, waterSurfaceOffset)
+        local depth = SubmarinePhysics.GetDepth(target, waterSurfaceOffset)
+        return depth >= 0 and depth <= SURFACE_DETECTION_RANGE
 end
 
 -- Helper function to check if position is valid for submarine
-function SubmarinePhysics.IsValidDepth(position, config)
-        local depth = SubmarinePhysics.GetDepth(position)
+function SubmarinePhysics.IsValidDepth(target, config, waterSurfaceOffset)
+        local depth = SubmarinePhysics.GetDepth(target, waterSurfaceOffset)
         local maxDepth = (config and config.MaxDepth) or math.huge
         local minDepth = (config and config.MinDepth) or -math.huge
 
@@ -152,9 +187,14 @@ end
 
 -- Apply idle movement to submarines with asymmetry support
 function SubmarinePhysics.ApplyIdleMovement(currentCFrame, config, deltaTime, hasDriver, boat)
-	local time = tick()
-	local position = currentCFrame.Position
-	local depth = SubmarinePhysics.GetDepth(position)
+        local time = tick()
+        local position = currentCFrame.Position
+        local depth
+        if boat and boat.PrimaryPart then
+                depth = SubmarinePhysics.GetDepth(boat.PrimaryPart)
+        else
+                depth = SubmarinePhysics.GetDepth(position)
+        end
 
 	local centerOfMassOffset = GetCenterOfMass(boat)
 
@@ -198,12 +238,12 @@ function SubmarinePhysics.ApplyIdleMovement(currentCFrame, config, deltaTime, ha
 end
 
 -- Calculate submarine movement with full 3D rotation
-function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, deltaTime, isInDiveMode, isIdle)
-	local throttle = inputs.throttle or 0
-	local steer = inputs.steer or 0
-	local ascend = inputs.ascend or 0
-	local pitch = inputs.pitch or 0
-	local roll = inputs.roll or 0
+function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, deltaTime, isInDiveMode, isIdle, waterSurfaceOffset)
+        local throttle = inputs.throttle or 0
+        local steer = inputs.steer or 0
+        local ascend = inputs.ascend or 0
+        local pitch = inputs.pitch or 0
+        local roll = inputs.roll or 0
 
 	-- Handle both Speed and MaxSpeed properties
 	local speed = config.Speed or config.MaxSpeed or 28
@@ -223,20 +263,27 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
 	rollSpeed = rollSpeed * (rotationWeightFactor * 0.7)
 
 	-- Vertical speed is affected by weight
-	local verticalWeightFactor = 1.8 - (weight * 0.15)
-	verticalWeightFactor = math.clamp(verticalWeightFactor, 0.3, 1.8)
-	verticalSpeed = verticalSpeed * verticalWeightFactor
+        local verticalWeightFactor = 1.8 - (weight * 0.15)
+        verticalWeightFactor = math.clamp(verticalWeightFactor, 0.3, 1.8)
+        verticalSpeed = verticalSpeed * verticalWeightFactor
 
-	if isIdle and math.abs(throttle) < 0.01 and math.abs(steer) < 0.01 then
-		return currentCFrame
-	end
+        local configSurfaceOffset = waterSurfaceOffset
+        if configSurfaceOffset == nil and config then
+                configSurfaceOffset = config.WaterSurfaceOffset
+        end
 
-	local shouldSurface = SubmarinePhysics.ShouldAutoSurface(currentCFrame.Position)
+        if isIdle and math.abs(throttle) < 0.01 and math.abs(steer) < 0.01 then
+                return currentCFrame
+        end
 
-	if shouldSurface and not isInDiveMode then
-		-- AUTO-SURFACE MODE
-                local currentDepth = SubmarinePhysics.GetDepth(currentCFrame.Position)
-                local targetY = WaterPhysics.GetWaterLevel(currentCFrame.Position) - 1
+        local shouldSurface = SubmarinePhysics.ShouldAutoSurface(currentCFrame.Position, configSurfaceOffset)
+
+        if shouldSurface and not isInDiveMode then
+                -- AUTO-SURFACE MODE
+                local currentDepth = SubmarinePhysics.GetDepth(currentCFrame.Position, configSurfaceOffset)
+                local waterLevel = WaterPhysics.GetWaterLevel(currentCFrame.Position)
+                local targetOffset = configSurfaceOffset or 1
+                local targetY = waterLevel - targetOffset
 
 		local yDifference = targetY - currentCFrame.Position.Y
 		local surfaceSpeed = math.clamp(yDifference * 2, -2, 2) * deltaTime
@@ -300,7 +347,7 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
 
                 local minDepth = config.MinDepth
                 if minDepth ~= nil then
-                        local currentDepth = SubmarinePhysics.GetDepth(newPosition)
+                        local currentDepth = SubmarinePhysics.GetDepth(newPosition, configSurfaceOffset)
                         if currentDepth < minDepth then
                                 newPosition = Vector3.new(
                                         newPosition.X,
@@ -362,9 +409,9 @@ function SubmarinePhysics.GetSubmarineInfo(submarine, config)
 		}
 	end
 
-	local primaryPart = submarine.PrimaryPart
-	local depth = SubmarinePhysics.GetDepth(primaryPart.Position)
-	local shouldSurface = SubmarinePhysics.ShouldAutoSurface(primaryPart.Position)
+        local primaryPart = submarine.PrimaryPart
+        local depth = SubmarinePhysics.GetDepth(primaryPart)
+        local shouldSurface = SubmarinePhysics.ShouldAutoSurface(primaryPart)
 
 	local cf = primaryPart.CFrame
 	local x, y, z = cf:ToEulerAnglesYXZ()
@@ -396,7 +443,7 @@ end
 function SubmarinePhysics.CheckPressureDamage(submarine, config)
 	if not submarine or not submarine.PrimaryPart then return 0 end
 
-	local depth = SubmarinePhysics.GetDepth(submarine.PrimaryPart.Position)
+        local depth = SubmarinePhysics.GetDepth(submarine.PrimaryPart)
 
 	if depth > config.MaxDepth * 0.9 then
 		local damagePercent = (depth - config.MaxDepth * 0.9) / (config.MaxDepth * 0.1)

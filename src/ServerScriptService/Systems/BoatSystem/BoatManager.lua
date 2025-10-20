@@ -105,6 +105,8 @@ local SUB_IDLE_REANCHOR_DISTANCE = 10
 
 local ZERO_VECTOR = Vector3.new()
 
+local WATER_SURFACE_OFFSET_ATTRIBUTE = "WaterSurfaceOffset"
+
 local TriggerSubmarineImplosion
 
 local function clearTable(tbl)
@@ -421,6 +423,25 @@ local function SetupBoatPhysics(boat, config)
 	return controlPart
 end
 
+local function ComputeWaterSurfaceOffset(boat: Model): number?
+        if not boat then
+                return nil
+        end
+
+        local primaryPart = boat.PrimaryPart
+        if not primaryPart then
+                return nil
+        end
+
+        local waterLevelPart = boat:FindFirstChild("WaterLevel", true)
+        if not waterLevelPart or not waterLevelPart:IsA("BasePart") then
+                return nil
+        end
+
+        local localPosition = primaryPart.CFrame:PointToObjectSpace(waterLevelPart.Position)
+        return localPosition.Y
+end
+
 -- Enhanced cleanup function
 local function CleanupBoat(player)
 	-- Clean up acceleration data
@@ -694,7 +715,7 @@ local function UpdateSubmarineTelemetryAttributes(player, boat, state, config)
 
         local depth = state.lastDepth or 0
         if depth <= 0 and boat.PrimaryPart then
-                local success, measuredDepth = pcall(SubmarinePhysics.GetDepth, boat.PrimaryPart.Position)
+                local success, measuredDepth = pcall(SubmarinePhysics.GetDepth, boat.PrimaryPart)
                 if success and typeof(measuredDepth) == "number" then
                         depth = measuredDepth
                 end
@@ -1552,12 +1573,24 @@ local function ApplySubmarineDepthDamage(player, boat, config, targetPosition, d
 		return false
 	end
 
-	local state = GetOrCreateSubmarineState(player, config)
-	if state.isImploding then
-		return true
-	end
+        local state = GetOrCreateSubmarineState(player, config)
+        if state.isImploding then
+                return true
+        end
 
-	local depth = SubmarinePhysics.GetDepth(targetPosition)
+        local waterSurfaceOffset = nil
+        if boat then
+                waterSurfaceOffset = boat:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+                        or (boat.PrimaryPart and boat.PrimaryPart:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE))
+        end
+
+        if waterSurfaceOffset ~= nil then
+                state.waterSurfaceOffset = waterSurfaceOffset
+        else
+                waterSurfaceOffset = state.waterSurfaceOffset
+        end
+
+        local depth = SubmarinePhysics.GetDepth(targetPosition, waterSurfaceOffset)
 	state.lastDepth = depth
 
 	local overDepth = depth - config.MaxDepth
@@ -1712,12 +1745,20 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 		end
 	end
 
-	local waterLevel = getWaterLevel(spawnPosition)
-	if config.Type == "Submarine" then
-		spawnPosition = Vector3.new(spawnPosition.X, waterLevel - 1, spawnPosition.Z)
-	else
-		spawnPosition = Vector3.new(spawnPosition.X, waterLevel + 2, spawnPosition.Z)
-	end
+        local waterSurfaceOffset = ComputeWaterSurfaceOffset(boat)
+        if boat.PrimaryPart then
+                boat.PrimaryPart:SetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE, waterSurfaceOffset)
+        end
+        boat:SetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE, waterSurfaceOffset)
+
+        local waterLevel = getWaterLevel(spawnPosition)
+        if waterSurfaceOffset then
+                spawnPosition = Vector3.new(spawnPosition.X, waterLevel - waterSurfaceOffset, spawnPosition.Z)
+        elseif config.Type == "Submarine" then
+                spawnPosition = Vector3.new(spawnPosition.X, waterLevel - 1, spawnPosition.Z)
+        else
+                spawnPosition = Vector3.new(spawnPosition.X, waterLevel + 2, spawnPosition.Z)
+        end
 
 	local desiredYaw = math.atan2(spawnDirection.X, -spawnDirection.Z)
 	boat:SetPrimaryPartCFrame(CFrame.new(spawnPosition) * CFrame.Angles(0, desiredYaw, 0))
@@ -1788,6 +1829,7 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
                 state.lastWarningTime = now - SUB_DEPTH_WARNING_COOLDOWN
                 state.lastSafeMessageTime = now
                 state.isImploding = false
+                state.waterSurfaceOffset = waterSurfaceOffset or 0
                 UpdateSubmarineTelemetryAttributes(player, boat, state, config)
         else
                 SubmarineStates[player] = nil
@@ -2005,11 +2047,14 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
 		if not accelData then return end
 	end
 
-	local primaryPart = boat.PrimaryPart
-	if not primaryPart then
-		CleanupBoat(player)
-		return
-	end
+        local primaryPart = boat.PrimaryPart
+        if not primaryPart then
+                CleanupBoat(player)
+                return
+        end
+
+        local waterSurfaceOffset = boat:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+                or primaryPart:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
 
 	-- Performance: Check distance to nearest player for physics throttling
 	local shouldThrottle = true
@@ -2062,7 +2107,7 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
                                 end
                         end
                 elseif isPlayerNearby then
-                        local floatingCFrame, applied = WaterPhysics.ApplyFloatingPhysics(boatCFrame, waveBoatType, deltaTime)
+                        local floatingCFrame, applied = WaterPhysics.ApplyFloatingPhysics(boatCFrame, waveBoatType, deltaTime, waterSurfaceOffset)
                         if applied then
                                 targetCFrame = floatingCFrame
                         end
@@ -2242,10 +2287,12 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
 			roll = roll * controlMultiplier
 		}
 
-		local subConfig = {}
-		for k, v in pairs(config) do
-			subConfig[k] = v
-		end
+                local subConfig = {}
+                for k, v in pairs(config) do
+                        subConfig[k] = v
+                end
+
+                subConfig.WaterSurfaceOffset = waterSurfaceOffset
 
 		local baseSpeedValue = (subConfig.Speed or subConfig.MaxSpeed or 28)
 		local controlSpeedMultiplier = isSubmarine and stressSpeedMultiplier or 1
@@ -2258,21 +2305,23 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
 		subConfig.RollSpeed = (subConfig.RollSpeed or 1.0) * controlTurnMultiplier
 		subConfig.VerticalSpeed = (subConfig.VerticalSpeed or 18) * controlMultiplier
 
-		newCFrame = SubmarinePhysics.CalculateMovement(
-			currentCFrame,
-			adjustedInputs,
-			subConfig,
-			deltaTime,
-			math.abs(ascend) > 0.01,
-			false
-		)
+                newCFrame = SubmarinePhysics.CalculateMovement(
+                        currentCFrame,
+                        adjustedInputs,
+                        subConfig,
+                        deltaTime,
+                        math.abs(ascend) > 0.01,
+                        false,
+                        waterSurfaceOffset
+                )
 
-		if SubmarinePhysics.ShouldAutoSurface(newCFrame.Position) then
-			local floatingCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
-				newCFrame,
-				"Surface",
-				deltaTime
-			)
+                if SubmarinePhysics.ShouldAutoSurface(newCFrame.Position, waterSurfaceOffset) then
+                local floatingCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
+                                newCFrame,
+                                "Surface",
+                                deltaTime,
+                                waterSurfaceOffset
+                        )
 			newCFrame = floatingCFrame
 		end
 
@@ -2290,11 +2339,12 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
 		newCFrame = CFrame.new(newPosition) * newRotation.Rotation
 
 		-- Apply water physics
-		newCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
-			newCFrame,
-			"Surface",
-			deltaTime
-		)
+                newCFrame, _ = WaterPhysics.ApplyFloatingPhysics(
+                        newCFrame,
+                        "Surface",
+                        deltaTime,
+                        waterSurfaceOffset
+                )
 	end
 
 	if isSubmarine then

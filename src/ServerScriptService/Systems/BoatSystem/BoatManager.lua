@@ -76,6 +76,15 @@ local SUB_IMPL_DEBRIS_MAX_ANGULAR = math.rad(160)
 local SUB_IMPL_DEBRIS_FADE_TIME = 3.5
 
 local SUB_COLLISION_DAMAGE_RATIO = 0.18 -- percent of max hull lost per qualifying collision before modifiers
+local SUB_COLLISION_MIN_REFERENCE_SPEED = 14 -- minimum speed used when scaling collision damage
+local SUB_COLLISION_SPEED_BREAKPOINTS = {
+        { ratio = 0, multiplier = 0 },
+        { ratio = 0.35, multiplier = 0.2 },
+        { ratio = 0.7, multiplier = 0.65 },
+        { ratio = 1, multiplier = 1 },
+        { ratio = 1.55, multiplier = 1.9 },
+}
+local SUB_COLLISION_SPEED_OVERSHOOT_SLOPE = 1.15
 local SUB_COLLISION_GLOBAL_COOLDOWN = 0.3
 local SUB_COLLISION_PART_COOLDOWN = 1.2
 local SUB_COLLISION_PRINT_COOLDOWN = 0.75
@@ -161,6 +170,42 @@ local function GatherCollisionContacts(part, buffer)
 	end
 
 	return buffer
+end
+
+local function GetCollisionSpeedMultiplier(relativeSpeed, config)
+        if not relativeSpeed or relativeSpeed <= 0 then
+                return 0
+        end
+
+        local referenceSpeed = SUB_COLLISION_MIN_REFERENCE_SPEED
+        if config then
+                local configSpeed = config.MaxSpeed or config.Speed
+                if configSpeed and configSpeed > referenceSpeed then
+                        referenceSpeed = configSpeed
+                end
+        end
+
+        local speedRatio = relativeSpeed / math.max(referenceSpeed, 1)
+        local previous = SUB_COLLISION_SPEED_BREAKPOINTS[1]
+
+        for index = 2, #SUB_COLLISION_SPEED_BREAKPOINTS do
+                local current = SUB_COLLISION_SPEED_BREAKPOINTS[index]
+                if speedRatio <= current.ratio then
+                        local range = current.ratio - previous.ratio
+                        if range <= 0 then
+                                return current.multiplier
+                        end
+
+                        local alpha = (speedRatio - previous.ratio) / range
+                        return previous.multiplier + (current.multiplier - previous.multiplier) * alpha
+                end
+
+                previous = current
+        end
+
+        local last = SUB_COLLISION_SPEED_BREAKPOINTS[#SUB_COLLISION_SPEED_BREAKPOINTS]
+        local overshootRatio = speedRatio - last.ratio
+        return last.multiplier + (overshootRatio * SUB_COLLISION_SPEED_OVERSHOOT_SLOPE)
 end
 
 -- Memory management
@@ -746,11 +791,17 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
 	local anchoredFactor = otherPart.Anchored and 1.2 or 1
 	local damageMultiplier = GetCollisionDamageMultiplier(otherPart)
 
-	local damage = state.maxHealth
-		* SUB_COLLISION_DAMAGE_RATIO
-		* massFactor
-		* anchoredFactor
-		* damageMultiplier
+        local speedMultiplier = GetCollisionSpeedMultiplier(relativeSpeed, config)
+        if speedMultiplier <= 0 then
+                return
+        end
+
+        local damage = state.maxHealth
+                * SUB_COLLISION_DAMAGE_RATIO
+                * speedMultiplier
+                * massFactor
+                * anchoredFactor
+                * damageMultiplier
 	if damage <= 0 then
 		return
 	end

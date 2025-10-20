@@ -43,6 +43,9 @@ end
 -- Semi-circular wheels swing 90° left/right from centre as their percentages change.
 local METER_SWING = 90
 
+local METER_MIN_ROTATION = 0
+local METER_MAX_ROTATION = 180
+
 local lastHealthPercent
 local lastSpeedPercent
 
@@ -54,6 +57,16 @@ local function setMeterRotation(wheel, percent)
     local ratio = math.clamp(percent, 0, 100) / 100
     local rotation = -METER_SWING + (METER_SWING * 2) * ratio
     wheel.Rotation = rotation
+end
+
+local function setMeterRotation(gradient, percent)
+    if not gradient then
+        return
+    end
+
+    local ratio = math.clamp(percent, 0, 100) / 100
+    local rotation = METER_MIN_ROTATION + (METER_MAX_ROTATION - METER_MIN_ROTATION) * ratio
+    gradient.Rotation = rotation
 end
 
 local function resetUi()

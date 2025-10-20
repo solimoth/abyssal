@@ -12,9 +12,7 @@ local gui
 local controlFrame
 local compassNeedle
 local healthBar
-local healthGradient
 local speedBar
-local speedGradient
 local healthLabel
 local speedLabel
 local pressureLabel
@@ -42,10 +40,8 @@ local function round(value, decimals)
     return math.floor(value * multiplier + 0.5) / multiplier
 end
 
-local HEALTH_FULL_COLOR = Color3.fromRGB(255, 255, 255)
-local HEALTH_EMPTY_COLOR = Color3.fromRGB(113, 113, 114)
-local SPEED_FULL_COLOR = Color3.fromRGB(255, 255, 255)
-local SPEED_EMPTY_COLOR = Color3.fromRGB(150, 150, 151)
+-- Semi-circular wheels swing 90° left/right from centre as their percentages change.
+local METER_SWING = 90
 
 local METER_MIN_ROTATION = 0
 local METER_MAX_ROTATION = 180
@@ -53,33 +49,14 @@ local METER_MAX_ROTATION = 180
 local lastHealthPercent
 local lastSpeedPercent
 
-local function applyBarFill(gradient, percent, fullColor, emptyColor)
-    if not gradient then
+local function setMeterRotation(wheel, percent)
+    if not wheel then
         return
     end
 
-    local clampedPercent = math.clamp(percent, 0, 100)
-    local ratio = clampedPercent / 100
-
-    if ratio <= 0 then
-        gradient.Color = ColorSequence.new(emptyColor, emptyColor)
-        return
-    end
-
-    if ratio >= 1 then
-        gradient.Color = ColorSequence.new(fullColor, fullColor)
-        return
-    end
-
-    local epsilon = 0.001
-    local transition = math.clamp(ratio - epsilon, 0, 1)
-
-    gradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, fullColor),
-        ColorSequenceKeypoint.new(transition, fullColor),
-        ColorSequenceKeypoint.new(ratio, emptyColor),
-        ColorSequenceKeypoint.new(1, emptyColor),
-    })
+    local ratio = math.clamp(percent, 0, 100) / 100
+    local rotation = -METER_SWING + (METER_SWING * 2) * ratio
+    wheel.Rotation = rotation
 end
 
 local function setMeterRotation(gradient, percent)
@@ -116,10 +93,8 @@ local function resetUi()
         compassNeedle.Rotation = 0
     end
 
-    applyBarFill(healthGradient, 100, HEALTH_FULL_COLOR, HEALTH_EMPTY_COLOR)
-    applyBarFill(speedGradient, 0, SPEED_FULL_COLOR, SPEED_EMPTY_COLOR)
-    setMeterRotation(healthGradient, 100)
-    setMeterRotation(speedGradient, 0)
+    setMeterRotation(healthBar, 100)
+    setMeterRotation(speedBar, 0)
 
     lastHealthPercent = nil
     lastSpeedPercent = nil
@@ -166,8 +141,6 @@ local function clearGuiReferences()
     pressureLabel = nil
     coordinatesLabel = nil
     depthLabel = nil
-    healthGradient = nil
-    speedGradient = nil
     lastHealthPercent = nil
     lastSpeedPercent = nil
 end
@@ -236,9 +209,7 @@ local function ensureGui()
     controlFrame = guiInstance:WaitForChild("SubmarineControlFrame")
     compassNeedle = controlFrame:WaitForChild("CompassNeedle")
     healthBar = controlFrame:WaitForChild("HealthAmountLine")
-    healthGradient = healthBar:FindFirstChildOfClass("UIGradient") or healthBar:WaitForChild("UIGradient")
     speedBar = controlFrame:WaitForChild("SpeedAmountLine")
-    speedGradient = speedBar:FindFirstChildOfClass("UIGradient") or speedBar:WaitForChild("UIGradient")
     healthLabel = controlFrame:WaitForChild("HealthPercentLabel")
     speedLabel = controlFrame:WaitForChild("SpeedPercentLabel")
     pressureLabel = controlFrame:WaitForChild("HullPressurePercentLabel")
@@ -344,16 +315,14 @@ local function updateTelemetry()
         )
     end
 
-    if healthGradient and healthPercent ~= lastHealthPercent then
-        applyBarFill(healthGradient, healthPercent, HEALTH_FULL_COLOR, HEALTH_EMPTY_COLOR)
-        setMeterRotation(healthGradient, healthPercent)
+    if healthBar and healthPercent ~= lastHealthPercent then
+        setMeterRotation(healthBar, healthPercent)
         lastHealthPercent = healthPercent
     end
 
     local clampedSpeedPercent = math.clamp(speedPercent, 0, 100)
-    if speedGradient and clampedSpeedPercent ~= lastSpeedPercent then
-        applyBarFill(speedGradient, clampedSpeedPercent, SPEED_FULL_COLOR, SPEED_EMPTY_COLOR)
-        setMeterRotation(speedGradient, clampedSpeedPercent)
+    if speedBar and clampedSpeedPercent ~= lastSpeedPercent then
+        setMeterRotation(speedBar, clampedSpeedPercent)
         lastSpeedPercent = clampedSpeedPercent
     end
 

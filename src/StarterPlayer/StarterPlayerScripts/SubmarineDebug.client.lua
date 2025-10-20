@@ -8,6 +8,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 
+local WATER_SURFACE_OFFSET_ATTRIBUTE = "WaterSurfaceOffset"
+
 local player = Players.LocalPlayer
 
 -- Debug submarine and control part positions
@@ -31,7 +33,10 @@ RunService.Heartbeat:Connect(function()
 							print("Boat Y:", primaryPart.Position.Y)
 							print("Control Part Y:", controlPart.Position.Y)
                                                         local surfaceY = WaterPhysics.GetWaterLevel(primaryPart.Position)
-                                                        print("Depth from surface:", surfaceY - primaryPart.Position.Y)
+                                                        local waterSurfaceOffset = obj:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+                                                                or primaryPart:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+                                                                or 0
+                                                        print("Depth from surface:", surfaceY - (primaryPart.Position.Y + waterSurfaceOffset))
 							print("Control Anchored?", controlPart.Anchored)
 
 							-- Check for BodyVelocity (shouldn't exist)

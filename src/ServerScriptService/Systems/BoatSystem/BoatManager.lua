@@ -93,6 +93,15 @@ local SUB_COLLISION_POLL_PART_LIMIT = 8
 local SUB_COLLISION_IGNORE_ATTRIBUTE = "IgnoreCollision"
 local BOAT_CONTROL_PART_PREFIX = "BoatControlPart_"
 
+local SUB_IDLE_VERTICAL_AMPLITUDE = 0.35
+local SUB_IDLE_HORIZONTAL_AMPLITUDE = 0.18
+local SUB_IDLE_SURGE_SCALE = 0.6
+local SUB_IDLE_ROTATION_FACTOR = 0.1
+local SUB_IDLE_MAX_PITCH = math.rad(1.4)
+local SUB_IDLE_MAX_ROLL = math.rad(1.4)
+local SUB_IDLE_CORRECTION_DISTANCE = 2.5
+local SUB_IDLE_REANCHOR_DISTANCE = 10
+
 local ZERO_VECTOR = Vector3.new()
 
 local TriggerSubmarineImplosion
@@ -530,14 +539,21 @@ local function GetOrCreateSubmarineState(player, config)
 			lastLeakEmissionRate = 0,
 			lastWarningRange = 0,
 			lastWarningBrightness = 0,
-			lastCollisionTime = 0,
-			recentCollisionParts = {},
-			lastCollisionPrint = 0,
-			lastKnownSpeedSign = 1,
-			lastKnownSignedSpeed = 0,
-			lastKnownSpeedMagnitude = 0,
+                        lastCollisionTime = 0,
+                        recentCollisionParts = {},
+                        lastCollisionPrint = 0,
+                        lastKnownSpeedSign = 1,
+                        lastKnownSignedSpeed = 0,
+                        lastKnownSpeedMagnitude = 0,
+                        idleAnchorCFrame = nil,
+                        idleAnchorTime = 0,
+                        idleBobPhase = 0,
+                        idleSwayPhase = 0,
+                        idleBobSpeed = 0.35,
+                        idleSwaySpeed = 0.18,
                 }
                 state.shakeRandom = Random.new()
+                state.idleRandom = Random.new()
                 state.warningPhase = math.random()
                 SubmarineStates[player] = state
         else
@@ -556,10 +572,96 @@ local function GetOrCreateSubmarineState(player, config)
                 if typeof(state.lastKnownSpeedMagnitude) ~= "number" then
                         state.lastKnownSpeedMagnitude = 0
                 end
+                state.idleRandom = state.idleRandom or Random.new()
         end
 
         UpdateSubmarineStressMetrics(state)
         return state
+end
+
+local function ClearSubmarineIdleAnchor(state)
+        if not state then
+                return
+        end
+
+        state.idleAnchorCFrame = nil
+        state.idleAnchorTime = 0
+end
+
+local function CaptureSubmarineIdleAnchor(state, referenceCFrame)
+        if not state or not referenceCFrame then
+                return
+        end
+
+        state.idleRandom = state.idleRandom or Random.new()
+        state.idleAnchorCFrame = referenceCFrame
+        state.idleAnchorTime = tick()
+        state.idleBobPhase = state.idleRandom:NextNumber(0, math.pi * 2)
+        state.idleSwayPhase = state.idleRandom:NextNumber(0, math.pi * 2)
+        state.idleBobSpeed = 0.35 + state.idleRandom:NextNumber(-0.08, 0.08)
+        state.idleSwaySpeed = 0.18 + state.idleRandom:NextNumber(-0.05, 0.05)
+end
+
+local function ComputeSubmarineIdleTarget(state, referenceCFrame, deltaTime)
+        if not state then
+                return nil
+        end
+
+        if not state.idleAnchorCFrame then
+                CaptureSubmarineIdleAnchor(state, referenceCFrame)
+        end
+
+        local anchor = state.idleAnchorCFrame
+        if not anchor then
+                return nil
+        end
+
+        local anchorPosition = anchor.Position
+        local referencePosition = referenceCFrame.Position
+        local distanceFromAnchor = (referencePosition - anchorPosition).Magnitude
+
+        if distanceFromAnchor > SUB_IDLE_REANCHOR_DISTANCE then
+                CaptureSubmarineIdleAnchor(state, referenceCFrame)
+                anchor = state.idleAnchorCFrame
+                if not anchor then
+                        return nil
+                end
+                anchorPosition = anchor.Position
+        elseif distanceFromAnchor > SUB_IDLE_CORRECTION_DISTANCE then
+                local blend = math.clamp(deltaTime * 0.4, 0, 0.4)
+                if blend > 0 then
+                        local blendedPosition = anchorPosition:Lerp(referencePosition, blend)
+                        state.idleAnchorCFrame = CFrame.new(blendedPosition) * (anchor - anchorPosition)
+                        anchor = state.idleAnchorCFrame
+                        anchorPosition = blendedPosition
+                end
+        end
+
+        local now = tick()
+        local elapsed = now - (state.idleAnchorTime or now)
+        local bobSpeed = state.idleBobSpeed or 0.35
+        local swaySpeed = state.idleSwaySpeed or 0.18
+        local bobPhase = state.idleBobPhase or 0
+        local swayPhase = state.idleSwayPhase or 0
+
+        local verticalOffset = math.sin(elapsed * bobSpeed + bobPhase) * SUB_IDLE_VERTICAL_AMPLITUDE
+        local swayOffset = math.sin(elapsed * swaySpeed + swayPhase) * SUB_IDLE_HORIZONTAL_AMPLITUDE
+        local surgeOffset = math.cos(elapsed * swaySpeed + swayPhase) * (SUB_IDLE_HORIZONTAL_AMPLITUDE * SUB_IDLE_SURGE_SCALE)
+
+        local right = anchor.RightVector
+        local look = anchor.LookVector
+        local up = anchor.UpVector
+
+        local positionalOffset = (right * swayOffset) + (look * surgeOffset) + (up * verticalOffset)
+        local newPosition = anchorPosition + positionalOffset
+
+        local pitchAngle = math.clamp(surgeOffset * SUB_IDLE_ROTATION_FACTOR, -SUB_IDLE_MAX_PITCH, SUB_IDLE_MAX_PITCH)
+        local rollAngle = math.clamp(-swayOffset * SUB_IDLE_ROTATION_FACTOR, -SUB_IDLE_MAX_ROLL, SUB_IDLE_MAX_ROLL)
+
+        local baseRotation = anchor - anchorPosition
+        local adjustedRotation = baseRotation * CFrame.Angles(pitchAngle, 0, rollAngle)
+
+        return CFrame.new(newPosition) * adjustedRotation
 end
 
 local function SetBoatAttributeIfChanged(boat, attributeName, value)
@@ -1685,22 +1787,33 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 
 	local function onOccupantChanged()
 		local humanoid = seat.Occupant
-		if humanoid then
-			local seatPlayer = Players:GetPlayerFromCharacter(humanoid.Parent)
-			if seatPlayer and seatPlayer ~= player then
-				task.wait(0.1)
-				if seat and seat.Parent and seat.Occupant == humanoid then
-					humanoid.Sit = false
-				end
-			else
-				BoatLastActivity[player] = tick()
-			end
-		else
-			-- Reset speed when no driver
-			BoatSpeeds[player] = 0
-			BoatTurnSpeeds[player] = 0
-		end
-	end
+                if humanoid then
+                        local seatPlayer = Players:GetPlayerFromCharacter(humanoid.Parent)
+                        if seatPlayer and seatPlayer ~= player then
+                                task.wait(0.1)
+                                if seat and seat.Parent and seat.Occupant == humanoid then
+                                        humanoid.Sit = false
+                                end
+                        else
+                                BoatLastActivity[player] = tick()
+                                if config.Type == "Submarine" then
+                                        local state = GetOrCreateSubmarineState(player, config)
+                                        ClearSubmarineIdleAnchor(state)
+                                end
+                        end
+                else
+                        -- Reset speed when no driver
+                        BoatSpeeds[player] = 0
+                        BoatTurnSpeeds[player] = 0
+                        if config.Type == "Submarine" then
+                                local controlPart = BoatControllers[player]
+                                if controlPart and controlPart.Parent then
+                                        local state = GetOrCreateSubmarineState(player, config)
+                                        CaptureSubmarineIdleAnchor(state, controlPart.CFrame)
+                                end
+                        end
+                end
+        end
 
 	BoatConnections[player].occupant = seat:GetPropertyChangedSignal("Occupant"):Connect(onOccupantChanged)
 	boat.Parent = workspace
@@ -1906,30 +2019,44 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 		return
 	end
 
-	-- Check activity
-	local lastActivity = BoatLastActivity[player] or tick()
-	local isIdle = (tick() - lastActivity) > IDLE_THRESHOLD
+        local isSubmarine = config.Type == "Submarine"
+        local stressState = isSubmarine and SubmarineStates[player] or nil
 
-	local waveBoatType = config.Type == "Submarine" and "Submarine" or "Surface"
+        -- Check activity
+        local lastActivity = BoatLastActivity[player] or tick()
+        local isIdle = (tick() - lastActivity) > IDLE_THRESHOLD
 
-	local function syncToBoatWithPassiveWaves()
-		local boatCFrame = primaryPart.CFrame
-		local targetCFrame = boatCFrame
+        local waveBoatType = isSubmarine and "Submarine" or "Surface"
 
-		if isPlayerNearby then
-			local floatingCFrame, applied = WaterPhysics.ApplyFloatingPhysics(boatCFrame, waveBoatType, deltaTime)
-			if applied then
-				targetCFrame = floatingCFrame
-			end
-		end
+        local function syncToBoatWithPassiveWaves()
+                local boatCFrame = primaryPart.CFrame
+                local targetCFrame = boatCFrame
 
-		if (controlPart.CFrame.Position - boatCFrame.Position).Magnitude > 5 then
-			targetCFrame = boatCFrame
-		end
+                if isSubmarine then
+                        stressState = stressState or GetOrCreateSubmarineState(player, config)
+                        if stressState then
+                                local idleTarget = ComputeSubmarineIdleTarget(stressState, boatCFrame, deltaTime)
+                                if idleTarget then
+                                        targetCFrame = idleTarget
+                                end
+                        end
+                elseif isPlayerNearby then
+                        local floatingCFrame, applied = WaterPhysics.ApplyFloatingPhysics(boatCFrame, waveBoatType, deltaTime)
+                        if applied then
+                                targetCFrame = floatingCFrame
+                        end
+                end
 
-		if config.Type == "Submarine" then
-			targetCFrame = ApplySubmarineStressEffects(player, boat, config, targetCFrame, deltaTime)
-		end
+                if (controlPart.CFrame.Position - boatCFrame.Position).Magnitude > 5 then
+                        targetCFrame = boatCFrame
+                        if isSubmarine and stressState then
+                                CaptureSubmarineIdleAnchor(stressState, boatCFrame)
+                        end
+                end
+
+                if isSubmarine then
+                        targetCFrame = ApplySubmarineStressEffects(player, boat, config, targetCFrame, deltaTime)
+                end
 
 		controlPart.CFrame = targetCFrame
 
@@ -1947,14 +2074,12 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 		return
 	end
 
-	local isSubmarine = config.Type == "Submarine"
-	local stressState
-	local integrityRatio = 1
-	local stressSpeedMultiplier = 1
-	local stressAccelMultiplier = 1
+        local integrityRatio = 1
+        local stressSpeedMultiplier = 1
+        local stressAccelMultiplier = 1
 
         if isSubmarine then
-                stressState = GetOrCreateSubmarineState(player, config)
+                stressState = stressState or GetOrCreateSubmarineState(player, config)
                 integrityRatio, stressSpeedMultiplier, stressAccelMultiplier = UpdateSubmarineStressMetrics(stressState)
                 UpdateSubmarineTelemetryAttributes(player, boat, stressState, config)
         end

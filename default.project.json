@@ -21,6 +21,10 @@
         "$className": "StarterPlayerScripts",
         "$path": "src/StarterPlayer/StarterPlayerScripts"
       }
+    },
+    "StarterGui": {
+      "$className": "StarterGui",
+      "SubmarineControlGUI": { "$path": "src/StarterPlayer/StarterGui/SubmarineControlGUI" }
     }
   }
 }

@@ -881,16 +881,16 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
 		return
 	end
 
-	state.lastCollisionTime = now
-	state.recentCollisionParts[otherPart] = now
+        local instantReason = DescribeInstantKill(otherPart)
+        if instantReason then
+                state.lastCollisionTime = now
+                state.recentCollisionParts[otherPart] = now
 
-	local instantReason = DescribeInstantKill(otherPart)
-	if instantReason then
-		print(string.format(
-			"[Submarine] Instant hull failure triggered by collision with %s (%s).",
-			otherPart:GetFullName(),
-			instantReason
-			))
+                print(string.format(
+                        "[Submarine] Instant hull failure triggered by collision with %s (%s).",
+                        otherPart:GetFullName(),
+                        instantReason
+                        ))
 
 		state.health = 0
 		TriggerSubmarineImplosion(player, boat, config)
@@ -985,9 +985,12 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
                 * massFactor
                 * anchoredFactor
                 * damageMultiplier
-	if damage <= 0 then
-		return
-	end
+        if damage <= 0 then
+                return
+        end
+
+        state.lastCollisionTime = now
+        state.recentCollisionParts[otherPart] = now
 
         state.health = math.max(state.health - damage, 0)
         UpdateSubmarineStressMetrics(state)

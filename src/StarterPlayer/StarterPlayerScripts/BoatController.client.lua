@@ -690,6 +690,10 @@ local function OnInputBegan(input, gameProcessed)
 		selectedBoatIndex = selectedBoatIndex % #availableBoats + 1
 		selectedBoatType = availableBoats[selectedBoatIndex]
 
+		if setBoatTypeRemote then
+			setBoatTypeRemote:FireServer(selectedBoatType)
+		end
+
 		local config = BoatConfig.GetBoatData(selectedBoatType)
 		local displayName = config and config.DisplayName or selectedBoatType
 		local weight = config and config.Weight or 3
@@ -845,10 +849,19 @@ end)
 
 -- Boat type remote
 local getBoatTypeRemote = ReplicatedStorage.Remotes.BoatRemotes:WaitForChild("GetSelectedBoatType", 5)
+local setBoatTypeRemote = ReplicatedStorage.Remotes.BoatRemotes:FindFirstChild("SetSelectedBoatType")
 if getBoatTypeRemote then
 	getBoatTypeRemote.OnClientInvoke = function()
 		return selectedBoatType
 	end
+end
+
+if not setBoatTypeRemote then
+	setBoatTypeRemote = ReplicatedStorage.Remotes.BoatRemotes:WaitForChild("SetSelectedBoatType", 5)
+end
+
+if setBoatTypeRemote then
+	setBoatTypeRemote:FireServer(selectedBoatType)
 end
 
 -- Cleanup on leave

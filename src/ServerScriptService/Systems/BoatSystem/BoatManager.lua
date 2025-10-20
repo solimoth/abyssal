@@ -26,6 +26,7 @@ local BoatControls = {}
 local BoatLastActivity = {}
 local BoatPhysicsObjects = {} -- NEW: Track physics objects
 local SubmarineStates = {}
+local PlayerSelectedBoatTypes = {}
 
 -- ACCELERATION SYSTEM STORAGE
 local BoatSpeeds = {}
@@ -245,6 +246,7 @@ local function Initialize()
 	createRemote("SpawnBoat", "RemoteEvent")
 	createRemote("DespawnBoat", "RemoteEvent")
 	createRemote("UpdateBoatControl", "RemoteEvent")
+	createRemote("SetSelectedBoatType", "RemoteEvent")
 	createRemote("GetSelectedBoatType", "RemoteFunction")
 	createRemote("ValidateBoat", "RemoteEvent")
 end
@@ -1656,6 +1658,8 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 		return false, secMessage
 	end
 
+	PlayerSelectedBoatTypes[player] = boatType
+
 	local boatTemplate = ServerStorage.Boats:FindFirstChild(config.Model)
 	if not boatTemplate then
 		return false, "Boat model not found"
@@ -1968,7 +1972,7 @@ local function UpdateBoatControl(player, controls)
 end
 
 -- ENHANCED PHYSICS UPDATE WITH PERFORMANCE OPTIMIZATIONS
-local function UpdateBoatPhysics(player, boat, deltaTime)
+local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
 	if not boat or not boat.Parent then
 		CleanupBoat(player)
 		return
@@ -2010,9 +2014,10 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 	-- Performance: Check distance to nearest player for physics throttling
 	local shouldThrottle = true
 	local nearestPlayerDistance = math.huge
-	for _, otherPlayer in pairs(Players:GetPlayers()) do
-		if otherPlayer.Character and otherPlayer.Character:FindFirstChild("HumanoidRootPart") then
-			local distance = (primaryPart.Position - otherPlayer.Character.HumanoidRootPart.Position).Magnitude
+
+	if playerPositions and #playerPositions > 0 then
+		for _, position in ipairs(playerPositions) do
+			local distance = (primaryPart.Position - position).Magnitude
 			if distance < nearestPlayerDistance then
 				nearestPlayerDistance = distance
 			end
@@ -2023,6 +2028,9 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 				end
 			end
 		end
+	else
+		shouldThrottle = false
+		nearestPlayerDistance = 0
 	end
 
 	local isPlayerNearby = nearestPlayerDistance <= PASSIVE_WAVE_DISTANCE
@@ -2032,16 +2040,16 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 		return
 	end
 
-        local isSubmarine = config.Type == "Submarine"
-        local stressState = isSubmarine and SubmarineStates[player] or nil
+	local isSubmarine = config.Type == "Submarine"
+	local stressState = isSubmarine and SubmarineStates[player] or nil
 
-        -- Check activity
-        local lastActivity = BoatLastActivity[player] or tick()
-        local isIdle = (tick() - lastActivity) > IDLE_THRESHOLD
+	-- Check activity
+	local lastActivity = BoatLastActivity[player] or tick()
+	local isIdle = (tick() - lastActivity) > IDLE_THRESHOLD
 
-        local waveBoatType = isSubmarine and "Submarine" or "Surface"
+	local waveBoatType = isSubmarine and "Submarine" or "Surface"
 
-        local function syncToBoatWithPassiveWaves()
+	local function syncToBoatWithPassiveWaves()
                 local boatCFrame = primaryPart.CFrame
                 local targetCFrame = boatCFrame
 
@@ -2369,6 +2377,19 @@ end
 local function UpdateAllBoats(deltaTime)
 	deltaTime = math.min(deltaTime, MAX_UPDATE_DELTA)
 
+	local playerPositions = {}
+	local playerUserIds = {}
+	for _, player in ipairs(Players:GetPlayers()) do
+		playerUserIds[tostring(player.UserId)] = true
+		local character = player.Character
+		if character then
+			local humanoidRootPart = character:FindFirstChild("HumanoidRootPart")
+			if humanoidRootPart then
+				table.insert(playerPositions, humanoidRootPart.Position)
+			end
+		end
+	end
+
 	if #BOAT_CLEANUP_QUEUE > 0 then
 		ProcessCleanupQueue()
 	end
@@ -2383,16 +2404,7 @@ local function UpdateAllBoats(deltaTime)
 		for _, obj in pairs(workspace:GetChildren()) do
 			if string.find(obj.Name, "BoatControlPart_") then
 				local ownerId = obj:GetAttribute("OwnerUserId")
-				local ownerFound = false
-
-				for _, player in pairs(Players:GetPlayers()) do
-					if tostring(player.UserId) == ownerId then
-						ownerFound = true
-						break
-					end
-				end
-
-				if not ownerFound then
+				if not ownerId or not playerUserIds[ownerId] then
 					pcall(function() obj:Destroy() end)
 					orphanCount = orphanCount + 1
 				end
@@ -2403,16 +2415,7 @@ local function UpdateAllBoats(deltaTime)
 		for _, obj in pairs(workspace:GetChildren()) do
 			if obj:GetAttribute("OwnerId") and obj:IsA("Model") then
 				local ownerId = obj:GetAttribute("OwnerId")
-				local ownerFound = false
-
-				for _, player in pairs(Players:GetPlayers()) do
-					if tostring(player.UserId) == ownerId then
-						ownerFound = true
-						break
-					end
-				end
-
-				if not ownerFound then
+				if not ownerId or not playerUserIds[ownerId] then
 					-- Clean up physics objects first
 					local physicsObjs = BoatPhysicsObjects[obj]
 					if physicsObjs then
@@ -2436,7 +2439,7 @@ local function UpdateAllBoats(deltaTime)
 	-- Update all boats
 	for player, boat in pairs(ActiveBoats) do
 		if player.Parent then -- Check if player is still in game
-			UpdateBoatPhysics(player, boat, deltaTime)
+			UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
 		else
 			CleanupBoat(player)
 		end
@@ -2446,6 +2449,10 @@ end
 -- Get player's boat
 function BoatManager.GetPlayerBoat(player)
 	return ActiveBoats[player]
+end
+
+function BoatManager.GetPlayerSelectedBoatType(player)
+	return PlayerSelectedBoatTypes[player]
 end
 
 -- Get boat speed
@@ -2518,6 +2525,24 @@ function BoatManager.Initialize()
 		UpdateBoatControl(player, controls)
 	end)
 
+	Remotes.SetSelectedBoatType.OnServerEvent:Connect(function(player, boatType)
+		if not BoatSecurity.CheckRemoteRateLimit(player, "SetSelectedBoatType", 4) then
+			return
+		end
+
+		if type(boatType) ~= "string" then
+			return
+		end
+
+		boatType = string.sub(boatType, 1, 100)
+		local config = BoatConfig.GetBoatData(boatType)
+		if not config then
+			return
+		end
+
+		PlayerSelectedBoatTypes[player] = boatType
+	end)
+
 	Remotes.ValidateBoat.OnServerEvent:Connect(function(player)
 		local boat = ActiveBoats[player]
 		if boat and not ValidateBoat(boat) then
@@ -2565,6 +2590,7 @@ function BoatManager.Initialize()
 	end)
 
 	Players.PlayerRemoving:Connect(function(player)
+		PlayerSelectedBoatTypes[player] = nil
 		CleanupBoat(player)
 	end)
 

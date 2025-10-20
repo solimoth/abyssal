@@ -533,18 +533,30 @@ local function GetOrCreateSubmarineState(player, config)
 			lastCollisionTime = 0,
 			recentCollisionParts = {},
 			lastCollisionPrint = 0,
-		}
-		state.shakeRandom = Random.new()
-		state.warningPhase = math.random()
-		SubmarineStates[player] = state
-	else
-		if state.maxHealth ~= maxHealth then
-			state.maxHealth = maxHealth
-			state.health = math.clamp(state.health, 0, maxHealth)
-		end
+			lastKnownSpeedSign = 1,
+			lastKnownSignedSpeed = 0,
+			lastKnownSpeedMagnitude = 0,
+                }
+                state.shakeRandom = Random.new()
+                state.warningPhase = math.random()
+                SubmarineStates[player] = state
+        else
+                if state.maxHealth ~= maxHealth then
+                        state.maxHealth = maxHealth
+                        state.health = math.clamp(state.health, 0, maxHealth)
+                end
 
-		state.recentCollisionParts = state.recentCollisionParts or {}
-	end
+                state.recentCollisionParts = state.recentCollisionParts or {}
+                if state.lastKnownSpeedSign == nil then
+                        state.lastKnownSpeedSign = 1
+                end
+                if typeof(state.lastKnownSignedSpeed) ~= "number" then
+                        state.lastKnownSignedSpeed = 0
+                end
+                if typeof(state.lastKnownSpeedMagnitude) ~= "number" then
+                        state.lastKnownSpeedMagnitude = 0
+                end
+        end
 
         UpdateSubmarineStressMetrics(state)
         return state
@@ -593,10 +605,15 @@ local function UpdateSubmarineTelemetryAttributes(player, boat, state, config)
         local integrityRatio = state.integrityRatio or (maxHealth > 0 and math.clamp(state.health / maxHealth, 0, 1) or 1)
         integrityRatio = math.floor(integrityRatio * 1000 + 0.5) / 1000
 
-        local currentSpeed = 0
+        local signedTrackedSpeed = 0
         if player then
-                currentSpeed = math.abs(BoatSpeeds[player] or 0)
+                local storedSpeed = BoatSpeeds[player]
+                if typeof(storedSpeed) == "number" then
+                        signedTrackedSpeed = storedSpeed
+                end
         end
+
+        local currentSpeed = math.abs(signedTrackedSpeed)
 
         if currentSpeed <= 0 and boat.PrimaryPart then
                 local primaryPart = boat.PrimaryPart
@@ -610,13 +627,27 @@ local function UpdateSubmarineTelemetryAttributes(player, boat, state, config)
                 currentSpeed = 0
         end
 
+        if signedTrackedSpeed ~= 0 then
+                state.lastKnownSpeedSign = signedTrackedSpeed > 0 and 1 or -1
+                state.lastKnownSignedSpeed = signedTrackedSpeed
+        elseif currentSpeed > 0 then
+                if typeof(state.lastKnownSpeedSign) ~= "number" or state.lastKnownSpeedSign == 0 then
+                        state.lastKnownSpeedSign = 1
+                end
+                state.lastKnownSignedSpeed = (state.lastKnownSpeedSign or 1) * currentSpeed
+        else
+                state.lastKnownSignedSpeed = 0
+        end
+
+        state.lastKnownSpeedMagnitude = currentSpeed
+
         -- Round to two decimal places to reduce attribute churn while keeping precision
-        currentSpeed = math.floor(currentSpeed * 100 + 0.5) / 100
+        local roundedSpeed = math.floor(currentSpeed * 100 + 0.5) / 100
 
         SetBoatAttributeIfChanged(boat, "SubmarineHealthPercent", healthPercent)
         SetBoatAttributeIfChanged(boat, "SubmarinePressurePercent", pressurePercent)
         SetBoatAttributeIfChanged(boat, "SubmarineIntegrityRatio", integrityRatio)
-        SetBoatAttributeIfChanged(boat, "SubmarineSpeed", currentSpeed)
+        SetBoatAttributeIfChanged(boat, "SubmarineSpeed", roundedSpeed)
 end
 
 local INSTANT_KILL_ATTRIBUTE_NAMES = {
@@ -768,16 +799,66 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
 		return
 	end
 
-	local boatVelocity = primaryPart.AssemblyLinearVelocity or ZERO_VECTOR
-	local hitVelocity = hitPart and (hitPart.AssemblyLinearVelocity or hitPart.Velocity) or ZERO_VECTOR
-	if hitVelocity.Magnitude > boatVelocity.Magnitude then
-		boatVelocity = hitVelocity
-	elseif boatVelocity.Magnitude < 0.5 and primaryPart.Velocity then
-		boatVelocity = primaryPart.Velocity
-	end
+        local boatVelocity = primaryPart.AssemblyLinearVelocity or ZERO_VECTOR
+        local hitVelocity = hitPart and (hitPart.AssemblyLinearVelocity or hitPart.Velocity) or ZERO_VECTOR
+        if hitVelocity.Magnitude > boatVelocity.Magnitude then
+                boatVelocity = hitVelocity
+        elseif boatVelocity.Magnitude < 0.5 and primaryPart.Velocity then
+                boatVelocity = primaryPart.Velocity
+        end
 
-	local otherVelocity = otherPart.AssemblyLinearVelocity or otherPart.Velocity or ZERO_VECTOR
-	local relativeSpeed = (boatVelocity - otherVelocity).Magnitude
+        local otherVelocity = otherPart.AssemblyLinearVelocity or otherPart.Velocity or ZERO_VECTOR
+
+        local signedTrackedSpeed = state.lastKnownSignedSpeed
+        if typeof(signedTrackedSpeed) ~= "number" then
+                signedTrackedSpeed = 0
+        end
+
+        if signedTrackedSpeed == 0 and player then
+                local storedSpeed = BoatSpeeds[player]
+                if typeof(storedSpeed) == "number" then
+                        signedTrackedSpeed = storedSpeed
+                end
+        end
+
+        local trackedSpeedMagnitude = math.abs(signedTrackedSpeed)
+        if (not trackedSpeedMagnitude or trackedSpeedMagnitude <= 0) and typeof(state.lastKnownSpeedMagnitude) == "number" then
+                trackedSpeedMagnitude = math.max(trackedSpeedMagnitude or 0, state.lastKnownSpeedMagnitude)
+        end
+        if (not trackedSpeedMagnitude or trackedSpeedMagnitude <= 0) then
+                local attributeSpeed = boat:GetAttribute("SubmarineSpeed")
+                if typeof(attributeSpeed) == "number" then
+                        trackedSpeedMagnitude = math.max(0, math.abs(attributeSpeed))
+                else
+                        trackedSpeedMagnitude = 0
+                end
+        end
+
+        local speedSign = signedTrackedSpeed ~= 0 and (signedTrackedSpeed > 0 and 1 or -1) or state.lastKnownSpeedSign or 1
+        local forwardDirection = primaryPart.CFrame.LookVector
+        if speedSign < 0 then
+                forwardDirection = -forwardDirection
+        end
+
+        local trackedVelocity = forwardDirection * trackedSpeedMagnitude
+
+        local relativeSpeed = (boatVelocity - otherVelocity).Magnitude
+
+        if trackedSpeedMagnitude > 0 then
+                local trackedRelative = (trackedVelocity - otherVelocity).Magnitude
+                if trackedRelative > relativeSpeed then
+                        relativeSpeed = trackedRelative
+                end
+
+                local projectedOther = otherVelocity:Dot(forwardDirection)
+                local adjusted = trackedSpeedMagnitude - projectedOther
+                if adjusted < 0 then
+                        adjusted = 0
+                end
+                if adjusted > relativeSpeed then
+                        relativeSpeed = adjusted
+                end
+        end
 
 	local boatMass = primaryPart.AssemblyMass or primaryPart:GetMass()
 	local otherMass = otherPart.AssemblyMass or otherPart:GetMass()

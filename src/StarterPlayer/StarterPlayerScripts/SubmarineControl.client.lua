@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TweenService = game:GetService("TweenService")
 
 local BoatConfig = require(ReplicatedStorage.Modules.BoatConfig)
 local SubmarinePhysics = require(ReplicatedStorage.Modules.SubmarinePhysics)
@@ -47,6 +48,190 @@ local lastHealthPercent
 local lastSpeedPercent
 
 local meterStates = {}
+local labelPulses = {}
+local compassState = {
+    currentRotation = nil,
+    targetRotation = nil,
+}
+
+local METER_LERP_SPEED = 12
+local COMPASS_LERP_SPEED = 10
+local METER_ALIGNMENT_EPSILON = 0.01
+local COMPASS_ALIGNMENT_EPSILON = 0.05
+
+local LABEL_PULSE_GROW = TweenInfo.new(0.15, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+local LABEL_PULSE_SHRINK = TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+
+local function getSmoothingAlpha(speed, deltaTime)
+    return 1 - math.exp(-math.max(speed, 0) * math.max(deltaTime, 0))
+end
+
+local function getPulseState(label)
+    if not label then
+        return nil
+    end
+
+    local state = labelPulses[label]
+    if state then
+        return state
+    end
+
+    local scale = label:FindFirstChildWhichIsA("UIScale")
+    if not scale then
+        scale = Instance.new("UIScale")
+        scale.Scale = 1
+        scale.Name = "AutoPulseScale"
+        scale.Parent = label
+    end
+
+    state = {
+        scale = scale,
+    }
+
+    labelPulses[label] = state
+    return state
+end
+
+local function stopPulse(label)
+    if not label then
+        return
+    end
+
+    local state = labelPulses[label]
+    if not state then
+        return
+    end
+
+    if state.growTween then
+        state.growTween:Cancel()
+        state.growTween = nil
+    end
+    if state.shrinkTween then
+        state.shrinkTween:Cancel()
+        state.shrinkTween = nil
+    end
+    if state.growConnection then
+        state.growConnection:Disconnect()
+        state.growConnection = nil
+    end
+    if state.shrinkConnection then
+        state.shrinkConnection:Disconnect()
+        state.shrinkConnection = nil
+    end
+
+    if state.scale then
+        state.scale.Scale = 1
+    end
+end
+
+local function playLabelPulse(label)
+    if not label then
+        return
+    end
+
+    local state = getPulseState(label)
+    if not state or not state.scale then
+        return
+    end
+
+    stopPulse(label)
+
+    local growTween = TweenService:Create(state.scale, LABEL_PULSE_GROW, { Scale = 1.08 })
+    local shrinkTween = TweenService:Create(state.scale, LABEL_PULSE_SHRINK, { Scale = 1 })
+
+    state.growTween = growTween
+    state.shrinkTween = shrinkTween
+
+    state.growConnection = growTween.Completed:Connect(function(playbackState)
+        if state.growConnection then
+            state.growConnection:Disconnect()
+            state.growConnection = nil
+        end
+
+        state.growTween = nil
+        if playbackState == Enum.PlaybackState.Completed and state.shrinkTween then
+            state.shrinkTween:Play()
+        end
+    end)
+
+    state.shrinkConnection = shrinkTween.Completed:Connect(function()
+        if state.shrinkConnection then
+            state.shrinkConnection:Disconnect()
+            state.shrinkConnection = nil
+        end
+
+        state.shrinkTween = nil
+    end)
+
+    growTween:Play()
+end
+
+local function stepMeterAnimations(deltaTime)
+    if deltaTime <= 0 then
+        return
+    end
+
+    local alpha = getSmoothingAlpha(METER_LERP_SPEED, deltaTime)
+    for wheel, state in pairs(meterStates) do
+        if not wheel or not wheel.Parent then
+            meterStates[wheel] = nil
+        elseif state.targetRotation then
+            local currentRotation = state.currentRotation
+            if currentRotation == nil then
+                currentRotation = wheel.Rotation
+            end
+
+            local delta = state.targetRotation - currentRotation
+            if math.abs(delta) <= METER_ALIGNMENT_EPSILON then
+                currentRotation = state.targetRotation
+            else
+                currentRotation += delta * alpha
+            end
+
+            state.currentRotation = currentRotation
+            if wheel.Rotation ~= currentRotation then
+                wheel.Rotation = currentRotation
+            end
+        end
+    end
+end
+
+local function stepCompassAnimation(deltaTime)
+    if not compassNeedle then
+        return
+    end
+
+    local target = compassState.targetRotation
+    local current = compassState.currentRotation
+    if target == nil then
+        return
+    end
+
+    if current == nil then
+        compassState.currentRotation = target
+        compassNeedle.Rotation = target
+        return
+    end
+
+    local alpha = getSmoothingAlpha(COMPASS_LERP_SPEED, deltaTime)
+    local difference = ((target - current + 180) % 360) - 180
+
+    if math.abs(difference) <= COMPASS_ALIGNMENT_EPSILON then
+        current = target
+    else
+        current += difference * alpha
+    end
+
+    compassState.currentRotation = current
+    if compassNeedle.Rotation ~= current then
+        compassNeedle.Rotation = current
+    end
+end
+
+local function stepAnimations(deltaTime)
+    stepMeterAnimations(deltaTime)
+    stepCompassAnimation(deltaTime)
+end
 
 local function configureMeter(wheel, referencePercent)
     if not wheel then
@@ -100,11 +285,14 @@ local function configureMeter(wheel, referencePercent)
         }
     end
 
+    state.currentRotation = wheel.Rotation
+    state.targetRotation = wheel.Rotation
+
     meterStates[wheel] = state
     return state
 end
 
-local function setMeterRotation(wheel, percent)
+local function setMeterRotation(wheel, percent, instant)
     if not wheel then
         return
     end
@@ -125,16 +313,17 @@ local function setMeterRotation(wheel, percent)
 
     local offsetPercent = clamped - state.referencePercent
     local rotation = state.baseRotation + (offsetPercent / 100) * state.range
-    if wheel.Rotation ~= rotation then
-        wheel.Rotation = rotation
+    state.targetRotation = rotation
+
+    if instant or state.currentRotation == nil then
+        state.currentRotation = rotation
+        if wheel.Rotation ~= rotation then
+            wheel.Rotation = rotation
+        end
     end
 end
 
 local function resetUi()
-    if not controlFrame or not controlFrame.Parent then
-        return
-    end
-
     if healthLabel then
         healthLabel.Text = "100% HEALTH"
     end
@@ -154,13 +343,21 @@ local function resetUi()
         compassNeedle.Rotation = 0
     end
 
-    setMeterRotation(healthBar, 100)
-    setMeterRotation(speedBar, 0)
+    compassState.currentRotation = 0
+    compassState.targetRotation = 0
+
+    setMeterRotation(healthBar, 100, true)
+    setMeterRotation(speedBar, 0, true)
+
+    stopPulse(healthLabel)
+    stopPulse(speedLabel)
 
     lastHealthPercent = nil
     lastSpeedPercent = nil
 
-    controlFrame.Visible = false
+    if controlFrame and controlFrame.Parent then
+        controlFrame.Visible = false
+    end
 end
 
 local function disconnectBoatConnection()
@@ -204,7 +401,15 @@ local function clearGuiReferences()
     depthLabel = nil
     lastHealthPercent = nil
     lastSpeedPercent = nil
+    for label in pairs(labelPulses) do
+        stopPulse(label)
+    end
+    labelPulses = {}
     meterStates = {}
+    compassState = {
+        currentRotation = nil,
+        targetRotation = nil,
+    }
 end
 
 local function getBoatFromSeat(seat)
@@ -382,19 +587,29 @@ local function updateTelemetry()
 
     if healthBar and healthPercent ~= lastHealthPercent then
         setMeterRotation(healthBar, healthPercent)
+        if lastHealthPercent ~= nil then
+            playLabelPulse(healthLabel)
+        end
         lastHealthPercent = healthPercent
     end
 
     local clampedSpeedPercent = math.clamp(speedPercent, 0, 100)
     if speedBar and clampedSpeedPercent ~= lastSpeedPercent then
         setMeterRotation(speedBar, clampedSpeedPercent)
+        if lastSpeedPercent ~= nil then
+            playLabelPulse(speedLabel)
+        end
         lastSpeedPercent = clampedSpeedPercent
     end
 
     if compassNeedle then
         local lookVector = primaryPart.CFrame.LookVector
         local heading = math.deg(math.atan2(-lookVector.X, -lookVector.Z))
-        compassNeedle.Rotation = heading
+        compassState.targetRotation = (heading + 360) % 360
+        if compassState.currentRotation == nil then
+            compassState.currentRotation = compassState.targetRotation
+            compassNeedle.Rotation = compassState.targetRotation
+        end
     end
 
     if controlFrame and not controlFrame.Visible then
@@ -409,6 +624,8 @@ local function startUpdating()
 
     updateAccumulator = 0
     updateConnection = RunService.RenderStepped:Connect(function(deltaTime)
+        stepAnimations(deltaTime)
+
         updateAccumulator += deltaTime
         if updateAccumulator >= UPDATE_INTERVAL then
             updateAccumulator -= UPDATE_INTERVAL

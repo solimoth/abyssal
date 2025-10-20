@@ -12,9 +12,7 @@ local gui
 local controlFrame
 local compassNeedle
 local healthBar
-local healthGradient
 local speedBar
-local speedGradient
 local healthLabel
 local speedLabel
 local pressureLabel
@@ -42,41 +40,94 @@ local function round(value, decimals)
     return math.floor(value * multiplier + 0.5) / multiplier
 end
 
-local HEALTH_FULL_COLOR = Color3.fromRGB(255, 255, 255)
-local HEALTH_EMPTY_COLOR = Color3.fromRGB(113, 113, 114)
-local SPEED_FULL_COLOR = Color3.fromRGB(255, 255, 255)
-local SPEED_EMPTY_COLOR = Color3.fromRGB(150, 150, 151)
+-- Meters rotate across a 180° arc by default unless overridden via attributes.
+local DEFAULT_METER_RANGE = 180
 
 local lastHealthPercent
 local lastSpeedPercent
 
-local function applyBarFill(gradient, percent, fullColor, emptyColor)
-    if not gradient then
+local meterStates = {}
+
+local function configureMeter(wheel, referencePercent)
+    if not wheel then
+        return nil
+    end
+
+    local state = meterStates[wheel]
+    if state then
+        return state
+    end
+
+    local currentAnchor = wheel.AnchorPoint
+    local targetAnchor = Vector2.new(0.5, 0.5)
+    if currentAnchor.X ~= targetAnchor.X or currentAnchor.Y ~= targetAnchor.Y then
+        local size = wheel.Size
+        local position = wheel.Position
+
+        wheel.AnchorPoint = targetAnchor
+        wheel.Position = UDim2.new(
+            position.X.Scale + (targetAnchor.X - currentAnchor.X) * size.X.Scale,
+            position.X.Offset + (targetAnchor.X - currentAnchor.X) * size.X.Offset,
+            position.Y.Scale + (targetAnchor.Y - currentAnchor.Y) * size.Y.Scale,
+            position.Y.Offset + (targetAnchor.Y - currentAnchor.Y) * size.Y.Offset
+        )
+    end
+
+    local range = wheel:GetAttribute("MeterRange")
+    if typeof(range) ~= "number" or range <= 0 then
+        range = DEFAULT_METER_RANGE
+    end
+
+    local minRotation = wheel:GetAttribute("MeterMinRotation")
+    local maxRotation = wheel:GetAttribute("MeterMaxRotation")
+    if typeof(minRotation) == "number" and typeof(maxRotation) == "number" then
+        range = maxRotation - minRotation
+        if range < 0 then
+            range = -range
+            minRotation, maxRotation = maxRotation, minRotation
+        end
+        state = {
+            baseRotation = minRotation,
+            referencePercent = 0,
+            range = range,
+        }
+    else
+        local basePercent = typeof(referencePercent) == "number" and referencePercent or nil
+        state = {
+            baseRotation = wheel.Rotation,
+            referencePercent = basePercent,
+            range = range,
+        }
+    end
+
+    meterStates[wheel] = state
+    return state
+end
+
+local function setMeterRotation(wheel, percent)
+    if not wheel then
         return
     end
 
-    local clampedPercent = math.clamp(percent, 0, 100)
-    local ratio = clampedPercent / 100
-
-    if ratio <= 0 then
-        gradient.Color = ColorSequence.new(emptyColor, emptyColor)
+    local clamped = math.clamp(percent, 0, 100)
+    local state = meterStates[wheel]
+    if not state then
+        state = configureMeter(wheel, clamped)
+    end
+    if not state then
         return
     end
 
-    if ratio >= 1 then
-        gradient.Color = ColorSequence.new(fullColor, fullColor)
-        return
+    if state.referencePercent == nil then
+        state.referencePercent = clamped
+        state.baseRotation = wheel.Rotation
     end
 
-    local epsilon = 0.001
-    local transition = math.clamp(ratio - epsilon, 0, 1)
-
-    gradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, fullColor),
-        ColorSequenceKeypoint.new(transition, fullColor),
-        ColorSequenceKeypoint.new(ratio, emptyColor),
-        ColorSequenceKeypoint.new(1, emptyColor),
-    })
+    local offsetPercent = clamped - state.referencePercent
+    local rotation = state.baseRotation + (offsetPercent / 100) * state.range
+    if wheel.Rotation ~= rotation then
+        wheel.Rotation = rotation
+    end
 end
 
 local function resetUi()
@@ -85,13 +136,13 @@ local function resetUi()
     end
 
     if healthLabel then
-        healthLabel.Text = "100%"
+        healthLabel.Text = "100% HEALTH"
     end
     if speedLabel then
-        speedLabel.Text = "0%"
+        speedLabel.Text = "0% SPEED"
     end
     if pressureLabel then
-        pressureLabel.Text = "0%"
+        pressureLabel.Text = "0% PRESSURE"
     end
     if depthLabel then
         depthLabel.Text = "0m"
@@ -103,8 +154,8 @@ local function resetUi()
         compassNeedle.Rotation = 0
     end
 
-    applyBarFill(healthGradient, 100, HEALTH_FULL_COLOR, HEALTH_EMPTY_COLOR)
-    applyBarFill(speedGradient, 0, SPEED_FULL_COLOR, SPEED_EMPTY_COLOR)
+    setMeterRotation(healthBar, 100)
+    setMeterRotation(speedBar, 0)
 
     lastHealthPercent = nil
     lastSpeedPercent = nil
@@ -151,10 +202,9 @@ local function clearGuiReferences()
     pressureLabel = nil
     coordinatesLabel = nil
     depthLabel = nil
-    healthGradient = nil
-    speedGradient = nil
     lastHealthPercent = nil
     lastSpeedPercent = nil
+    meterStates = {}
 end
 
 local function getBoatFromSeat(seat)
@@ -221,14 +271,15 @@ local function ensureGui()
     controlFrame = guiInstance:WaitForChild("SubmarineControlFrame")
     compassNeedle = controlFrame:WaitForChild("CompassNeedle")
     healthBar = controlFrame:WaitForChild("HealthAmountLine")
-    healthGradient = healthBar:FindFirstChildOfClass("UIGradient")
     speedBar = controlFrame:WaitForChild("SpeedAmountLine")
-    speedGradient = speedBar:FindFirstChildOfClass("UIGradient")
     healthLabel = controlFrame:WaitForChild("HealthPercentLabel")
     speedLabel = controlFrame:WaitForChild("SpeedPercentLabel")
     pressureLabel = controlFrame:WaitForChild("HullPressurePercentLabel")
     coordinatesLabel = controlFrame:WaitForChild("CoordinatesLabel")
     depthLabel = controlFrame:WaitForChild("DepthAmountLabel")
+
+    configureMeter(healthBar)
+    configureMeter(speedBar)
 
     guiAncestryConnection = guiInstance.AncestryChanged:Connect(function(_, parent)
         if not parent then
@@ -309,13 +360,13 @@ local function updateTelemetry()
     )
 
     if healthLabel then
-        healthLabel.Text = string.format("%d%%", healthPercent)
+        healthLabel.Text = string.format("%d%% HEALTH", healthPercent)
     end
     if speedLabel then
-        speedLabel.Text = string.format("%d%%", speedPercent)
+        speedLabel.Text = string.format("%d%% SPEED", speedPercent)
     end
     if pressureLabel then
-        pressureLabel.Text = string.format("%d%%", pressurePercent)
+        pressureLabel.Text = string.format("%d%% PRESSURE", pressurePercent)
     end
     if depthLabel then
         depthLabel.Text = string.format("%dm", depthMeters)
@@ -329,14 +380,14 @@ local function updateTelemetry()
         )
     end
 
-    if healthGradient and healthPercent ~= lastHealthPercent then
-        applyBarFill(healthGradient, healthPercent, HEALTH_FULL_COLOR, HEALTH_EMPTY_COLOR)
+    if healthBar and healthPercent ~= lastHealthPercent then
+        setMeterRotation(healthBar, healthPercent)
         lastHealthPercent = healthPercent
     end
 
     local clampedSpeedPercent = math.clamp(speedPercent, 0, 100)
-    if speedGradient and clampedSpeedPercent ~= lastSpeedPercent then
-        applyBarFill(speedGradient, clampedSpeedPercent, SPEED_FULL_COLOR, SPEED_EMPTY_COLOR)
+    if speedBar and clampedSpeedPercent ~= lastSpeedPercent then
+        setMeterRotation(speedBar, clampedSpeedPercent)
         lastSpeedPercent = clampedSpeedPercent
     end
 

@@ -49,6 +49,7 @@ local lastSpeedPercent
 
 local meterStates = {}
 local labelPulses = {}
+local lastLabelTexts = {}
 local compassState = {
     currentRotation = nil,
     targetRotation = nil,
@@ -233,6 +234,18 @@ local function stepAnimations(deltaTime)
     stepCompassAnimation(deltaTime)
 end
 
+local function updateLabelText(label, key, text)
+    if not label then
+        lastLabelTexts[key] = nil
+        return
+    end
+
+    if lastLabelTexts[key] ~= text then
+        label.Text = text
+        lastLabelTexts[key] = text
+    end
+end
+
 local function configureMeter(wheel, referencePercent)
     if not wheel then
         return nil
@@ -313,6 +326,10 @@ local function setMeterRotation(wheel, percent, instant)
 
     local offsetPercent = clamped - state.referencePercent
     local rotation = state.baseRotation + (offsetPercent / 100) * state.range
+    if not instant and state.targetRotation ~= nil and math.abs(state.targetRotation - rotation) <= METER_ALIGNMENT_EPSILON then
+        return
+    end
+
     state.targetRotation = rotation
 
     if instant or state.currentRotation == nil then
@@ -324,21 +341,11 @@ local function setMeterRotation(wheel, percent, instant)
 end
 
 local function resetUi()
-    if healthLabel then
-        healthLabel.Text = "100% HEALTH"
-    end
-    if speedLabel then
-        speedLabel.Text = "0% SPEED"
-    end
-    if pressureLabel then
-        pressureLabel.Text = "0% PRESSURE"
-    end
-    if depthLabel then
-        depthLabel.Text = "0m"
-    end
-    if coordinatesLabel then
-        coordinatesLabel.Text = zeroCoordinateText
-    end
+    updateLabelText(healthLabel, "health", "100%")
+    updateLabelText(speedLabel, "speed", "0%")
+    updateLabelText(pressureLabel, "pressure", "0%")
+    updateLabelText(depthLabel, "depth", "0m")
+    updateLabelText(coordinatesLabel, "coordinates", zeroCoordinateText)
     if compassNeedle then
         compassNeedle.Rotation = 0
     end
@@ -401,6 +408,7 @@ local function clearGuiReferences()
     depthLabel = nil
     lastHealthPercent = nil
     lastSpeedPercent = nil
+    lastLabelTexts = {}
     for label in pairs(labelPulses) do
         stopPulse(label)
     end
@@ -483,6 +491,23 @@ local function ensureGui()
     coordinatesLabel = controlFrame:WaitForChild("CoordinatesLabel")
     depthLabel = controlFrame:WaitForChild("DepthAmountLabel")
 
+    if depthLabel then
+        local anchor = depthLabel.AnchorPoint
+        local targetAnchor = Vector2.new(0.5, 0.5)
+        if anchor.X ~= targetAnchor.X or anchor.Y ~= targetAnchor.Y then
+            local size = depthLabel.Size
+            local position = depthLabel.Position
+
+            depthLabel.AnchorPoint = targetAnchor
+            depthLabel.Position = UDim2.new(
+                position.X.Scale + (targetAnchor.X - anchor.X) * size.X.Scale,
+                position.X.Offset + (targetAnchor.X - anchor.X) * size.X.Offset,
+                position.Y.Scale + (targetAnchor.Y - anchor.Y) * size.Y.Scale,
+                position.Y.Offset + (targetAnchor.Y - anchor.Y) * size.Y.Offset
+            )
+        end
+    end
+
     configureMeter(healthBar)
     configureMeter(speedBar)
 
@@ -564,26 +589,20 @@ local function updateTelemetry()
         position.Z - COORDINATE_ORIGIN.Z
     )
 
-    if healthLabel then
-        healthLabel.Text = string.format("%d%% HEALTH", healthPercent)
-    end
-    if speedLabel then
-        speedLabel.Text = string.format("%d%% SPEED", speedPercent)
-    end
-    if pressureLabel then
-        pressureLabel.Text = string.format("%d%% PRESSURE", pressurePercent)
-    end
-    if depthLabel then
-        depthLabel.Text = string.format("%dm", depthMeters)
-    end
-    if coordinatesLabel then
-        coordinatesLabel.Text = string.format(
+    updateLabelText(healthLabel, "health", string.format("%d%%", healthPercent))
+    updateLabelText(speedLabel, "speed", string.format("%d%%", speedPercent))
+    updateLabelText(pressureLabel, "pressure", string.format("%d%%", pressurePercent))
+    updateLabelText(depthLabel, "depth", string.format("%dm", depthMeters))
+    updateLabelText(
+        coordinatesLabel,
+        "coordinates",
+        string.format(
             "%s, %s, %s",
             formatCoordinate(relativePosition.X),
             formatCoordinate(relativePosition.Y),
             formatCoordinate(relativePosition.Z)
         )
-    end
+    )
 
     if healthBar and healthPercent ~= lastHealthPercent then
         setMeterRotation(healthBar, healthPercent)

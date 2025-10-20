@@ -428,10 +428,11 @@ local function CleanupBoat(player)
 	PlayerViolations[player] = nil
 
 	-- Clean up boat and physics
-	local boat = ActiveBoats[player]
-	if boat then
-		-- Clean up physics objects first
-		local physicsObjs = BoatPhysicsObjects[boat]
+        local boat = ActiveBoats[player]
+        if boat then
+                SubmarinePhysics.CleanupBoat(boat)
+                -- Clean up physics objects first
+                local physicsObjs = BoatPhysicsObjects[boat]
 		if physicsObjs then
 			for _, obj in pairs(physicsObjs) do
 				if obj and obj.Parent then
@@ -1946,15 +1947,24 @@ local function UpdateBoatControl(player, controls)
 		return
 	end
 
-	BoatControls[player] = {
-		throttle = throttle,
-		steer = steer,
-		ascend = ascend,
-		pitch = pitch,
-		roll = roll
-	}
+        local controlState = BoatControls[player]
+        if controlState then
+                controlState.throttle = throttle
+                controlState.steer = steer
+                controlState.ascend = ascend
+                controlState.pitch = pitch
+                controlState.roll = roll
+        else
+                BoatControls[player] = {
+                        throttle = throttle,
+                        steer = steer,
+                        ascend = ascend,
+                        pitch = pitch,
+                        roll = roll
+                }
+        end
 
-	BoatLastActivity[player] = tick()
+        BoatLastActivity[player] = tick()
 end
 
 -- ENHANCED PHYSICS UPDATE WITH PERFORMANCE OPTIMIZATIONS

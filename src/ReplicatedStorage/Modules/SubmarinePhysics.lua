@@ -256,134 +256,118 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
         local ascend = inputs.ascend or 0
         local pitch = inputs.pitch or 0
         local roll = inputs.roll or 0
-        local currentSpeedValue = inputs.currentSpeed
-        if typeof(currentSpeedValue) ~= "number" then
-                currentSpeedValue = nil
-        end
 
         -- Handle both Speed and MaxSpeed properties
-        local speed = config.Speed or config.MaxSpeed or 28
+        local baseSpeed = config.Speed or config.MaxSpeed or 28
+        local maxSpeed = config.MaxSpeed or baseSpeed
         local turnSpeed = config.TurnSpeed or 1.8
         local pitchSpeed = config.PitchSpeed or 1.5
-	local rollSpeed = config.RollSpeed or 1.0
-	local verticalSpeed = config.VerticalSpeed or 18
+        local rollSpeed = config.RollSpeed or 1.0
+        local verticalSpeed = config.VerticalSpeed or 18
 
-	-- Weight affects rotation speeds
-	local weight = config.Weight or 5
-	local rotationWeightFactor = 2.0 - (weight * 0.18)
-	rotationWeightFactor = math.clamp(rotationWeightFactor, 0.2, 2.0)
+        -- Weight affects rotation speeds
+        local weight = config.Weight or 5
+        local rotationWeightFactor = 2.0 - (weight * 0.18)
+        rotationWeightFactor = math.clamp(rotationWeightFactor, 0.2, 2.0)
 
-	-- Apply weight factor to all rotation speeds
-	turnSpeed = turnSpeed * rotationWeightFactor
-	pitchSpeed = pitchSpeed * (rotationWeightFactor * 0.8)
-	rollSpeed = rollSpeed * (rotationWeightFactor * 0.7)
+        -- Apply weight factor to all rotation speeds
+        turnSpeed = turnSpeed * rotationWeightFactor
+        pitchSpeed = pitchSpeed * (rotationWeightFactor * 0.8)
+        rollSpeed = rollSpeed * (rotationWeightFactor * 0.7)
 
-	-- Vertical speed is affected by weight
+        -- Vertical speed is affected by weight
         local verticalWeightFactor = 1.8 - (weight * 0.15)
         verticalWeightFactor = math.clamp(verticalWeightFactor, 0.3, 1.8)
         verticalSpeed = verticalSpeed * verticalWeightFactor
+
+        if isIdle and math.abs(throttle) < 0.01 and math.abs(steer) < 0.01 then
+                return currentCFrame
+        end
 
         local configSurfaceOffset = waterSurfaceOffset
         if configSurfaceOffset == nil and config then
                 configSurfaceOffset = config.WaterSurfaceOffset
         end
 
-        local effectiveMaxSpeed = inputs.effectiveMaxSpeed
-        if typeof(effectiveMaxSpeed) ~= "number" then
-                effectiveMaxSpeed = config.MaxSpeed or speed
-        end
-        if effectiveMaxSpeed and effectiveMaxSpeed > 0 and currentSpeedValue then
-                currentSpeedValue = math.clamp(currentSpeedValue, -effectiveMaxSpeed, effectiveMaxSpeed)
-        end
-
-        local function getForwardSpeed()
-                if currentSpeedValue then
-                        return currentSpeedValue
+        local function getForwardDistance()
+                local clampedThrottle = math.clamp(throttle, -1, 1)
+                if maxSpeed ~= nil then
+                        return clampedThrottle * maxSpeed * deltaTime
                 end
 
-                local maxReference = effectiveMaxSpeed or speed
-                if maxReference and maxReference > 0 then
-                        local clampedThrottle = math.clamp(throttle, -1, 1)
-                        return clampedThrottle * (speed or maxReference)
-                end
-
-                return throttle * speed
-        end
-
-        if isIdle and math.abs(throttle) < 0.01 and math.abs(steer) < 0.01 then
-                return currentCFrame
+                return clampedThrottle * baseSpeed * deltaTime
         end
 
         local shouldSurface = SubmarinePhysics.ShouldAutoSurface(currentCFrame.Position, configSurfaceOffset)
 
         if shouldSurface and not isInDiveMode then
                 -- AUTO-SURFACE MODE
-                local currentDepth = SubmarinePhysics.GetDepth(currentCFrame.Position, configSurfaceOffset)
                 local waterLevel = WaterPhysics.GetWaterLevel(currentCFrame.Position)
-                local targetOffset = configSurfaceOffset or 1
+                local targetOffset = configSurfaceOffset
+                if targetOffset == nil then
+                        targetOffset = 1
+                end
                 local targetY = waterLevel - targetOffset
 
-		local yDifference = targetY - currentCFrame.Position.Y
-		local surfaceSpeed = math.clamp(yDifference * 2, -2, 2) * deltaTime
+                local yDifference = targetY - currentCFrame.Position.Y
+                local surfaceSpeed = math.clamp(yDifference * 2, -2, 2) * deltaTime
 
-		local x, y, z = currentCFrame:ToEulerAnglesYXZ()
+                local x, y, z = currentCFrame:ToEulerAnglesYXZ()
 
-		-- Weight affects leveling speed
-		local levelingSpeed = 0.5 * rotationWeightFactor
-		local leveledPitch = x * (1 - levelingSpeed * deltaTime)
-		local leveledRoll = z * (1 - levelingSpeed * deltaTime)
+                -- Weight affects leveling speed
+                local levelingSpeed = 0.5 * rotationWeightFactor
+                local leveledPitch = x * (1 - levelingSpeed * deltaTime)
+                local leveledRoll = z * (1 - levelingSpeed * deltaTime)
 
-		local yawAmount = steer * turnSpeed * deltaTime
+                local yawAmount = steer * turnSpeed * deltaTime
 
                 local moveDirection = currentCFrame.LookVector
                 local horizontalDir = Vector3.new(moveDirection.X, 0, moveDirection.Z)
                 if horizontalDir.Magnitude > 0 then
                         moveDirection = horizontalDir.Unit
                 end
-                local forwardSpeed = getForwardSpeed()
-                local moveDistance = forwardSpeed * deltaTime
+
+                local moveDistance = getForwardDistance()
 
                 local newPosition = Vector3.new(
                         currentCFrame.Position.X + (moveDirection.X * moveDistance),
                         currentCFrame.Position.Y + surfaceSpeed,
                         currentCFrame.Position.Z + (moveDirection.Z * moveDistance)
-		)
+                )
 
-		if newPosition.Y > targetY then
-			newPosition = Vector3.new(newPosition.X, targetY, newPosition.Z)
-		end
+                if newPosition.Y > targetY then
+                        newPosition = Vector3.new(newPosition.X, targetY, newPosition.Z)
+                end
 
-		local newCFrame = CFrame.new(newPosition) 
-			* CFrame.Angles(0, y - yawAmount, 0)
-			* CFrame.Angles(leveledPitch, 0, leveledRoll)
+                local newCFrame = CFrame.new(newPosition)
+                        * CFrame.Angles(0, y - yawAmount, 0)
+                        * CFrame.Angles(leveledPitch, 0, leveledRoll)
 
-		return newCFrame
-	else
-		-- DIVE MODE
-		local yawAmount = steer * turnSpeed * deltaTime
-		local pitchAmount = pitch * pitchSpeed * deltaTime
-		local rollAmount = config.CanInvert and (roll * rollSpeed * deltaTime) or 0
+                return newCFrame
+        else
+                -- DIVE MODE
+                local yawAmount = steer * turnSpeed * deltaTime
+                local pitchAmount = pitch * pitchSpeed * deltaTime
+                local rollAmount = config.CanInvert and (roll * rollSpeed * deltaTime) or 0
 
-		local newRotation = currentCFrame 
-			* CFrame.Angles(0, -yawAmount, 0)
-			* CFrame.Angles(-pitchAmount, 0, 0)
-			* CFrame.Angles(0, 0, rollAmount)
+                local newRotation = currentCFrame
+                        * CFrame.Angles(0, -yawAmount, 0)
+                        * CFrame.Angles(-pitchAmount, 0, 0)
+                        * CFrame.Angles(0, 0, rollAmount)
 
                 local moveDirection = newRotation.LookVector
-                local forwardSpeed = getForwardSpeed()
-                local moveDistance = forwardSpeed * deltaTime
+                local moveDistance = getForwardDistance()
 
                 local verticalMovement = 0
                 if math.abs(ascend) > 0.01 then
                         verticalMovement = ascend * verticalSpeed * deltaTime
                 elseif math.abs(pitch) > 0.01 and math.abs(throttle) > 0.01 then
-			local pitchVertical = moveDirection.Y * moveDistance
-			verticalMovement = pitchVertical
-		end
+                        verticalMovement = moveDirection.Y * moveDistance
+                end
 
-		local newPosition = currentCFrame.Position 
-			+ (moveDirection * moveDistance)
-			+ Vector3.new(0, verticalMovement, 0)
+                local newPosition = currentCFrame.Position
+                        + (moveDirection * moveDistance)
+                        + Vector3.new(0, verticalMovement, 0)
 
                 local minDepth = config.MinDepth
                 if minDepth ~= nil then

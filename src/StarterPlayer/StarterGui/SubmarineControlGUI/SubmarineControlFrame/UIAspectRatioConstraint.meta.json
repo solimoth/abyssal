@@ -1,0 +1,5 @@
+{
+  "$className": "UIAspectRatioConstraint",
+  "AspectRatio": 2.4,
+  "DominantAxis": "Width"
+}

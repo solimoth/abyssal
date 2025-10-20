@@ -459,10 +459,10 @@ local function UpdateSubmarineStressMetrics(state)
 end
 
 local function GetOrCreateSubmarineState(player, config)
-	local state = SubmarineStates[player]
-	local maxHealth = (config and config.MaxHealth) or (state and state.maxHealth) or 100
+        local state = SubmarineStates[player]
+        local maxHealth = (config and config.MaxHealth) or (state and state.maxHealth) or 100
 
-	if not state then
+        if not state then
 		state = {
 			maxHealth = maxHealth,
 			health = maxHealth,
@@ -501,15 +501,63 @@ local function GetOrCreateSubmarineState(player, config)
 		state.recentCollisionParts = state.recentCollisionParts or {}
 	end
 
-	UpdateSubmarineStressMetrics(state)
-	return state
+        UpdateSubmarineStressMetrics(state)
+        return state
+end
+
+local function SetBoatAttributeIfChanged(boat, attributeName, value)
+        if not boat or value == nil then
+                return
+        end
+
+        local current = boat:GetAttribute(attributeName)
+        if current == value then
+                return
+        end
+
+        boat:SetAttribute(attributeName, value)
+end
+
+local function UpdateSubmarineTelemetryAttributes(boat, state, config)
+        if not boat or not state or not config then
+                return
+        end
+
+        local maxHealth = state.maxHealth or config.MaxHealth or 100
+        local healthPercent = 100
+        if maxHealth > 0 then
+                healthPercent = math.clamp((state.health / maxHealth) * 100, 0, 100)
+        end
+        healthPercent = math.floor(healthPercent + 0.5)
+
+        local depth = state.lastDepth or 0
+        if depth <= 0 and boat.PrimaryPart then
+                local success, measuredDepth = pcall(SubmarinePhysics.GetDepth, boat.PrimaryPart.Position)
+                if success and typeof(measuredDepth) == "number" then
+                        depth = measuredDepth
+                end
+        end
+
+        local pressurePercent = 0
+        local maxDepth = config.MaxDepth or 0
+        if maxDepth > 0 then
+                pressurePercent = math.clamp((depth / maxDepth) * 100, 0, 100)
+                pressurePercent = math.floor(pressurePercent + 0.5)
+        end
+
+        local integrityRatio = state.integrityRatio or (maxHealth > 0 and math.clamp(state.health / maxHealth, 0, 1) or 1)
+        integrityRatio = math.floor(integrityRatio * 1000 + 0.5) / 1000
+
+        SetBoatAttributeIfChanged(boat, "SubmarineHealthPercent", healthPercent)
+        SetBoatAttributeIfChanged(boat, "SubmarinePressurePercent", pressurePercent)
+        SetBoatAttributeIfChanged(boat, "SubmarineIntegrityRatio", integrityRatio)
 end
 
 local INSTANT_KILL_ATTRIBUTE_NAMES = {
-	"SubInstantKill",
-	"InstantSubKill",
-	"InstantKill",
-	"KillOnTouch",
+        "SubInstantKill",
+        "InstantSubKill",
+        "InstantKill",
+        "KillOnTouch",
 }
 
 local INSTANT_KILL_TAGS = {
@@ -686,10 +734,11 @@ local function ApplySubmarineCollisionDamage(player, boat, config, hitPart, othe
 		return
 	end
 
-	state.health = math.max(state.health - damage, 0)
-	UpdateSubmarineStressMetrics(state)
+        state.health = math.max(state.health - damage, 0)
+        UpdateSubmarineStressMetrics(state)
+        UpdateSubmarineTelemetryAttributes(boat, state, config)
 
-	local currentPercent = math.clamp(math.floor((state.health / state.maxHealth) * 100), 0, 100)
+        local currentPercent = math.clamp(math.floor((state.health / state.maxHealth) * 100), 0, 100)
 	if state.health <= 0 then
 		local impactSource
 		if hitPart and hitPart.Parent == boat then
@@ -1138,15 +1187,17 @@ local function CreateSubmarineImplosionDebris(boat, primaryPart)
 end
 
 TriggerSubmarineImplosion = function(player, boat, config)
-	local state = SubmarineStates[player]
-	if state then
-		if state.isImploding then
-			return
-		end
-		state.isImploding = true
-	end
+        local state = SubmarineStates[player]
+        if state then
+                if state.isImploding then
+                        return
+                end
+                state.isImploding = true
+                state.health = 0
+                UpdateSubmarineTelemetryAttributes(boat, state, config)
+        end
 
-	local playerName = player and player.Name or "Unknown"
+        local playerName = player and player.Name or "Unknown"
 	print(('[Submarine] CRITICAL: %s\'s submarine has imploded under pressure!'):format(playerName))
 
 	local primaryPart = boat and boat.PrimaryPart
@@ -1269,11 +1320,12 @@ local function ApplySubmarineDepthDamage(player, boat, config, targetPosition, d
 			if state.health >= state.maxHealth then
 				state.lastHealthPercentPrint = 100
 			end
-		end
+                end
 
-		UpdateSubmarineStressMetrics(state)
-		return false
-	end
+                UpdateSubmarineStressMetrics(state)
+                UpdateSubmarineTelemetryAttributes(boat, state, config)
+                return false
+        end
 
 	state.wasOverDepth = true
 	state.timeOverDepth = state.timeOverDepth + deltaTime
@@ -1298,11 +1350,12 @@ local function ApplySubmarineDepthDamage(player, boat, config, targetPosition, d
 		state.lastHealthPercentPrint = currentPercent
 	end
 
-	UpdateSubmarineStressMetrics(state)
-	if state.health <= 0 then
-		TriggerSubmarineImplosion(player, boat, config)
-		return true
-	end
+        UpdateSubmarineStressMetrics(state)
+        UpdateSubmarineTelemetryAttributes(boat, state, config)
+        if state.health <= 0 then
+                TriggerSubmarineImplosion(player, boat, config)
+                return true
+        end
 
 	return false
 end
@@ -1462,19 +1515,20 @@ function BoatManager.SpawnBoat(player, boatType, customSpawnPosition, customSpaw
 	BoatConnections[player] = {}
 	BoatLastActivity[player] = tick()
 
-	if config.Type == "Submarine" then
-		local state = GetOrCreateSubmarineState(player, config)
-		state.health = state.maxHealth
-		state.lastHealthPercentPrint = 100
-		state.timeOverDepth = 0
-		state.wasOverDepth = false
-		local now = tick()
-		state.lastWarningTime = now - SUB_DEPTH_WARNING_COOLDOWN
-		state.lastSafeMessageTime = now
-		state.isImploding = false
-	else
-		SubmarineStates[player] = nil
-	end
+        if config.Type == "Submarine" then
+                local state = GetOrCreateSubmarineState(player, config)
+                state.health = state.maxHealth
+                state.lastHealthPercentPrint = 100
+                state.timeOverDepth = 0
+                state.wasOverDepth = false
+                local now = tick()
+                state.lastWarningTime = now - SUB_DEPTH_WARNING_COOLDOWN
+                state.lastSafeMessageTime = now
+                state.isImploding = false
+                UpdateSubmarineTelemetryAttributes(boat, state, config)
+        else
+                SubmarineStates[player] = nil
+        end
 
 	local function onOccupantChanged()
 		local humanoid = seat.Occupant
@@ -1746,12 +1800,13 @@ local function UpdateBoatPhysics(player, boat, deltaTime)
 	local stressSpeedMultiplier = 1
 	local stressAccelMultiplier = 1
 
-	if isSubmarine then
-		stressState = GetOrCreateSubmarineState(player, config)
-		integrityRatio, stressSpeedMultiplier, stressAccelMultiplier = UpdateSubmarineStressMetrics(stressState)
-	end
+        if isSubmarine then
+                stressState = GetOrCreateSubmarineState(player, config)
+                integrityRatio, stressSpeedMultiplier, stressAccelMultiplier = UpdateSubmarineStressMetrics(stressState)
+                UpdateSubmarineTelemetryAttributes(boat, stressState, config)
+        end
 
-	-- Get inputs
+        -- Get inputs
 	local throttle = 0
 	local steer = 0
 	local ascend = 0

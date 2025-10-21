@@ -278,23 +278,18 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime,
                         or boat.PrimaryPart:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
         end
 
-        local trimmedVertical = verticalDistance
-        local rawDistance
-        local distanceForSpeed
-
         local verticalAllowance = 0
         if typeof(waterSurfaceOffset) == "number" then
-                verticalAllowance = math.max(math.abs(waterSurfaceOffset) * 0.75, 0.5)
+                verticalAllowance = math.max(math.abs(waterSurfaceOffset) * 0.35, 0.5)
         end
 
+        local adjustedVertical = verticalDistance
         if verticalAllowance > 0 then
-                trimmedVertical = math.max(verticalDistance - verticalAllowance, 0)
-                rawDistance = math.sqrt((horizontalDistance * horizontalDistance) + (trimmedVertical * trimmedVertical))
-                distanceForSpeed = horizontalDistance + trimmedVertical
-        else
-                rawDistance = delta.Magnitude
-                distanceForSpeed = rawDistance
+                adjustedVertical = math.max(verticalDistance - verticalAllowance, 0)
         end
+
+        local rawDistance = delta.Magnitude
+        local distanceForSpeed = math.sqrt((horizontalDistance * horizontalDistance) + (adjustedVertical * adjustedVertical))
 
         local effectiveDistance = distanceForSpeed
         if shakeDelta > 0 then
@@ -320,7 +315,12 @@ function BoatSecurity.ValidateBoatMovement(player, boat, newPosition, deltaTime,
 
 	-- Check for teleporting
         local maxAllowedDistance = MAX_TELEPORT_DISTANCE * math.max(deltaTime, 0.03)
-        if rawDistance > maxAllowedDistance + jitterAllowance then
+        local teleportAllowance = jitterAllowance
+        if verticalAllowance > 0 then
+                teleportAllowance = teleportAllowance + math.min(verticalAllowance, 6)
+        end
+
+        if rawDistance > maxAllowedDistance + teleportAllowance then
                 data.violations = data.violations + 1
                 data.lastViolationTime = currentTime
 

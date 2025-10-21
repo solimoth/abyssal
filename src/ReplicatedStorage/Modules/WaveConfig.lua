@@ -6,6 +6,7 @@
 
 local random = Random.new(21051990)
 local tau = 2 * math.pi
+local atan = math.atan
 
 local function nextPhase()
     return random:NextNumber(0, tau)
@@ -13,6 +14,34 @@ end
 
 local function randomDirection()
     local angle = random:NextNumber(0, tau)
+    return Vector2.new(math.cos(angle), math.sin(angle))
+end
+
+local function jitterValue(baseValue: number, variance: number?): number
+    variance = math.max(variance or 0, 0)
+    if variance <= 0 then
+        return baseValue
+    end
+
+    local lower = baseValue * (1 - variance)
+    local upper = baseValue * (1 + variance)
+
+    local minValue = math.max(1e-3, math.min(lower, upper))
+    local maxValue = math.max(minValue, math.max(lower, upper))
+
+    return random:NextNumber(minValue, maxValue)
+end
+
+local function jitterDirection(baseDirection: Vector2, maxAngle: number?): Vector2
+    local limit = math.max(maxAngle or 0, 0)
+    if limit <= 0 then
+        return baseDirection.Unit
+    end
+
+    local baseAngle = atan(baseDirection.Y, baseDirection.X)
+    local offset = random:NextNumber(-limit, limit)
+    local angle = baseAngle + offset
+
     return Vector2.new(math.cos(angle), math.sin(angle))
 end
 
@@ -24,6 +53,82 @@ local function randomWave(amplitudeMin: number, amplitudeMax: number, wavelength
         Direction = randomDirection(),
         PhaseOffset = nextPhase(),
     }
+end
+
+local function primaryWave(spec: {
+    Amplitude: number,
+    AmplitudeVariance: number?,
+    Wavelength: number,
+    WavelengthVariance: number?,
+    Speed: number,
+    SpeedVariance: number?,
+    Direction: Vector2,
+    DirectionJitter: number?,
+})
+    return {
+        Amplitude = jitterValue(spec.Amplitude, spec.AmplitudeVariance),
+        Wavelength = jitterValue(spec.Wavelength, spec.WavelengthVariance),
+        Speed = jitterValue(spec.Speed, spec.SpeedVariance),
+        Direction = jitterDirection(spec.Direction, spec.DirectionJitter),
+        PhaseOffset = nextPhase(),
+    }
+end
+
+local primaryWaveSpecs = {
+    {
+        Amplitude = 5.1,
+        AmplitudeVariance = 0.2,
+        Wavelength = 185,
+        WavelengthVariance = 0.18,
+        Speed = 9,
+        SpeedVariance = 0.15,
+        Direction = Vector2.new(1, 0.2),
+        DirectionJitter = math.rad(18),
+        Count = 2,
+    },
+    {
+        Amplitude = 2.5,
+        AmplitudeVariance = 0.25,
+        Wavelength = 98,
+        WavelengthVariance = 0.22,
+        Speed = 14,
+        SpeedVariance = 0.18,
+        Direction = Vector2.new(0.35, 0.8),
+        DirectionJitter = math.rad(28),
+        Count = 2,
+    },
+    {
+        Amplitude = 1.4,
+        AmplitudeVariance = 0.3,
+        Wavelength = 46,
+        WavelengthVariance = 0.28,
+        Speed = 21,
+        SpeedVariance = 0.22,
+        Direction = Vector2.new(-0.5, 0.15),
+        DirectionJitter = math.rad(32),
+        Count = 2,
+    },
+}
+
+local generatedWaves = {}
+
+for _, spec in ipairs(primaryWaveSpecs) do
+    local count = math.max(spec.Count or 1, 1)
+    for _ = 1, count do
+        generatedWaves[#generatedWaves + 1] = primaryWave(spec)
+    end
+end
+
+for _ = 1, 3 do
+    generatedWaves[#generatedWaves + 1] = randomWave(1.4, 3.0, 90, 150, 11, 18)
+end
+
+for _ = 1, 3 do
+    generatedWaves[#generatedWaves + 1] = randomWave(0.7, 1.8, 50, 90, 15, 24)
+end
+
+for _ = 1, 2 do
+    generatedWaves[#generatedWaves + 1] = randomWave(0.3, 0.8, 20, 45, 20, 32)
 end
 
 local WaveConfig = {
@@ -98,32 +203,7 @@ local WaveConfig = {
 
     -- Wave profile definitions. Amplitude/Wavelength/Speed are converted to
     -- Gerstner parameters internally.
-    Waves = {
-        {
-            Amplitude = 5.5,
-            Wavelength = 180,
-            Speed = 9,
-            Direction = Vector2.new(1, 0.2),
-            PhaseOffset = nextPhase(),
-        },
-        {
-            Amplitude = 2.4,
-            Wavelength = 95,
-            Speed = 14,
-            Direction = Vector2.new(0.35, 0.8),
-            PhaseOffset = nextPhase(),
-        },
-        {
-            Amplitude = 1.4,
-            Wavelength = 42,
-            Speed = 21,
-            Direction = Vector2.new(-0.5, 0.15),
-            PhaseOffset = nextPhase(),
-        },
-        randomWave(1.6, 3.2, 110, 160, 10, 15),
-        randomWave(0.9, 2.1, 70, 120, 12, 18),
-        randomWave(0.4, 1.3, 30, 70, 16, 24),
-    },
+    Waves = generatedWaves,
 }
 
 return WaveConfig

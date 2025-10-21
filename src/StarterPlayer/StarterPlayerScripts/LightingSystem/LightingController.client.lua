@@ -1,8 +1,10 @@
 local Lighting = game:GetService("Lighting")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local TweenService = game:GetService("TweenService")
+local Workspace = game:GetService("Workspace")
 
 local REMOTE_PATH = { "LightingSystem", "Remotes", "Lighting", "SetConfiguration" }
+local WATER_COLOR_ATTRIBUTE = "WaterColor"
 local DEFAULT_TRANSITION = {
     transitionTime = 1.5,
     easingStyle = Enum.EasingStyle.Sine,
@@ -66,11 +68,22 @@ local function findRemote()
     return current
 end
 
+local Terrain = Workspace.Terrain
 local SetConfigurationEvent = findRemote()
 local LightingSystemFolder = ReplicatedStorage:WaitForChild("LightingSystem", math.huge)
 local ConfigurationsFolder = LightingSystemFolder:WaitForChild("LightingConfigurations", math.huge)
 
-local defaultConfigurationName = ConfigurationsFolder:GetAttribute("DefaultConfiguration") or "Default"
+local function readDefaultConfigurationName()
+    local configuredDefault = ConfigurationsFolder:GetAttribute("DefaultConfiguration")
+    if typeof(configuredDefault) == "string" and configuredDefault ~= "" then
+        return configuredDefault
+    end
+
+    return "Default"
+end
+
+local defaultConfigurationName = readDefaultConfigurationName()
+local initialTerrainWaterColor = Terrain.WaterColor
 local activeEffects = {}
 local activeTweens = {}
 local pendingEffectRemovals = {}
@@ -82,6 +95,18 @@ local function mergeOptions(options)
         easingStyle = options.easingStyle or DEFAULT_TRANSITION.easingStyle,
         easingDirection = options.easingDirection or DEFAULT_TRANSITION.easingDirection,
     }
+end
+
+local function getBaseWaterColor()
+    local defaultConfiguration = ConfigurationsFolder:FindFirstChild(defaultConfigurationName)
+    if defaultConfiguration then
+        local attributeValue = defaultConfiguration:GetAttribute(WATER_COLOR_ATTRIBUTE)
+        if typeof(attributeValue) == "Color3" then
+            return attributeValue
+        end
+    end
+
+    return initialTerrainWaterColor
 end
 
 local function stopActiveTweens()
@@ -240,6 +265,16 @@ local function applyConfiguration(configurationName, options)
     local lightingGoals = collectLightingGoals(configuration)
     tweenProperties(Lighting, lightingGoals, tweenInfo)
 
+    local fallbackWaterColor = getBaseWaterColor()
+    local targetWaterColor = configuration:GetAttribute(WATER_COLOR_ATTRIBUTE)
+    if typeof(targetWaterColor) ~= "Color3" then
+        targetWaterColor = fallbackWaterColor
+    end
+
+    if targetWaterColor and Terrain.WaterColor ~= targetWaterColor then
+        tweenProperties(Terrain, { WaterColor = targetWaterColor }, tweenInfo)
+    end
+
     local processedEffects = {}
     for _, child in ipairs(configuration:GetChildren()) do
         if child:IsA("PostEffect") or child:IsA("Atmosphere") or child:IsA("Sky") then
@@ -262,6 +297,10 @@ end
 local function onConfigurationEvent(configurationName, options)
     applyConfiguration(configurationName, options)
 end
+
+ConfigurationsFolder:GetAttributeChangedSignal("DefaultConfiguration"):Connect(function()
+    defaultConfigurationName = readDefaultConfigurationName()
+end)
 
 if ConfigurationsFolder:FindFirstChild(defaultConfigurationName) then
     applyConfiguration(defaultConfigurationName, DEFAULT_TRANSITION)

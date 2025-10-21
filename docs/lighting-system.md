@@ -5,7 +5,7 @@ This lighting pipeline allows you to define lighting presets in **ReplicatedStor
 ## Creating lighting configurations
 
 1. In Studio, create a folder under `ReplicatedStorage > LightingSystem > LightingConfigurations` named after the preset you want to use (for example, `Default`, `OceanExplore`, `WaterLayer1`, ...).
-2. Configure any Lighting service properties you would like this preset to control by adding attributes to the folder. Attribute names must match the Lighting property names (e.g. `Ambient`, `Brightness`, `FogColor`, `FogEnd`, `OutdoorAmbient`, ...). Properties left unset will keep the current value when the preset is applied.
+2. Configure any Lighting service properties you would like this preset to control by adding attributes to the folder. Attribute names must match the Lighting property names (e.g. `Ambient`, `Brightness`, `FogColor`, `FogEnd`, `OutdoorAmbient`, ...). Properties left unset will keep the current value when the preset is applied. You can also add a `Color3` attribute named `WaterColor` to recolour the ocean locally for players inside the preset's zone; when the preset ends the water smoothly returns to the colour defined on the default configuration.
 3. Add any post-processing instances that should be active while the preset is enabled as children of the folder. Supported instances are:
    - `Atmosphere`
    - `Sky`
@@ -56,7 +56,7 @@ These helpers allow other gameplay systems (depth tracking, scripted events, wea
 The client script (`StarterPlayerScripts/LightingSystem/LightingController.client.lua`) listens for remote instructions and handles the actual tweening. It:
 
 - Reads lighting property values from the active preset's folder attributes.
-- Tweens Lighting service properties and supported effects using `TweenService` for smooth transitions.
+- Tweens Lighting service properties, supported effects, and the terrain water colour using `TweenService` for smooth transitions.
 - Clones any configured effects into `Lighting` when a preset is enabled and removes them gracefully when the preset ends.
 
 Because all work happens locally, the system is lightweight: only small remote messages are sent when the active preset changes, and the client performs the tweening.

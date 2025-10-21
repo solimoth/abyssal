@@ -141,7 +141,7 @@ local function registerZone(part)
     local easingStyle = parseEnum(Enum.EasingStyle, part:GetAttribute("LightingEasingStyle"))
     local easingDirection = parseEnum(Enum.EasingDirection, part:GetAttribute("LightingEasingDirection"))
     local priority = part:GetAttribute("LightingPriority")
-    local sourceId = part:GetAttribute("LightingSourceId") or ("zone:" .. part:GetDebugId())
+    local sourceId = part:GetAttribute("LightingSourceId") or ("zone:" .. part:GetFullName())
 
     local zoneState = {
         part = part,

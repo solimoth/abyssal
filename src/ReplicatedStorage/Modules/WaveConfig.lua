@@ -4,6 +4,28 @@
 -- while visuals are rendered locally by StarterPlayerScripts/WaveRenderer.
 -- Adjust these values to tune fidelity and performance.
 
+local random = Random.new(21051990)
+local tau = 2 * math.pi
+
+local function nextPhase()
+    return random:NextNumber(0, tau)
+end
+
+local function randomDirection()
+    local angle = random:NextNumber(0, tau)
+    return Vector2.new(math.cos(angle), math.sin(angle))
+end
+
+local function randomWave(amplitudeMin: number, amplitudeMax: number, wavelengthMin: number, wavelengthMax: number, speedMin: number, speedMax: number)
+    return {
+        Amplitude = random:NextNumber(amplitudeMin, amplitudeMax),
+        Wavelength = random:NextNumber(wavelengthMin, wavelengthMax),
+        Speed = random:NextNumber(speedMin, speedMax),
+        Direction = randomDirection(),
+        PhaseOffset = nextPhase(),
+    }
+end
+
 local WaveConfig = {
     -- Base height (world Y) of the simulated water surface.
     SeaLevel = 908.935,
@@ -82,19 +104,25 @@ local WaveConfig = {
             Wavelength = 180,
             Speed = 9,
             Direction = Vector2.new(1, 0.2),
+            PhaseOffset = nextPhase(),
         },
         {
-            Amplitude = 2,
-            Wavelength = 60,
-            Speed = 16,
+            Amplitude = 2.4,
+            Wavelength = 95,
+            Speed = 14,
             Direction = Vector2.new(0.35, 0.8),
+            PhaseOffset = nextPhase(),
         },
         {
-            Amplitude = 1,
-            Wavelength = 22,
-            Speed = 24,
+            Amplitude = 1.4,
+            Wavelength = 42,
+            Speed = 21,
             Direction = Vector2.new(-0.5, 0.15),
+            PhaseOffset = nextPhase(),
         },
+        randomWave(1.6, 3.2, 110, 160, 10, 15),
+        randomWave(0.9, 2.1, 70, 120, 12, 18),
+        randomWave(0.4, 1.3, 30, 70, 16, 24),
     },
 }
 

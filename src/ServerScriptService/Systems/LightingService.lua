@@ -7,7 +7,7 @@ LightingService.__index = LightingService
 local REMOTE = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("Lighting"):WaitForChild("SetConfiguration")
 local CONFIGURATIONS_FOLDER = ReplicatedStorage:FindFirstChild("LightingConfigurations")
 
-local DEFAULT_CONFIGURATION_NAME = "Normal"
+local DEFAULT_CONFIGURATION_NAME = "Default"
 local DEFAULT_OPTIONS = {
     transitionTime = 1.5,
     easingStyle = Enum.EasingStyle.Sine,

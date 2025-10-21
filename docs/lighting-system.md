@@ -4,7 +4,7 @@ This lighting pipeline allows you to define lighting presets in **ReplicatedStor
 
 ## Creating lighting configurations
 
-1. In Studio, create a folder under `ReplicatedStorage > LightingConfigurations` named after the preset you want to use (for example, `Normal`, `OceanExplore`, `WaterLayer1`, ...).
+1. In Studio, create a folder under `ReplicatedStorage > LightingConfigurations` named after the preset you want to use (for example, `Default`, `OceanExplore`, `WaterLayer1`, ...).
 2. Configure any Lighting service properties you would like this preset to control by adding attributes to the folder. Attribute names must match the Lighting property names (e.g. `Ambient`, `Brightness`, `FogColor`, `FogEnd`, `OutdoorAmbient`, ...). Properties left unset will keep the current value when the preset is applied.
 3. Add any post-processing instances that should be active while the preset is enabled as children of the folder. Supported instances are:
    - `Atmosphere`
@@ -15,7 +15,7 @@ This lighting pipeline allows you to define lighting presets in **ReplicatedStor
    - `SunRaysEffect`
 
    Configure these instances exactly how you want them to look; the system will tween their numeric and colour properties when switching between presets.
-4. (Optional) Set the `DefaultConfiguration` attribute on the `LightingConfigurations` folder to the name of the preset that should load when the client starts. By default the system looks for a preset called `Normal`.
+4. (Optional) Set the `DefaultConfiguration` attribute on the `LightingConfigurations` folder to the name of the preset that should load when the client starts. By default the system looks for a preset called `Default`.
 
 > Tip: Because attributes support numeric, colour, and boolean values, you can tune fog, brightness, and ambient colours directly from Studio without editing scripts.
 
@@ -30,7 +30,7 @@ This lighting pipeline allows you to define lighting presets in **ReplicatedStor
    - `LightingEasingStyle` / `LightingEasingDirection` (string or EnumItem): Controls the easing style/direction for the tween. Accepts names from `Enum.EasingStyle`/`Enum.EasingDirection`.
    - `LightingSourceId` (string): Optional unique identifier for the zone. This is useful if you want to reference the same zone from other scripts; if omitted a unique ID is generated automatically.
 
-When a player touches a zone part inside the `Zones` folder, the server instructs that player to switch to the target preset. If the configuration name can't be found, the system warns once for that zone and keeps the current lighting unchanged. Exiting the zone removes its influence, falling back to the next-highest-priority source or the default preset.
+When a player touches a zone part inside the `Zones` folder, the server instructs that player to switch to the target preset. If the configuration name can't be found, the system warns once for that zone and keeps the current lighting unchanged. Exiting the zone removes its influence, falling back to the next-highest-priority source or the default preset (`Default` unless you override the attribute).
 
 ## Manually controlling lighting from scripts
 
@@ -64,7 +64,7 @@ Because all work happens locally, the system is lightweight: only small remote m
 ## Troubleshooting
 
 - **Preset not switching:** Ensure the folder name matches the configuration requested and that it resides under `ReplicatedStorage/LightingConfigurations`.
-- **No default lighting:** Verify that the `DefaultConfiguration` attribute points to an existing preset (or create a preset named `Normal`).
+- **No default lighting:** Verify that the `DefaultConfiguration` attribute points to an existing preset (or create a preset named `Default`).
 - **Harsh transitions:** Increase `LightingTransitionTime` or adjust easing attributes on the zone, or override them via the `options` table when calling the service manually.
 
 With these pieces in place you can build rich, depth-aware lighting that responds smoothly to player movement.

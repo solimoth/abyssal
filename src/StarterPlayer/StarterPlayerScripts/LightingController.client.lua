@@ -69,7 +69,7 @@ end
 local SetConfigurationEvent = findRemote()
 local ConfigurationsFolder = ReplicatedStorage:WaitForChild("LightingConfigurations", math.huge)
 
-local defaultConfigurationName = ConfigurationsFolder:GetAttribute("DefaultConfiguration") or "Normal"
+local defaultConfigurationName = ConfigurationsFolder:GetAttribute("DefaultConfiguration") or "Default"
 local activeEffects = {}
 local activeTweens = {}
 local pendingEffectRemovals = {}

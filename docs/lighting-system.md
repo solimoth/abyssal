@@ -1,10 +1,10 @@
 # Lighting System Overview
 
-This lighting pipeline allows you to define lighting presets in **ReplicatedStorage/LightingConfigurations** and apply them dynamically per-player. Presets are activated automatically when players enter parts inside `Workspace/Zones`, and you can also control them manually from server-side systems through the `LightingService` module.
+This lighting pipeline allows you to define lighting presets in **ReplicatedStorage/LightingSystem/LightingConfigurations** and apply them dynamically per-player. Presets are activated automatically when players enter parts inside `Workspace/Zones`, and you can also control them manually from server-side systems through the `LightingService` module.
 
 ## Creating lighting configurations
 
-1. In Studio, create a folder under `ReplicatedStorage > LightingConfigurations` named after the preset you want to use (for example, `Default`, `OceanExplore`, `WaterLayer1`, ...).
+1. In Studio, create a folder under `ReplicatedStorage > LightingSystem > LightingConfigurations` named after the preset you want to use (for example, `Default`, `OceanExplore`, `WaterLayer1`, ...).
 2. Configure any Lighting service properties you would like this preset to control by adding attributes to the folder. Attribute names must match the Lighting property names (e.g. `Ambient`, `Brightness`, `FogColor`, `FogEnd`, `OutdoorAmbient`, ...). Properties left unset will keep the current value when the preset is applied.
 3. Add any post-processing instances that should be active while the preset is enabled as children of the folder. Supported instances are:
    - `Atmosphere`
@@ -22,7 +22,7 @@ This lighting pipeline allows you to define lighting presets in **ReplicatedStor
 ## Marking lighting zones
 
 1. Create (or locate) a folder named `Zones` under `Workspace`. The server watches this folder automatically.
-2. Add parts inside `Workspace/Zones` that represent the regions you want to influence. Each part's name should match a preset folder under `ReplicatedStorage/LightingConfigurations`. Resize them to cover the desired volume and set `CanCollide`/`Transparency` as needed.
+2. Add parts inside `Workspace/Zones` that represent the regions you want to influence. Each part's name should match a preset folder under `ReplicatedStorage/LightingSystem/LightingConfigurations`. Resize them to cover the desired volume and set `CanCollide`/`Transparency` as needed.
 3. (Optional) Override behaviour by setting attributes on the part:
    - `LightingConfiguration` (string): Use this if you want the part to activate a different preset name than the part's own name.
    - `LightingPriority` (number): Determines which zone wins when players overlap multiple zones. Higher values take priority. Defaults to `0`.
@@ -34,10 +34,10 @@ When a player touches a zone part inside the `Zones` folder, the server instruct
 
 ## Manually controlling lighting from scripts
 
-Require the module from `ServerScriptService/Systems/LightingService.lua`:
+Require the module from `ServerScriptService/Systems/LightingSystem/LightingService.lua`:
 
 ```lua
-local LightingService = require(ServerScriptService.Systems.LightingService)
+local LightingService = require(ServerScriptService.Systems.LightingSystem.LightingService)
 ```
 
 Available APIs:
@@ -53,7 +53,7 @@ These helpers allow other gameplay systems (depth tracking, scripted events, wea
 
 ## Client behaviour
 
-The client script (`StarterPlayerScripts/LightingController.client.lua`) listens for remote instructions and handles the actual tweening. It:
+The client script (`StarterPlayerScripts/LightingSystem/LightingController.client.lua`) listens for remote instructions and handles the actual tweening. It:
 
 - Reads lighting property values from the active preset's folder attributes.
 - Tweens Lighting service properties and supported effects using `TweenService` for smooth transitions.
@@ -63,7 +63,7 @@ Because all work happens locally, the system is lightweight: only small remote m
 
 ## Troubleshooting
 
-- **Preset not switching:** Ensure the folder name matches the configuration requested and that it resides under `ReplicatedStorage/LightingConfigurations`.
+- **Preset not switching:** Ensure the folder name matches the configuration requested and that it resides under `ReplicatedStorage/LightingSystem/LightingConfigurations`.
 - **No default lighting:** Verify that the `DefaultConfiguration` attribute points to an existing preset (or create a preset named `Default`).
 - **Harsh transitions:** Increase `LightingTransitionTime` or adjust easing attributes on the zone, or override them via the `options` table when calling the service manually.
 

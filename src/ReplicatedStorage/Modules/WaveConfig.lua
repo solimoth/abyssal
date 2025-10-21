@@ -77,36 +77,36 @@ end
 local primaryWaveSpecs = {
     {
         Amplitude = 5.1,
-        AmplitudeVariance = 0.2,
+        AmplitudeVariance = 0.18,
         Wavelength = 185,
-        WavelengthVariance = 0.18,
+        WavelengthVariance = 0.16,
         Speed = 9,
-        SpeedVariance = 0.15,
+        SpeedVariance = 0.12,
         Direction = Vector2.new(1, 0.2),
-        DirectionJitter = math.rad(18),
+        DirectionJitter = math.rad(20),
         Count = 2,
     },
     {
-        Amplitude = 2.5,
-        AmplitudeVariance = 0.25,
-        Wavelength = 98,
-        WavelengthVariance = 0.22,
-        Speed = 14,
-        SpeedVariance = 0.18,
+        Amplitude = 2.6,
+        AmplitudeVariance = 0.22,
+        Wavelength = 110,
+        WavelengthVariance = 0.2,
+        Speed = 13,
+        SpeedVariance = 0.16,
         Direction = Vector2.new(0.35, 0.8),
-        DirectionJitter = math.rad(28),
-        Count = 2,
+        DirectionJitter = math.rad(26),
+        Count = 1,
     },
     {
-        Amplitude = 1.4,
-        AmplitudeVariance = 0.3,
-        Wavelength = 46,
-        WavelengthVariance = 0.28,
-        Speed = 21,
-        SpeedVariance = 0.22,
+        Amplitude = 1.3,
+        AmplitudeVariance = 0.28,
+        Wavelength = 58,
+        WavelengthVariance = 0.26,
+        Speed = 20,
+        SpeedVariance = 0.2,
         Direction = Vector2.new(-0.5, 0.15),
-        DirectionJitter = math.rad(32),
-        Count = 2,
+        DirectionJitter = math.rad(30),
+        Count = 1,
     },
 }
 
@@ -119,16 +119,12 @@ for _, spec in ipairs(primaryWaveSpecs) do
     end
 end
 
-for _ = 1, 3 do
-    generatedWaves[#generatedWaves + 1] = randomWave(1.4, 3.0, 90, 150, 11, 18)
-end
-
-for _ = 1, 3 do
-    generatedWaves[#generatedWaves + 1] = randomWave(0.7, 1.8, 50, 90, 15, 24)
+for _ = 1, 2 do
+    generatedWaves[#generatedWaves + 1] = randomWave(1.5, 2.8, 95, 145, 11, 17)
 end
 
 for _ = 1, 2 do
-    generatedWaves[#generatedWaves + 1] = randomWave(0.3, 0.8, 20, 45, 20, 32)
+    generatedWaves[#generatedWaves + 1] = randomWave(0.4, 1.1, 30, 55, 18, 28)
 end
 
 local WaveConfig = {

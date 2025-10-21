@@ -1,17 +1,18 @@
-local CollectionService = game:GetService("CollectionService")
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Workspace = game:GetService("Workspace")
 
 local LightingService = require(script.Parent:WaitForChild("LightingService"))
 
-local TAG_NAME = "LightingZone"
-
+local ZONES_FOLDER_NAME = "Zones"
 local zones = {}
+local folderConnections = {}
 
-local function parseEnum(enum, value)
+local function parseEnum(enumType, value)
     if typeof(value) == "EnumItem" then
         return value
-    elseif typeof(value) == "string" and enum[value] then
-        return enum[value]
+    elseif typeof(value) == "string" and enumType[value] then
+        return enumType[value]
     end
 
     return nil
@@ -36,7 +37,30 @@ local function getPlayerFromPart(part)
     return player
 end
 
+local function configurationExists(name)
+    local configurationsFolder = ReplicatedStorage:FindFirstChild("LightingConfigurations")
+    if not configurationsFolder then
+        return true
+    end
+
+    local configuration = configurationsFolder:FindFirstChild(name)
+    return configuration ~= nil
+end
+
 local function applyZone(player, zoneState)
+    if not configurationExists(zoneState.configuration) then
+        if not zoneState.warnedMissing then
+            warn(("[LightingZoneService] Zone '%s' references unknown lighting configuration '%s'"):format(
+                zoneState.debugName,
+                zoneState.configuration
+            ))
+            zoneState.warnedMissing = true
+        end
+        return
+    end
+
+    zoneState.warnedMissing = nil
+
     LightingService:SetSource(player, zoneState.sourceId, zoneState.configuration, {
         transitionTime = zoneState.transitionTime,
         easingStyle = zoneState.easingStyle,
@@ -104,6 +128,14 @@ local function cleanupZone(zoneState)
 end
 
 local function registerZone(part)
+    if not part:IsA("BasePart") then
+        return
+    end
+
+    if zones[part] then
+        unregisterZone(part)
+    end
+
     local configurationName = part:GetAttribute("LightingConfiguration") or part.Name
     local transitionTime = part:GetAttribute("LightingTransitionTime")
     local easingStyle = parseEnum(Enum.EasingStyle, part:GetAttribute("LightingEasingStyle"))
@@ -121,6 +153,8 @@ local function registerZone(part)
         sourceId = sourceId,
         touchingPlayers = {},
         connections = {},
+        warnedMissing = nil,
+        debugName = part:GetFullName(),
     }
 
     zoneState.connections = {
@@ -151,16 +185,63 @@ local function unregisterZone(part)
     zones[part] = nil
 end
 
-for _, part in ipairs(CollectionService:GetTagged(TAG_NAME)) do
-    if part:IsA("BasePart") then
-        registerZone(part)
+local function clearAllZones()
+    for part, zoneState in pairs(zones) do
+        cleanupZone(zoneState)
+        zones[part] = nil
     end
 end
 
-CollectionService:GetInstanceAddedSignal(TAG_NAME):Connect(function(part)
-    if part:IsA("BasePart") then
-        registerZone(part)
+local function disconnectFolderConnections()
+    for _, connection in ipairs(folderConnections) do
+        connection:Disconnect()
+    end
+    table.clear(folderConnections)
+end
+
+local function registerFolder(folder)
+    disconnectFolderConnections()
+    clearAllZones()
+
+    folderConnections = {
+        folder.DescendantAdded:Connect(function(descendant)
+            if descendant:IsA("BasePart") then
+                registerZone(descendant)
+            end
+        end),
+        folder.DescendantRemoving:Connect(function(descendant)
+            if descendant:IsA("BasePart") then
+                unregisterZone(descendant)
+            end
+        end),
+        folder.AncestryChanged:Connect(function(_, parent)
+            if not parent then
+                disconnectFolderConnections()
+                clearAllZones()
+            end
+        end),
+    }
+
+    for _, descendant in ipairs(folder:GetDescendants()) do
+        if descendant:IsA("BasePart") then
+            registerZone(descendant)
+        end
+    end
+end
+
+local function tryAttachToZonesFolder()
+    local folder = Workspace:FindFirstChild(ZONES_FOLDER_NAME)
+    if folder and folder:IsA("Folder") then
+        registerFolder(folder)
+    end
+end
+
+Workspace.ChildAdded:Connect(function(child)
+    if child:IsA("Folder") and child.Name == ZONES_FOLDER_NAME then
+        registerFolder(child)
     end
 end)
 
-CollectionService:GetInstanceRemovedSignal(TAG_NAME):Connect(unregisterZone)
+tryAttachToZonesFolder()
+
+return {}

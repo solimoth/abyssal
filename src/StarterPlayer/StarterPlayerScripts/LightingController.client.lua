@@ -72,6 +72,7 @@ local ConfigurationsFolder = ReplicatedStorage:WaitForChild("LightingConfigurati
 local defaultConfigurationName = ConfigurationsFolder:GetAttribute("DefaultConfiguration") or "Normal"
 local activeEffects = {}
 local activeTweens = {}
+local pendingEffectRemovals = {}
 
 local function mergeOptions(options)
     options = options or {}
@@ -126,6 +127,7 @@ end
 local function ensureEffect(effectTemplate)
     local existing = Lighting:FindFirstChild(effectTemplate.Name)
     if existing and existing.ClassName ~= effectTemplate.ClassName then
+        pendingEffectRemovals[existing] = nil
         existing:Destroy()
         existing = nil
     end
@@ -134,6 +136,8 @@ local function ensureEffect(effectTemplate)
         existing = effectTemplate:Clone()
         existing.Parent = Lighting
     end
+
+    pendingEffectRemovals[existing] = nil
 
     return existing
 end
@@ -171,6 +175,7 @@ local function updateEffect(effectTemplate, tweenInfo)
     end
 
     activeEffects[target.Name] = target
+    pendingEffectRemovals[target] = nil
 end
 
 local function disableEffect(effectInstance, tweenInfo)
@@ -194,8 +199,17 @@ local function disableEffect(effectInstance, tweenInfo)
 
         if hasNumericGoal then
             tweenProperties(effectInstance, goals, tweenInfo)
+            local token = {}
+            pendingEffectRemovals[effectInstance] = token
+
             task.delay(tweenInfo.Time, function()
-                if effectInstance.Parent then
+                if pendingEffectRemovals[effectInstance] ~= token then
+                    return
+                end
+
+                pendingEffectRemovals[effectInstance] = nil
+
+                if effectInstance.Parent and activeEffects[effectInstance.Name] ~= effectInstance then
                     effectInstance.Parent = nil
                     effectInstance:Destroy()
                 end
@@ -203,6 +217,8 @@ local function disableEffect(effectInstance, tweenInfo)
             return
         end
     end
+
+    pendingEffectRemovals[effectInstance] = nil
 
     effectInstance.Parent = nil
     effectInstance:Destroy()

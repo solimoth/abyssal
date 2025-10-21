@@ -1,6 +1,6 @@
 # Lighting System Overview
 
-This lighting pipeline allows you to define lighting presets in **ReplicatedStorage/LightingConfigurations** and apply them dynamically per-player. Presets are activated automatically when players enter parts tagged as lighting zones, and you can also control them manually from server-side systems through the `LightingService` module.
+This lighting pipeline allows you to define lighting presets in **ReplicatedStorage/LightingConfigurations** and apply them dynamically per-player. Presets are activated automatically when players enter parts inside `Workspace/Zones`, and you can also control them manually from server-side systems through the `LightingService` module.
 
 ## Creating lighting configurations
 
@@ -21,16 +21,16 @@ This lighting pipeline allows you to define lighting presets in **ReplicatedStor
 
 ## Marking lighting zones
 
-1. Add a part to the workspace that represents the zone you want to influence. Resize it to cover the desired region and set `CanCollide`/`Transparency` to suit your needs.
-2. Tag the part with `LightingZone` using the Collection Service editor.
-3. Configure the following optional attributes on the part to control how it behaves:
-   - `LightingConfiguration` (string): Name of the preset to apply when a player is inside the part. Defaults to the part's name.
+1. Create (or locate) a folder named `Zones` under `Workspace`. The server watches this folder automatically.
+2. Add parts inside `Workspace/Zones` that represent the regions you want to influence. Each part's name should match a preset folder under `ReplicatedStorage/LightingConfigurations`. Resize them to cover the desired volume and set `CanCollide`/`Transparency` as needed.
+3. (Optional) Override behaviour by setting attributes on the part:
+   - `LightingConfiguration` (string): Use this if you want the part to activate a different preset name than the part's own name.
    - `LightingPriority` (number): Determines which zone wins when players overlap multiple zones. Higher values take priority. Defaults to `0`.
    - `LightingTransitionTime` (number): Overrides the tween duration in seconds when entering/exiting the zone.
    - `LightingEasingStyle` / `LightingEasingDirection` (string or EnumItem): Controls the easing style/direction for the tween. Accepts names from `Enum.EasingStyle`/`Enum.EasingDirection`.
    - `LightingSourceId` (string): Optional unique identifier for the zone. This is useful if you want to reference the same zone from other scripts; if omitted a unique ID is generated automatically.
 
-When a tagged zone is touched, the server instructs the player to switch to the target preset. Exiting the zone removes its influence, falling back to the next-highest-priority source or the default preset.
+When a player touches a zone part inside the `Zones` folder, the server instructs that player to switch to the target preset. If the configuration name can't be found, the system warns once for that zone and keeps the current lighting unchanged. Exiting the zone removes its influence, falling back to the next-highest-priority source or the default preset.
 
 ## Manually controlling lighting from scripts
 

@@ -28,7 +28,7 @@ This lighting pipeline allows you to define lighting presets in **ReplicatedStor
    - `LightingPriority` (number): Determines which zone wins when players overlap multiple zones. Higher values take priority. Defaults to `0`.
    - `LightingTransitionTime` (number): Overrides the tween duration in seconds when entering/exiting the zone.
    - `LightingEasingStyle` / `LightingEasingDirection` (string or EnumItem): Controls the easing style/direction for the tween. Accepts names from `Enum.EasingStyle`/`Enum.EasingDirection`.
-   - `LightingSourceId` (string): Optional unique identifier for the zone. This is useful if you want to reference the same zone from other scripts; if omitted a unique ID is generated automatically.
+   - `LightingSourceId` (string): Optional unique identifier for the zone. This is useful if you want to reference the same zone from other scripts; if omitted, the server generates a unique ID for that specific part so duplicated names don't conflict.
 
 When a player touches a zone part inside the `Zones` folder, the server instructs that player to switch to the target preset. If the configuration name can't be found, the system warns once for that zone and keeps the current lighting unchanged. Exiting the zone removes its influence, falling back to the next-highest-priority source or the default preset (`Default` unless you override the attribute).
 

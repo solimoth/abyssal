@@ -1,12 +1,24 @@
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local HttpService = game:GetService("HttpService")
 
 local LightingService = require(script.Parent:WaitForChild("LightingService"))
 
 local ZONES_FOLDER_NAME = "Zones"
 local zones = {}
 local folderConnections = {}
+local fallbackSourceIds = setmetatable({}, { __mode = "k" })
+
+local function getFallbackSourceId(part)
+    local sourceId = fallbackSourceIds[part]
+    if not sourceId then
+        sourceId = "zone:" .. HttpService:GenerateGUID(false)
+        fallbackSourceIds[part] = sourceId
+    end
+
+    return sourceId
+end
 
 local function parseEnum(enumType, value)
     if typeof(value) == "EnumItem" then
@@ -73,6 +85,29 @@ local function clearZone(player, zoneState)
     LightingService:ClearSource(player, zoneState.sourceId)
 end
 
+local function handlePlayerRemoving(player)
+    for _, zoneState in pairs(zones) do
+        if zoneState.touchingPlayers[player] then
+            zoneState.touchingPlayers[player] = nil
+            clearZone(player, zoneState)
+        end
+    end
+end
+
+Players.PlayerRemoving:Connect(handlePlayerRemoving)
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterRemoving:Connect(function()
+        handlePlayerRemoving(player)
+    end)
+end)
+
+for _, player in ipairs(Players:GetPlayers()) do
+    player.CharacterRemoving:Connect(function()
+        handlePlayerRemoving(player)
+    end)
+end
+
 local function onZoneTouched(zoneState, otherPart)
     if not otherPart:IsA("BasePart") then
         return
@@ -83,11 +118,23 @@ local function onZoneTouched(zoneState, otherPart)
         return
     end
 
-    local counts = zoneState.touchingPlayers
-    local current = counts[player] or 0
-    counts[player] = current + 1
+    local record = zoneState.touchingPlayers[player]
+    if not record then
+        record = {
+            parts = {},
+            count = 0,
+        }
+        zoneState.touchingPlayers[player] = record
+    end
 
-    if current == 0 then
+    if record.parts[otherPart] then
+        return
+    end
+
+    record.parts[otherPart] = true
+    record.count += 1
+
+    if record.count == 1 then
         applyZone(player, zoneState)
     end
 end
@@ -102,18 +149,17 @@ local function onZoneTouchEnded(zoneState, otherPart)
         return
     end
 
-    local counts = zoneState.touchingPlayers
-    local current = counts[player]
-    if not current then
+    local record = zoneState.touchingPlayers[player]
+    if not record or not record.parts[otherPart] then
         return
     end
 
-    current -= 1
-    if current <= 0 then
-        counts[player] = nil
+    record.parts[otherPart] = nil
+    record.count -= 1
+
+    if record.count <= 0 then
+        zoneState.touchingPlayers[player] = nil
         clearZone(player, zoneState)
-    else
-        counts[player] = current
     end
 end
 
@@ -124,6 +170,7 @@ local function cleanupZone(zoneState)
 
     for player in pairs(zoneState.touchingPlayers) do
         clearZone(player, zoneState)
+        zoneState.touchingPlayers[player] = nil
     end
 end
 
@@ -141,7 +188,10 @@ local function registerZone(part)
     local easingStyle = parseEnum(Enum.EasingStyle, part:GetAttribute("LightingEasingStyle"))
     local easingDirection = parseEnum(Enum.EasingDirection, part:GetAttribute("LightingEasingDirection"))
     local priority = part:GetAttribute("LightingPriority")
-    local sourceId = part:GetAttribute("LightingSourceId") or ("zone:" .. part:GetFullName())
+    local sourceId = part:GetAttribute("LightingSourceId")
+    if typeof(sourceId) ~= "string" or sourceId == "" then
+        sourceId = getFallbackSourceId(part)
+    end
 
     local zoneState = {
         part = part,
@@ -151,7 +201,7 @@ local function registerZone(part)
         easingDirection = easingDirection,
         priority = typeof(priority) == "number" and priority or 0,
         sourceId = sourceId,
-        touchingPlayers = {},
+        touchingPlayers = setmetatable({}, { __mode = "k" }),
         connections = {},
         warnedMissing = nil,
         debugName = part:GetFullName(),

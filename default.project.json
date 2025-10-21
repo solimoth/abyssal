@@ -5,7 +5,8 @@
     "ReplicatedStorage": {
       "$className": "ReplicatedStorage",
       "Modules": { "$path": "src/ReplicatedStorage/Modules" },
-      "Remotes": { "$className": "Folder" }
+      "Remotes": { "$path": "src/ReplicatedStorage/Remotes" },
+      "LightingSystem": { "$path": "src/ReplicatedStorage/LightingSystem" }
     },
     "ServerScriptService": {
       "$className": "ServerScriptService",

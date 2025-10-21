@@ -23,17 +23,19 @@ export type WaveInfo = {
     WaveLength: number,
     Steepness: number,
     Gravity: number,
+    PhaseOffset: number,
     _k: number?,
     _c: number?,
     _A: number?,
 }
 
-function GerstnerWave.WaveInfo.new(direction: Vector2?, waveLength: number?, steepness: number?, gravity: number?): WaveInfo
+function GerstnerWave.WaveInfo.new(direction: Vector2?, waveLength: number?, steepness: number?, gravity: number?, phaseOffset: number?): WaveInfo
     return {
         Direction = direction or v2.new(1, 0),
         WaveLength = waveLength or 1,
         Steepness = steepness or 0,
         Gravity = gravity or Workspace.Gravity,
+        PhaseOffset = phaseOffset or 0,
     }
 end
 
@@ -59,12 +61,14 @@ function GerstnerWave.WaveInfo.fromConfig(entry: { [string]: any }): WaveInfo
     local gravity = entry.Gravity
     local steepness = computeSteepness(amplitude, waveLength, entry.Steepness)
     gravity = gravity or (speed and (speed * speed * ((2 * math.pi) / waveLength))) or Workspace.Gravity
+    local phaseOffset = entry.PhaseOffset or entry.Phase or entry.PhaseShift or 0
 
     return GerstnerWave.WaveInfo.new(
         sanitizeDirection(entry.Direction),
         waveLength,
         steepness,
-        gravity
+        gravity,
+        phaseOffset
     )
 end
 
@@ -77,7 +81,7 @@ function GerstnerWave.BuildWaveInfos(waveConfig: { [number]: { [string]: any } }
     return infos
 end
 
-function GerstnerWave.System:CalculateWave(info: WaveInfo): (number, number, number, Vector2, number)
+function GerstnerWave.System:CalculateWave(info: WaveInfo): (number, number, number, Vector2, number, number)
     local k = info._k
     local c = info._c
     local A = info._A
@@ -96,11 +100,11 @@ function GerstnerWave.System:CalculateWave(info: WaveInfo): (number, number, num
         info._A = A
     end
 
-    return k, c, A, info.Direction, info.Steepness
+    return k, c, A, info.Direction, info.Steepness, info.PhaseOffset or 0
 end
 
-function GerstnerWave.System:CalculateTransform(position: Vector2, runTime: number, calcNormals: boolean, k: number, c: number, A: number, dir: Vector2, steepness: number)
-    local phase = k * (dir:Dot(position) - c * runTime)
+function GerstnerWave.System:CalculateTransform(position: Vector2, runTime: number, calcNormals: boolean, k: number, c: number, A: number, dir: Vector2, steepness: number, phaseOffset: number)
+    local phase = k * (dir:Dot(position) - c * runTime) + phaseOffset
     local cf = cos(phase)
     local sf = sin(phase)
 
@@ -130,8 +134,8 @@ function GerstnerWave:GetTransform(waves: { WaveInfo }, position: Vector2, runTi
 
     local transform = v3.zero
     for _, info in ipairs(waves) do
-        local k, c, A, dir, steepness = self.System:CalculateWave(info)
-        local disp = self.System:CalculateTransform(position, runTime, false, k, c, A, dir, steepness)
+        local k, c, A, dir, steepness, phaseOffset = self.System:CalculateWave(info)
+        local disp = self.System:CalculateTransform(position, runTime, false, k, c, A, dir, steepness, phaseOffset)
         transform += disp
     end
     return transform
@@ -147,8 +151,8 @@ function GerstnerWave:GetHeightAndNormal(waves: { WaveInfo }, position: Vector2,
     local binormal = v3.zAxis
 
     for _, info in ipairs(waves) do
-        local k, c, A, dir, steepness = self.System:CalculateWave(info)
-        local disp, tan, bin = self.System:CalculateTransform(position, runTime, true, k, c, A, dir, steepness)
+        local k, c, A, dir, steepness, phaseOffset = self.System:CalculateWave(info)
+        local disp, tan, bin = self.System:CalculateTransform(position, runTime, true, k, c, A, dir, steepness, phaseOffset)
         transform += disp
         tangent += tan
         binormal += bin

@@ -29,7 +29,9 @@ GPU, memory, and network costs down in the open world.
      `Model:GetPivot()`.
 
 2. **Add a `LODLevels` folder**
-   - Parent a `Folder` named `LODLevels` inside the tagged model.
+   - Parent a `Folder` named `LODLevels` inside the tagged model, **or** set the
+     `LODLevelsPath` attribute (see below) to point at a folder stored somewhere
+     else such as `ReplicatedStorage`.
    - Place one child `Model` or `BasePart` per level of detail inside this
      folder. These act as templates; they will be cloned on the client so make
      sure `Archivable` is enabled. The manager automatically removes the
@@ -54,6 +56,11 @@ GPU, memory, and network costs down in the open world.
      omitted, a local folder is created in `Workspace`.
    - `LODContainerName` *(String)* – overrides the generated folder name that
      stores the active level.
+   - `LODLevelsPath` *(String)* – absolute path (e.g.
+     `ReplicatedStorage/Islands/BeachLOD`) to the folder that contains the
+     templates when they are stored outside of the anchor model. Paths are
+     resolved against Roblox services first and then searched under `Workspace`
+     and `ReplicatedStorage` for convenience.
    - `LODDestroyInstances` *(Boolean)* – set to `false` if you want to reuse the
      cloned instances after unregistering instead of destroying them.
 
@@ -63,12 +70,13 @@ clones out of the world until the service says they should be visible, and then
 applies the correct pivot offset so the clone lines up with the anchor model.
 
 > **Streaming-enabled experiences** – When `Workspace.StreamingEnabled` is on the
-> client asks `StreamingService:RequestStreamAroundAsync` (falling back to the
-> legacy `Workspace:RequestStreamAroundAsync` when present) for the area around
-> each tagged anchor before it clones the templates. Keep the `LODLevels`
-> models close to the anchor so they fall within the streamed radius, or author
-> the templates in non-streamed storage such as `ReplicatedStorage` if you need
-> guaranteed availability.
+> client asks Roblox streaming APIs for the area around each tagged anchor
+> before it clones the templates. The manager first uses
+> `StreamingService:RequestStreamAroundAsync` and falls back to
+> `Workspace:RequestStreamAroundAsync` only if the new API is unavailable.
+> Keep the `LODLevels` models close to the anchor so they fall within the
+> streamed radius, or point `LODLevelsPath` at a folder in `ReplicatedStorage`
+> so the templates are fully replicated regardless of streaming radius.
 
 ## How it works
 
@@ -135,9 +143,9 @@ longer needs to participate in LOD switching.
 
 - Use extremely cheap anchors—one invisible part or attachment is enough—to
   keep replication and physics costs to a minimum. All of the detailed visuals
-  should live inside `LODLevels`. You can also keep the templates in
-  `ReplicatedStorage` or `ServerStorage`; the manager only needs them long
-  enough to clone, after which they are detached from the world on each client.
+  should live inside `LODLevels`. For streaming-enabled experiences, store the
+  templates in `ReplicatedStorage` (and set `LODLevelsPath` accordingly) so the
+  client can always clone the complete model before activating it.
 - The last level can be a billboard, mesh impostor, or even an empty model. When
   combined with `LODUnloadDistance` you can completely cull distant objects.
 - Adjust `LODService:SetMaxUpdatesPerStep` if you have thousands of groups.

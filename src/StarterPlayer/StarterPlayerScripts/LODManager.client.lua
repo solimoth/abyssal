@@ -57,18 +57,43 @@ local function requestStreamingAround(position: Vector3)
         return
     end
 
-    local ok, err = pcall(function()
-        if StreamingService and StreamingService.RequestStreamAroundAsync then
-            StreamingService:RequestStreamAroundAsync(position)
-        elseif Workspace.RequestStreamAroundAsync then
-            Workspace:RequestStreamAroundAsync(position)
-        else
-            error("RequestStreamAroundAsync API is unavailable")
-        end
-    end)
+    local attempts = {}
 
-    if not ok then
-        warn(string.format("[LOD] Failed to request streaming around %.1f, %.1f, %.1f: %s", position.X, position.Y, position.Z, tostring(err)))
+    if StreamingService and typeof(StreamingService.RequestStreamAroundAsync) == "function" then
+        table.insert(attempts, function()
+            StreamingService:RequestStreamAroundAsync(position)
+        end)
+    end
+
+    if typeof(Workspace.RequestStreamAroundAsync) == "function" then
+        table.insert(attempts, function()
+            Workspace:RequestStreamAroundAsync(position)
+        end)
+    end
+
+    if #attempts == 0 then
+        warn("[LOD] Streaming request API is unavailable on this client")
+        return
+    end
+
+    local lastErr: string? = nil
+    for _, attempt in ipairs(attempts) do
+        local ok, err = pcall(attempt)
+        if ok then
+            return
+        end
+
+        lastErr = tostring(err)
+    end
+
+    if lastErr then
+        warn(string.format(
+            "[LOD] Failed to request streaming around %.1f, %.1f, %.1f: %s",
+            position.X,
+            position.Y,
+            position.Z,
+            lastErr
+        ))
     end
 end
 
@@ -111,6 +136,66 @@ local function computeInstancePivot(instance: Instance): CFrame
     end
 
     error(string.format("[LOD] Cannot compute pivot for %s", instance:GetFullName()))
+end
+
+local function resolveLevelsFolder(root: Model): Folder?
+    local customPath = root:GetAttribute("LODLevelsPath")
+    if typeof(customPath) == "string" and customPath ~= "" then
+        local segments = string.split(customPath, "/")
+        local current: Instance? = nil
+
+        for index, rawSegment in ipairs(segments) do
+            local segment = rawSegment
+            if segment == "" then
+                continue
+            end
+
+            if index == 1 then
+                local ok, service = pcall(game.GetService, game, segment)
+                if ok and service then
+                    current = service
+                else
+                    current = Workspace:FindFirstChild(segment) or ReplicatedStorage:FindFirstChild(segment)
+                end
+            else
+                if not current then
+                    break
+                end
+
+                current = current:FindFirstChild(segment)
+            end
+
+            if not current then
+                break
+            end
+        end
+
+        if current then
+            if current:IsA("Folder") then
+                return current
+            else
+                warn(string.format(
+                    "[LOD] LODLevelsPath '%s' on %s resolved to %s which is not a Folder",
+                    customPath,
+                    root:GetFullName(),
+                    current:GetFullName()
+                ))
+            end
+        else
+            warn(string.format(
+                "[LOD] LODLevelsPath '%s' on %s could not be resolved",
+                customPath,
+                root:GetFullName()
+            ))
+        end
+    end
+
+    local levelsFolder = root:FindFirstChild("LODLevels")
+    if levelsFolder and levelsFolder:IsA("Folder") then
+        return levelsFolder
+    end
+
+    return nil
 end
 
 local function createPivotResolver(root: Model): () -> CFrame
@@ -163,9 +248,9 @@ local function resolveActiveParent(root: Model): Instance?
 end
 
 local function buildLevelConfigurations(root: Model, basePivot: CFrame)
-    local levelsFolder = root:FindFirstChild("LODLevels")
-    if not levelsFolder or not levelsFolder:IsA("Folder") then
-        warn(string.format("[LOD] %s is missing a LODLevels folder", root:GetFullName()))
+    local levelsFolder = resolveLevelsFolder(root)
+    if not levelsFolder then
+        warn(string.format("[LOD] %s does not have a LODLevels folder", root:GetFullName()))
         return nil
     end
 

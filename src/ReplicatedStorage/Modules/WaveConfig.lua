@@ -17,7 +17,7 @@ local spectrumConfig: WaveSpectrum.SpectrumConfig = {
             Wavelength = { 190, 320 },
             AmplitudeRatio = { 0.018, 0.03 },
             Speed = { 7.5, 10.5 },
-            Steepness = { 0.45, 0.9 },
+            Steepness = { 1.2, 2.2 }, -- Multiplier applied to the amplitude-derived steepness
             DirectionalSpread = 0.45,
         },
         {
@@ -25,7 +25,7 @@ local spectrumConfig: WaveSpectrum.SpectrumConfig = {
             Wavelength = { 95, 160 },
             AmplitudeRatio = { 0.011, 0.022 },
             Speed = { 10.5, 15.5 },
-            Steepness = { 0.3, 0.7 },
+            Steepness = { 1.4, 2.6 },
             DirectionalSpread = 0.65,
         },
         {
@@ -33,7 +33,7 @@ local spectrumConfig: WaveSpectrum.SpectrumConfig = {
             Wavelength = { 32, 72 },
             AmplitudeRatio = { 0.005, 0.014 },
             Speed = { 16, 24 },
-            Steepness = { 0.15, 0.45 },
+            Steepness = { 1.6, 3 },
             DirectionalSpread = 1,
         },
     },

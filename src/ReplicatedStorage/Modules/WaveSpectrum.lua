@@ -15,7 +15,7 @@ export type GroupSpec = {
     Amplitude: NumberRange?,
     AmplitudeRatio: NumberRange?,
     Speed: NumberRange?,
-    Steepness: NumberRange?,
+    Steepness: NumberRange?, -- Multiplier applied to the amplitude-derived steepness
     Phase: NumberRange?,
     PhaseOffset: NumberRange?,
     DirectionalBias: Vector2?,
@@ -37,6 +37,8 @@ local cos = math.cos
 local sin = math.sin
 local clamp = math.clamp
 local abs = math.abs
+
+local MAX_STEEPNESS = 1.2
 
 local function resolveRange(range: NumberRange?, fallback: number): (number, number)
     local rangeType = typeof(range)
@@ -114,6 +116,30 @@ local function sampleAmplitude(rng: Random, group: GroupSpec, wavelength: number
     return math.max(0, wavelength * ratio)
 end
 
+-- Computes the final steepness for a generated wave. Steepness is derived from the
+-- sampled amplitude so the configured amplitude ratios control the displacement.
+-- Group.Steepness acts as a multiplier range that increases or decreases the
+-- baseline steepness to vary choppiness without changing wave height.
+local function computeSteepness(amplitude: number, wavelength: number, group: GroupSpec, rng: Random): number?
+    if amplitude <= 0 then
+        return 0
+    end
+
+    local baseSteepness = amplitude * (tau / wavelength)
+    local steepnessRange = group.Steepness
+    if steepnessRange == nil then
+        return math.clamp(baseSteepness, 0, MAX_STEEPNESS)
+    end
+
+    local minScale, maxScale = resolveRange(steepnessRange, 1)
+    if maxScale <= minScale then
+        return math.clamp(baseSteepness * minScale, 0, MAX_STEEPNESS)
+    end
+
+    local scale = rng:NextNumber(minScale, maxScale)
+    return math.clamp(baseSteepness * scale, 0, MAX_STEEPNESS)
+end
+
 local function defaultSpeedFor(wavelength: number): number
     local g = abs(Workspace.Gravity)
     if g <= 1e-3 then
@@ -152,10 +178,7 @@ function WaveSpectrum.generate(config: SpectrumConfig?): { [number]: { [string]:
                 speed = sampleNumber(rng, group.Speed, defaultSpeedFor(wavelength))
             end
 
-            local steepness: number? = nil
-            if group.Steepness ~= nil then
-                steepness = sampleNumber(rng, group.Steepness, 0.8)
-            end
+            local steepness = computeSteepness(amplitude, wavelength, group, rng)
 
             local direction = sampleDirection(rng, groupBias, groupSpread)
             local phase = samplePhase(rng, group.Phase or group.PhaseOffset or phaseRange)

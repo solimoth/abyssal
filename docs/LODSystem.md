@@ -63,10 +63,12 @@ clones out of the world until the service says they should be visible, and then
 applies the correct pivot offset so the clone lines up with the anchor model.
 
 > **Streaming-enabled experiences** – When `Workspace.StreamingEnabled` is on the
-> client requests streaming for the area around each tagged anchor before it
-> clones the templates. Keep the `LODLevels` models close to the anchor so they
-> fall within the streamed radius, or author the templates in non-streamed
-> storage such as `ReplicatedStorage` if you need guaranteed availability.
+> client asks `StreamingService:RequestStreamAroundAsync` (falling back to the
+> legacy `Workspace:RequestStreamAroundAsync` when present) for the area around
+> each tagged anchor before it clones the templates. Keep the `LODLevels`
+> models close to the anchor so they fall within the streamed radius, or author
+> the templates in non-streamed storage such as `ReplicatedStorage` if you need
+> guaranteed availability.
 
 ## How it works
 

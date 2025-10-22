@@ -3,6 +3,7 @@
 local CollectionService = game:GetService("CollectionService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
+local StreamingService = game:GetService("StreamingService")
 
 local LODService = require(ReplicatedStorage.Modules.LODService)
 type LODServiceModule = typeof(LODService)
@@ -57,7 +58,13 @@ local function requestStreamingAround(position: Vector3)
     end
 
     local ok, err = pcall(function()
-        Workspace:RequestStreamAroundAsync(position)
+        if StreamingService and StreamingService.RequestStreamAroundAsync then
+            StreamingService:RequestStreamAroundAsync(position)
+        elseif Workspace.RequestStreamAroundAsync then
+            Workspace:RequestStreamAroundAsync(position)
+        else
+            error("RequestStreamAroundAsync API is unavailable")
+        end
     end)
 
     if not ok then

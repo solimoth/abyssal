@@ -105,6 +105,7 @@ local function buildLevelConfigurations(root: Model, basePivot: CFrame)
     end)
 
     local levels = {}
+    local consumedDefinitions = {}
     for _, definition in ipairs(definitions) do
         if not definition.Archivable then
             warn(string.format("[LOD] %s is not archivable and will be skipped", definition:GetFullName()))
@@ -147,6 +148,8 @@ local function buildLevelConfigurations(root: Model, basePivot: CFrame)
             MinDistance = minDistance,
             PivotOffset = offset,
         })
+
+        table.insert(consumedDefinitions, definition)
     end
 
     if #levels == 0 then
@@ -162,6 +165,24 @@ local function buildLevelConfigurations(root: Model, basePivot: CFrame)
         end
         return aMax < bMax
     end)
+
+    for _, definition in ipairs(consumedDefinitions) do
+        local ok, err = pcall(function()
+            definition.Parent = nil
+        end)
+        if not ok then
+            warn(string.format("[LOD] Failed to remove source level %s: %s", definition:GetFullName(), tostring(err)))
+        end
+    end
+
+    if #levelsFolder:GetChildren() == 0 then
+        local ok, err = pcall(function()
+            levelsFolder.Parent = nil
+        end)
+        if not ok then
+            warn(string.format("[LOD] Failed to clean up LODLevels folder on %s: %s", root:GetFullName(), tostring(err)))
+        end
+    end
 
     return levels
 end

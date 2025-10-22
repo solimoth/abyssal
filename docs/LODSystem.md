@@ -32,7 +32,9 @@ GPU, memory, and network costs down in the open world.
    - Parent a `Folder` named `LODLevels` inside the tagged model.
    - Place one child `Model` or `BasePart` per level of detail inside this
      folder. These act as templates; they will be cloned on the client so make
-     sure `Archivable` is enabled.
+     sure `Archivable` is enabled. The manager automatically removes the
+     original templates from the workspace after cloning so only the active LOD
+     instance remains visible.
    - Give each template a `Number` attribute called `LODMaxDistance` (or
      `MaxDistance`). The number is the maximum camera distance (in studs) where
      that level remains active. The last level can omit this attribute to make
@@ -125,7 +127,9 @@ longer needs to participate in LOD switching.
 
 - Use extremely cheap anchors—one invisible part or attachment is enough—to
   keep replication and physics costs to a minimum. All of the detailed visuals
-  should live inside `LODLevels`.
+  should live inside `LODLevels`. You can also keep the templates in
+  `ReplicatedStorage` or `ServerStorage`; the manager only needs them long
+  enough to clone, after which they are detached from the world on each client.
 - The last level can be a billboard, mesh impostor, or even an empty model. When
   combined with `LODUnloadDistance` you can completely cull distant objects.
 - Adjust `LODService:SetMaxUpdatesPerStep` if you have thousands of groups.

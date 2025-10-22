@@ -414,9 +414,13 @@ local function updateTile(tile, scaledChoppiness, globalIntensity, checkLandZone
     -- every vertex. This keeps the runtime cost proportional to the number of
     -- vertices while still supporting arbitrarily many wave layers.
     local phaseOrigins = tile.PhaseOrigins
-    if not phaseOrigins then
+    if phaseOrigins == nil or (tile.PhaseOriginCount or 0) ~= waveCount then
         phaseOrigins = table.create(waveCount)
+        if phaseOrigins == nil then
+            phaseOrigins = {}
+        end
         tile.PhaseOrigins = phaseOrigins
+        tile.PhaseOriginCount = waveCount
     end
 
     if shouldSample then
@@ -428,37 +432,21 @@ local function updateTile(tile, scaledChoppiness, globalIntensity, checkLandZone
     -- Row-level cosine/sine caches let us advance each wave along the row with
     -- inexpensive multiplies instead of calling sin/cos for every vertex.
     local rowCosBuffer = tile.RowCosBuffer
-    if not rowCosBuffer then
-        rowCosBuffer = table.create(waveCount)
-        tile.RowCosBuffer = rowCosBuffer
-    end
-
     local rowSinBuffer = tile.RowSinBuffer
-    if not rowSinBuffer then
-        rowSinBuffer = table.create(waveCount)
-        tile.RowSinBuffer = rowSinBuffer
-    end
-
-    -- Cache per-tile wave phase offsets so we avoid recomputing origin terms for
-    -- every vertex. This keeps the runtime cost proportional to the number of
-    -- vertices while still supporting arbitrarily many wave layers.
-    local phaseOrigins = tile.PhaseOrigins
-    if not phaseOrigins then
-        phaseOrigins = table.create(waveCount)
-        tile.PhaseOrigins = phaseOrigins
-    end
-
-    if shouldSample then
-        for i = 1, waveCount do
-            local state = waveStates[i]
-            phaseOrigins[i] = (state.kDirX * tileOriginX) + (state.kDirY * tileOriginZ) + state.timePhase
+    if rowCosBuffer == nil or rowSinBuffer == nil or (tile.RowBufferCount or 0) ~= waveCount then
+        rowCosBuffer = table.create(waveCount)
+        if rowCosBuffer == nil then
+            rowCosBuffer = {}
         end
-    end
 
-    local rowPhaseBuffer = tile.RowPhaseBuffer
-    if not rowPhaseBuffer then
-        rowPhaseBuffer = table.create(waveCount)
-        tile.RowPhaseBuffer = rowPhaseBuffer
+        rowSinBuffer = table.create(waveCount)
+        if rowSinBuffer == nil then
+            rowSinBuffer = {}
+        end
+
+        tile.RowCosBuffer = rowCosBuffer
+        tile.RowSinBuffer = rowSinBuffer
+        tile.RowBufferCount = waveCount
     end
 
     for y = 1, gridHeight do
@@ -677,8 +665,10 @@ local function cleanup()
         end
 
         tile.PhaseOrigins = nil
+        tile.PhaseOriginCount = nil
         tile.RowCosBuffer = nil
         tile.RowSinBuffer = nil
+        tile.RowBufferCount = nil
     end
 
     table.clear(tiles)

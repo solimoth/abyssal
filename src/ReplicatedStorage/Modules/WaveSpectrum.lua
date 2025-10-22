@@ -8,7 +8,7 @@ local Workspace = game:GetService("Workspace")
 
 local WaveSpectrum = {}
 
-export type NumberRange = number | { number, number }
+export type NumberRange = number | { [number]: number }
 export type GroupSpec = {
     Count: number?,
     Wavelength: NumberRange?,

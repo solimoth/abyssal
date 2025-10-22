@@ -41,11 +41,13 @@ memory, and network costs down in the open world.
    - Place one child `Model` or `BasePart` per level of detail inside the folder
      and leave them there—multiple anchors can share the same template folder.
      The instances act as templates; they will be cloned on the client so make
-     sure `Archivable` is enabled.
-   - Give each template a `Number` attribute called `LODMaxDistance` (or
-     `MaxDistance`). The number is the maximum camera distance (in studs) where
-     that level remains active. The last level can omit this attribute to make
-     it the fallback for any distance beyond the previous tiers.
+     sure `Archivable` is enabled. For the default workflow author two models,
+     such as `High` and `Low`.
+   - Give the close-up template a `Number` attribute called `LODMaxDistance`
+     (or `MaxDistance`). The number is the maximum camera distance (in studs)
+     where the high-detail level remains active. The far impostor can omit this
+     attribute to act as the fallback for any distance beyond the previous
+     tier.
    - (Optional) Add `LODMinDistance` (or `MinDistance`) to delay activation
      until the camera has moved far enough away, which is useful for making sure
      impostors do not appear while the player is still on top of the object.
@@ -126,8 +128,8 @@ service:Start()
 local basePivot = anchorModel:GetPivot()
 local high = highTemplate:Clone()
 high.Parent = nil
-local medium = mediumTemplate:Clone()
-medium.Parent = nil
+local low = lowTemplate:Clone()
+low.Parent = nil
 
 local handle = service:Register(anchorModel, {
     Levels = {
@@ -137,9 +139,8 @@ local handle = service:Register(anchorModel, {
             PivotOffset = basePivot:ToObjectSpace(highTemplate:GetPivot()),
         },
         {
-            Instance = medium,
-            MaxDistance = 400,
-            PivotOffset = basePivot:ToObjectSpace(mediumTemplate:GetPivot()),
+            Instance = low,
+            PivotOffset = basePivot:ToObjectSpace(lowTemplate:GetPivot()),
         },
     },
 })

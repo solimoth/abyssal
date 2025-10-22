@@ -17,16 +17,12 @@
             Levels = {
                 {
                     Instance = highDetailModelClone,
-                    MaxDistance = 200,
+                    MaxDistance = 250,
                     PivotOffset = basePivot:ToObjectSpace(highDetailModelClone:GetPivot()),
                 },
                 {
-                    Instance = mediumDetailModelClone,
-                    MaxDistance = 600,
-                    PivotOffset = basePivot:ToObjectSpace(mediumDetailModelClone:GetPivot()),
-                },
-                {
-                    Instance = billboardModelClone,
+                    Instance = lowDetailModelClone,
+                    PivotOffset = basePivot:ToObjectSpace(lowDetailModelClone:GetPivot()),
                 },
             },
             GetPivot = function()

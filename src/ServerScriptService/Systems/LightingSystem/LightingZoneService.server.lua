@@ -2,6 +2,7 @@ local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Workspace = game:GetService("Workspace")
 local HttpService = game:GetService("HttpService")
+local RunService = game:GetService("RunService")
 
 local LightingService = require(script.Parent:WaitForChild("LightingService"))
 
@@ -110,58 +111,63 @@ for _, player in ipairs(Players:GetPlayers()) do
     end)
 end
 
-local function onZoneTouched(zoneState, otherPart)
-    if not otherPart:IsA("BasePart") then
-        return
+local heartbeatConnection
+
+local function updateZoneOccupancy(zoneState)
+    local overlappingParts
+
+    local success, result = pcall(function()
+        return Workspace:GetPartsInPart(zoneState.part)
+    end)
+
+    if success then
+        overlappingParts = result
+    else
+        warn(("[LightingZoneService] Failed to query parts for zone '%s': %s"):format(
+            zoneState.debugName,
+            result
+        ))
+        overlappingParts = {}
     end
 
-    local player = getPlayerFromPart(otherPart)
-    if not player then
-        return
+    local currentPlayers = {}
+
+    for _, otherPart in ipairs(overlappingParts) do
+        local player = getPlayerFromPart(otherPart)
+        if player then
+            currentPlayers[player] = true
+        end
     end
 
-    local record = zoneState.touchingPlayers[player]
-    if not record then
-        record = {
-            parts = {},
-            count = 0,
-        }
-        zoneState.touchingPlayers[player] = record
+    for player in pairs(currentPlayers) do
+        if not zoneState.touchingPlayers[player] then
+            zoneState.touchingPlayers[player] = true
+            applyZone(player, zoneState)
+        end
     end
 
-    if record.parts[otherPart] then
-        return
-    end
-
-    record.parts[otherPart] = true
-    record.count += 1
-
-    if record.count == 1 then
-        applyZone(player, zoneState)
+    for player in pairs(zoneState.touchingPlayers) do
+        if not currentPlayers[player] then
+            zoneState.touchingPlayers[player] = nil
+            clearZone(player, zoneState)
+        end
     end
 end
 
-local function onZoneTouchEnded(zoneState, otherPart)
-    if not otherPart:IsA("BasePart") then
-        return
+local function updateZones()
+    for _, zoneState in pairs(zones) do
+        updateZoneOccupancy(zoneState)
     end
+end
 
-    local player = getPlayerFromPart(otherPart)
-    if not player then
-        return
-    end
-
-    local record = zoneState.touchingPlayers[player]
-    if not record or not record.parts[otherPart] then
-        return
-    end
-
-    record.parts[otherPart] = nil
-    record.count -= 1
-
-    if record.count <= 0 then
-        zoneState.touchingPlayers[player] = nil
-        clearZone(player, zoneState)
+local function updateHeartbeatConnection()
+    if next(zones) ~= nil then
+        if not heartbeatConnection then
+            heartbeatConnection = RunService.Heartbeat:Connect(updateZones)
+        end
+    elseif heartbeatConnection then
+        heartbeatConnection:Disconnect()
+        heartbeatConnection = nil
     end
 end
 
@@ -195,6 +201,12 @@ local function registerZone(part)
         sourceId = getFallbackSourceId(part)
     end
 
+    if not part.CanQuery then
+        warn(("[LightingZoneService] Zone part '%s' has CanQuery disabled; lighting zone detection may not work as expected."):format(
+            part:GetFullName()
+        ))
+    end
+
     local zoneState = {
         part = part,
         configuration = configurationName,
@@ -210,21 +222,18 @@ local function registerZone(part)
     }
 
     zoneState.connections = {
-        part.Touched:Connect(function(otherPart)
-            onZoneTouched(zoneState, otherPart)
-        end),
-        part.TouchEnded:Connect(function(otherPart)
-            onZoneTouchEnded(zoneState, otherPart)
-        end),
         part.AncestryChanged:Connect(function(_, parent)
             if not parent then
                 cleanupZone(zoneState)
                 zones[part] = nil
+                updateHeartbeatConnection()
             end
         end),
     }
 
     zones[part] = zoneState
+    updateHeartbeatConnection()
+    updateZoneOccupancy(zoneState)
 end
 
 local function unregisterZone(part)
@@ -235,6 +244,7 @@ local function unregisterZone(part)
 
     cleanupZone(zoneState)
     zones[part] = nil
+    updateHeartbeatConnection()
 end
 
 local function clearAllZones()
@@ -242,6 +252,8 @@ local function clearAllZones()
         cleanupZone(zoneState)
         zones[part] = nil
     end
+
+    updateHeartbeatConnection()
 end
 
 local function disconnectFolderConnections()

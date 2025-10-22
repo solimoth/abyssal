@@ -72,6 +72,25 @@ local Terrain = Workspace.Terrain
 local SetConfigurationEvent = findRemote()
 local LightingSystemFolder = ReplicatedStorage:WaitForChild("LightingSystem", math.huge)
 local ConfigurationsFolder = LightingSystemFolder:WaitForChild("LightingConfigurations", math.huge)
+local WaveConfig = require(ReplicatedStorage:WaitForChild("Modules", math.huge):WaitForChild("WaveConfig", math.huge))
+local WAVE_CONTAINER_NAME = WaveConfig.ContainerName or "DynamicWaveSurface"
+local waveContainer: Instance?
+local pendingWaveColor: Color3?
+
+local function getWaveContainer(): Instance?
+    if waveContainer and waveContainer.Parent then
+        return waveContainer
+    end
+
+    waveContainer = Workspace:FindFirstChild(WAVE_CONTAINER_NAME)
+    if waveContainer and pendingWaveColor then
+        local current = waveContainer:GetAttribute("Color")
+        if typeof(current) ~= "Color3" or current ~= pendingWaveColor then
+            waveContainer:SetAttribute("Color", pendingWaveColor)
+        end
+    end
+    return waveContainer
+end
 
 local function readDefaultConfigurationName()
     local configuredDefault = ConfigurationsFolder:GetAttribute("DefaultConfiguration")
@@ -269,6 +288,15 @@ local function applyConfiguration(configurationName, options)
     local targetWaterColor = configuration:GetAttribute(WATER_COLOR_ATTRIBUTE)
     if typeof(targetWaterColor) ~= "Color3" then
         targetWaterColor = fallbackWaterColor
+    end
+
+    pendingWaveColor = targetWaterColor
+    local waveContainerInstance = getWaveContainer()
+    if waveContainerInstance and targetWaterColor then
+        local currentColor = waveContainerInstance:GetAttribute("Color")
+        if typeof(currentColor) ~= "Color3" or currentColor ~= targetWaterColor then
+            waveContainerInstance:SetAttribute("Color", targetWaterColor)
+        end
     end
 
     if targetWaterColor and Terrain.WaterColor ~= targetWaterColor then

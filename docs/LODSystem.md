@@ -13,8 +13,9 @@ pieces:
   an `LODGroup` and feeds the service with cloned geometry.
 
 Because the heavy detail is cloned locally on the client the server only needs
-to replicate a very small anchor model for each world object. This keeps CPU,
-GPU, memory, and network costs down in the open world.
+to replicate a very small anchor model for each world object. Templates live in
+`ReplicatedStorage` so every client can pull them on demand, keeping CPU, GPU,
+memory, and network costs down in the open world.
 
 ## Authoring a LOD group
 
@@ -28,15 +29,19 @@ GPU, memory, and network costs down in the open world.
      for distance checks and placement. When absent the manager uses
      `Model:GetPivot()`.
 
-2. **Add a `LODLevels` folder**
-   - Parent a `Folder` named `LODLevels` inside the tagged model, **or** set the
-     `LODLevelsPath` attribute (see below) to point at a folder stored somewhere
-     else such as `ReplicatedStorage`.
-   - Place one child `Model` or `BasePart` per level of detail inside this
-     folder. These act as templates; they will be cloned on the client so make
-     sure `Archivable` is enabled. The manager automatically removes the
-     original templates from the workspace after cloning so only the active LOD
-     instance remains visible.
+2. **Author external LOD templates**
+   - Create (or reuse) a folder structure such as
+     `ReplicatedStorage/LODLevels/<GroupName>`. Using `ReplicatedStorage`
+     ensures the templates replicate to every client regardless of streaming
+     radius.
+   - Set the `LODLevelsId` attribute on the anchor to the name of the folder you
+     created (for example `BeachIsland`). When omitted the manager falls back to
+     the anchor's `Name` when searching under `ReplicatedStorage/LODLevels`
+     (and `ReplicatedStorage/LODTemplates`).
+   - Place one child `Model` or `BasePart` per level of detail inside the folder
+     and leave them there—multiple anchors can share the same template folder.
+     The instances act as templates; they will be cloned on the client so make
+     sure `Archivable` is enabled.
    - Give each template a `Number` attribute called `LODMaxDistance` (or
      `MaxDistance`). The number is the maximum camera distance (in studs) where
      that level remains active. The last level can omit this attribute to make
@@ -58,9 +63,13 @@ GPU, memory, and network costs down in the open world.
      stores the active level.
    - `LODLevelsPath` *(String)* – absolute path (e.g.
      `ReplicatedStorage/Islands/BeachLOD`) to the folder that contains the
-     templates when they are stored outside of the anchor model. Paths are
+     templates. Use this when the templates live somewhere other than the
+     default `ReplicatedStorage/LODLevels/<GroupName>` hierarchy. Paths are
      resolved against Roblox services first and then searched under `Workspace`
      and `ReplicatedStorage` for convenience.
+   - `LODLevelsId` *(String)* – overrides the folder name used when searching
+     the default `ReplicatedStorage/LODLevels` or `ReplicatedStorage/LODTemplates`
+     hierarchies. Leave blank to use the anchor's `Name`.
    - `LODDestroyInstances` *(Boolean)* – set to `false` if you want to reuse the
      cloned instances after unregistering instead of destroying them.
 
@@ -74,9 +83,9 @@ applies the correct pivot offset so the clone lines up with the anchor model.
 > before it clones the templates. The manager first uses
 > `StreamingService:RequestStreamAroundAsync` and falls back to
 > `Workspace:RequestStreamAroundAsync` only if the new API is unavailable.
-> Keep the `LODLevels` models close to the anchor so they fall within the
-> streamed radius, or point `LODLevelsPath` at a folder in `ReplicatedStorage`
-> so the templates are fully replicated regardless of streaming radius.
+> Because the templates live in `ReplicatedStorage` by default they replicate
+> independently of world streaming, so the client can always clone the complete
+> models before activating them.
 
 ## How it works
 
@@ -84,8 +93,8 @@ applies the correct pivot offset so the clone lines up with the anchor model.
 2. When a tagged model is found it:
    - Resolves the pivot function (either the anchor specified by `LODAnchor` or
      the model's pivot).
-   - Clones every child inside `LODLevels`, recording the relative offset from
-     the anchor so the clone can be placed correctly later.
+   - Clones every child inside the resolved template folder, recording the
+     relative offset from the anchor so the clone can be placed correctly later.
    - Registers the group with the shared `LODService` instance.
 3. `LODService` runs on `Heartbeat`, slices work across frames, and for each
    group:
@@ -142,10 +151,9 @@ longer needs to participate in LOD switching.
 ## Tips
 
 - Use extremely cheap anchors—one invisible part or attachment is enough—to
-  keep replication and physics costs to a minimum. All of the detailed visuals
-  should live inside `LODLevels`. For streaming-enabled experiences, store the
-  templates in `ReplicatedStorage` (and set `LODLevelsPath` accordingly) so the
-  client can always clone the complete model before activating it.
+  keep replication and physics costs to a minimum. Author the detailed visuals
+  in `ReplicatedStorage/LODLevels` so they replicate once and can be shared
+  across anchors.
 - The last level can be a billboard, mesh impostor, or even an empty model. When
   combined with `LODUnloadDistance` you can completely cull distant objects.
 - Adjust `LODService:SetMaxUpdatesPerStep` if you have thousands of groups.

@@ -158,6 +158,11 @@ local function computeInstancePivot(instance: Instance): CFrame
     error(string.format("[LOD] Cannot compute pivot for %s", instance:GetFullName()))
 end
 
+local DEFAULT_EXTERNAL_LEVEL_ROOTS = {
+    { ReplicatedStorage, { "LODLevels" } },
+    { ReplicatedStorage, { "LODTemplates" } },
+}
+
 local function resolveLevelsFolder(root: Model): Folder?
     local customPath = root:GetAttribute("LODLevelsPath")
     if typeof(customPath) == "string" and customPath ~= "" then
@@ -207,6 +212,36 @@ local function resolveLevelsFolder(root: Model): Folder?
                 customPath,
                 root:GetFullName()
             ))
+        end
+    end
+
+    local preferredNames = {}
+    local configuredId = root:GetAttribute("LODLevelsId")
+    if typeof(configuredId) == "string" and configuredId ~= "" then
+        table.insert(preferredNames, configuredId)
+    end
+    table.insert(preferredNames, root.Name)
+
+    for _, entry in ipairs(DEFAULT_EXTERNAL_LEVEL_ROOTS) do
+        local base = entry[1]
+        local pathSegments = entry[2]
+        local current = base
+
+        for _, segment in ipairs(pathSegments) do
+            if not current then
+                break
+            end
+
+            current = current:FindFirstChild(segment)
+        end
+
+        if current and current:IsA("Folder") then
+            for _, name in ipairs(preferredNames) do
+                local candidate = current:FindFirstChild(name)
+                if candidate and candidate:IsA("Folder") then
+                    return candidate
+                end
+            end
         end
     end
 
@@ -270,7 +305,7 @@ end
 local function buildLevelConfigurations(root: Model, basePivot: CFrame)
     local levelsFolder = resolveLevelsFolder(root)
     if not levelsFolder then
-        warn(string.format("[LOD] %s does not have a LODLevels folder", root:GetFullName()))
+        warn(string.format("[LOD] %s does not have an accessible LODLevels folder", root:GetFullName()))
         return nil
     end
 
@@ -281,6 +316,7 @@ local function buildLevelConfigurations(root: Model, basePivot: CFrame)
 
     local levels = {}
     local consumedDefinitions = {}
+    local shouldDetachSources = root:IsAncestorOf(levelsFolder)
     for _, definition in ipairs(definitions) do
         if not definition.Archivable then
             warn(string.format("[LOD] %s is not archivable and will be skipped", definition:GetFullName()))
@@ -328,7 +364,9 @@ local function buildLevelConfigurations(root: Model, basePivot: CFrame)
             PivotOffset = offset,
         })
 
-        table.insert(consumedDefinitions, definition)
+        if shouldDetachSources then
+            table.insert(consumedDefinitions, definition)
+        end
     end
 
     if #levels == 0 then
@@ -345,21 +383,23 @@ local function buildLevelConfigurations(root: Model, basePivot: CFrame)
         return aMax < bMax
     end)
 
-    for _, definition in ipairs(consumedDefinitions) do
-        local ok, err = pcall(function()
-            definition.Parent = nil
-        end)
-        if not ok then
-            warn(string.format("[LOD] Failed to remove source level %s: %s", definition:GetFullName(), tostring(err)))
+    if shouldDetachSources then
+        for _, definition in ipairs(consumedDefinitions) do
+            local ok, err = pcall(function()
+                definition.Parent = nil
+            end)
+            if not ok then
+                warn(string.format("[LOD] Failed to remove source level %s: %s", definition:GetFullName(), tostring(err)))
+            end
         end
-    end
 
-    if #levelsFolder:GetChildren() == 0 then
-        local ok, err = pcall(function()
-            levelsFolder.Parent = nil
-        end)
-        if not ok then
-            warn(string.format("[LOD] Failed to clean up LODLevels folder on %s: %s", root:GetFullName(), tostring(err)))
+        if #levelsFolder:GetChildren() == 0 then
+            local ok, err = pcall(function()
+                levelsFolder.Parent = nil
+            end)
+            if not ok then
+                warn(string.format("[LOD] Failed to clean up LODLevels folder on %s: %s", root:GetFullName(), tostring(err)))
+            end
         end
     end
 

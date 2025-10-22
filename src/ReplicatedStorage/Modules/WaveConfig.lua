@@ -4,36 +4,42 @@
 -- while visuals are rendered locally by StarterPlayerScripts/WaveRenderer.
 -- Adjust these values to tune fidelity and performance.
 
-local generatedWaves = {
-    {
-        Amplitude = 4.3,
-        Wavelength = 210,
-        Speed = 8.8,
-        Direction = Vector2.new(0.94, 0.35),
-        PhaseOffset = math.pi * 0.1,
-    },
-    {
-        Amplitude = 2.5,
-        Wavelength = 135,
-        Speed = 12.6,
-        Direction = Vector2.new(-0.52, 0.85),
-        PhaseOffset = math.pi * 0.6,
-    },
-    {
-        Amplitude = 1.2,
-        Wavelength = 78,
-        Speed = 17.8,
-        Direction = Vector2.new(0.18, -0.98),
-        PhaseOffset = math.pi * 1.2,
-    },
-    {
-        Amplitude = 0.7,
-        Wavelength = 44,
-        Speed = 23,
-        Direction = Vector2.new(-0.88, -0.47),
-        PhaseOffset = math.pi * 1.75,
+local WaveSpectrum = require(script.Parent.WaveSpectrum)
+
+local spectrumConfig: WaveSpectrum.SpectrumConfig = {
+    Seed = 314159,
+    DirectionalBias = Vector2.new(0.82, 0.44),
+    DirectionalSpread = 0.75,
+    PhaseRange = { 0, 2 * math.pi },
+    Groups = {
+        {
+            Count = 4,
+            Wavelength = { 190, 320 },
+            AmplitudeRatio = { 0.018, 0.03 },
+            Speed = { 7.5, 10.5 },
+            Steepness = { 0.45, 0.9 },
+            DirectionalSpread = 0.45,
+        },
+        {
+            Count = 6,
+            Wavelength = { 95, 160 },
+            AmplitudeRatio = { 0.011, 0.022 },
+            Speed = { 10.5, 15.5 },
+            Steepness = { 0.3, 0.7 },
+            DirectionalSpread = 0.65,
+        },
+        {
+            Count = 8,
+            Wavelength = { 32, 72 },
+            AmplitudeRatio = { 0.005, 0.014 },
+            Speed = { 16, 24 },
+            Steepness = { 0.15, 0.45 },
+            DirectionalSpread = 1,
+        },
     },
 }
+
+local generatedWaves = WaveSpectrum.generate(spectrumConfig)
 
 local WaveConfig = {
     -- Base height (world Y) of the simulated water surface.
@@ -111,6 +117,7 @@ local WaveConfig = {
 
     -- Wave profile definitions. Amplitude/Wavelength/Speed are converted to
     -- Gerstner parameters internally.
+    Spectrum = spectrumConfig,
     Waves = generatedWaves,
 }
 

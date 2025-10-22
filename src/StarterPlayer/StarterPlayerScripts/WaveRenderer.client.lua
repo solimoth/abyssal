@@ -30,6 +30,8 @@ if not (ContentLib and ContentLib.fromObject) then
     return
 end
 
+local COLOR_LERP_SPEED = 3
+
 local containerName = WaveConfig.ContainerName or "DynamicWaveSurface"
 local container = Workspace:FindFirstChild(containerName)
 if not container then
@@ -88,6 +90,7 @@ local targetIntensity = intensity
 local intensityResponsiveness = math.max(0, attributeNumber("IntensityResponsiveness", WaveConfig.IntensityResponsiveness or 2.5))
 local material = attributeMaterial("MaterialName", WaveConfig.Material or Enum.Material.Water)
 local color = attributeColor("Color", WaveConfig.Color or Color3.fromRGB(30, 120, 150))
+local targetColor = color
 local transparency = attributeNumber("Transparency", WaveConfig.Transparency or 0.2)
 local reflectance = attributeNumber("Reflectance", WaveConfig.Reflectance or 0)
 local landZoneName = attributeString("LandZoneName", WaveConfig.LandZoneName or "LandZone")
@@ -158,6 +161,13 @@ local function refreshTileAppearance()
             part.Reflectance = reflectance
         end
     end
+end
+
+local function colorsClose(a: Color3, b: Color3): boolean
+    local dr = a.R - b.R
+    local dg = a.G - b.G
+    local db = a.B - b.B
+    return (dr * dr) + (dg * dg) + (db * db) <= 1e-5
 end
 
 local function buildEditableGrid()
@@ -237,10 +247,9 @@ if #tiles == 0 then
 end
 
 local function updateColorFromAttribute()
-    local newColor = attributeColor("Color", color)
-    if newColor ~= color then
-        color = newColor
-        refreshTileAppearance()
+    local newColor = attributeColor("Color", targetColor)
+    if newColor ~= targetColor then
+        targetColor = newColor
     end
 end
 
@@ -387,6 +396,19 @@ heartbeatConn = RunService.Heartbeat:Connect(function(dt)
         intensity += (targetIntensity - intensity) * alpha
         if math.abs(intensity - targetIntensity) < 1e-3 then
             intensity = targetIntensity
+        end
+    end
+
+    if not colorsClose(color, targetColor) then
+        local alpha = COLOR_LERP_SPEED > 0 and (1 - math.exp(-COLOR_LERP_SPEED * dt)) or 1
+        local newColor = color:Lerp(targetColor, alpha)
+        if colorsClose(newColor, targetColor) then
+            newColor = targetColor
+        end
+
+        if newColor ~= color then
+            color = newColor
+            refreshTileAppearance()
         end
     end
 

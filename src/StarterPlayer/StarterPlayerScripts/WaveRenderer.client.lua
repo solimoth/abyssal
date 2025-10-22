@@ -17,6 +17,7 @@ local ContentLib: any = (getfenv() :: any).Content
 
 local abs = math.abs
 local cos = math.cos
+local exp = math.exp
 local max = math.max
 local sin = math.sin
 local sqrt = math.sqrt
@@ -135,6 +136,7 @@ local waveCount = #waveStates
 
 local lastClockAttribute = attributeNumber("WaveClock", Workspace:GetServerTimeNow())
 local clockSyncedAt = os.clock()
+local vertexSmoothingSpeed = math.max(0, attributeNumber("VertexSmoothingSpeed", WaveConfig.VertexSmoothingSpeed or 0))
 
 local function getWaveClock()
     local attr = container:GetAttribute("WaveClock")
@@ -215,6 +217,9 @@ local function buildEditableGrid()
                 Id = vertexId,
                 OffsetX = localX,
                 OffsetZ = localZ,
+                LastX = localX,
+                LastY = 0,
+                LastZ = localZ,
             }
         end
         vertices[y] = row
@@ -393,16 +398,21 @@ local function sampleWaves(worldX: number, worldZ: number, runTime: number)
     return sumX, sumY, sumZ
 end
 
-local function updateTile(tile, runTime, scaledChoppiness, globalIntensity, checkLandZones)
+local function updateTile(tile, runTime, scaledChoppiness, globalIntensity, checkLandZones, smoothingAlpha)
     local editable = tile.Editable
     local vertices = tile.Vertices
     local originCF = tile.OriginCF
+
+    if not editable or not vertices then
+        return
+    end
 
     local originPos = originCF.Position
     local tileOriginX = originPos.X
     local tileOriginZ = originPos.Z
     local tileSeaLevel = originPos.Y
     local shouldSample = waveCount > 0 and (scaledChoppiness ~= 0 or globalIntensity ~= 0)
+    local doSmoothing = smoothingAlpha and smoothingAlpha > 0 and smoothingAlpha < 0.999
 
     for y = 1, gridHeight do
         local row = vertices[y]
@@ -414,9 +424,9 @@ local function updateTile(tile, runTime, scaledChoppiness, globalIntensity, chec
             local worldX = tileOriginX + baseX
             local worldZ = tileOriginZ + baseZ
 
-            local offsetX = baseX
-            local offsetY = 0
-            local offsetZ = baseZ
+            local targetX = baseX
+            local targetY = 0
+            local targetZ = baseZ
 
             if shouldSample then
                 local transformX, transformY, transformZ = sampleWaves(worldX, worldZ, runTime)
@@ -430,28 +440,45 @@ local function updateTile(tile, runTime, scaledChoppiness, globalIntensity, chec
                 local localChoppiness = scaledChoppiness * zoneMultiplier
 
                 if localChoppiness ~= 0 then
-                    offsetX += transformX * localChoppiness
-                    offsetZ += transformZ * localChoppiness
+                    targetX += transformX * localChoppiness
+                    targetZ += transformZ * localChoppiness
                 end
 
                 if localIntensity ~= 0 then
-                    offsetY = max(0, transformY * localIntensity)
+                    targetY = max(0, transformY * localIntensity)
                 end
             end
+
+            local offsetX = targetX
+            local offsetY = targetY
+            local offsetZ = targetZ
+
+            if doSmoothing then
+                offsetX = vertex.LastX + (targetX - vertex.LastX) * smoothingAlpha
+                offsetY = vertex.LastY + (targetY - vertex.LastY) * smoothingAlpha
+                offsetZ = vertex.LastZ + (targetZ - vertex.LastZ) * smoothingAlpha
+            end
+
+            vertex.LastX = offsetX
+            vertex.LastY = offsetY
+            vertex.LastZ = offsetZ
 
             editable:SetPosition(vertex.Id, vector3_new(offsetX, offsetY, offsetZ))
         end
     end
 end
 
+local renderStepName = "WaveRendererUpdate"
+local renderStepBound = false
 local heartbeatConn
 
-heartbeatConn = RunService.Heartbeat:Connect(function(dt)
+local function step(dt)
     seaLevel = attributeNumber("SeaLevel", seaLevel)
     targetIntensity = math.max(0, attributeNumber("WaveIntensity", targetIntensity))
     intensityResponsiveness = math.max(0, attributeNumber("IntensityResponsiveness", intensityResponsiveness))
     landZoneAttenuation = math.clamp(attributeNumber("LandZoneAttenuation", landZoneAttenuation), 0, 1)
     landZoneFadeDistance = math.max(0, attributeNumber("LandZoneFadeDistance", landZoneFadeDistance))
+    vertexSmoothingSpeed = math.max(0, attributeNumber("VertexSmoothingSpeed", vertexSmoothingSpeed))
 
     local updatedLandZoneName = attributeString("LandZoneName", landZoneName)
     if updatedLandZoneName ~= landZoneName then
@@ -487,6 +514,13 @@ heartbeatConn = RunService.Heartbeat:Connect(function(dt)
     local runTime = getWaveClock()
     local scaledChoppiness = choppiness * intensity
     local checkLandZones = landZoneAttenuation < 0.999 and next(landZones) ~= nil
+    local smoothingAlpha = 1
+    if vertexSmoothingSpeed > 0 then
+        smoothingAlpha = 1 - exp(-vertexSmoothingSpeed * dt)
+        if smoothingAlpha > 1 then
+            smoothingAlpha = 1
+        end
+    end
 
     for _, tile in ipairs(tiles) do
         local offset = tile.GridOffset
@@ -495,21 +529,41 @@ heartbeatConn = RunService.Heartbeat:Connect(function(dt)
         local originCF = CFrame.new(tileOriginX, seaLevel, tileOriginZ)
 
         tile.OriginCF = originCF
-        tile.Part.CFrame = originCF
-        updateTile(tile, runTime, scaledChoppiness, intensity, checkLandZones)
+        local part = tile.Part
+        if part then
+            part.CFrame = originCF
+        end
+
+        updateTile(tile, runTime, scaledChoppiness, intensity, checkLandZones, smoothingAlpha)
     end
 
     reapplyClock += dt
     if reapplyClock >= reapplyInterval then
         reapplyClock = 0
         for _, tile in ipairs(tiles) do
-            applyEditableToPart(tile.Editable, tile.Part)
-            tile.Part.CFrame = tile.OriginCF
+            local editable = tile.Editable
+            local part = tile.Part
+            if editable and part then
+                applyEditableToPart(editable, part)
+                part.CFrame = tile.OriginCF
+            end
         end
     end
-end)
+end
+
+if RunService:IsClient() and RunService.BindToRenderStep then
+    RunService:BindToRenderStep(renderStepName, Enum.RenderPriority.Last.Value, step)
+    renderStepBound = true
+else
+    heartbeatConn = RunService.Heartbeat:Connect(step)
+end
 
 local function cleanup()
+    if renderStepBound and RunService.UnbindFromRenderStep then
+        RunService:UnbindFromRenderStep(renderStepName)
+        renderStepBound = false
+    end
+
     if heartbeatConn then
         heartbeatConn:Disconnect()
         heartbeatConn = nil

@@ -73,6 +73,10 @@ local WaveConfig = {
     -- introduce a bit of crest "choppiness" without destabilising the mesh.
     Choppiness = 0.35,
 
+    -- Controls how quickly vertex positions ease towards their latest target
+    -- sample. Higher values reduce visual jitter when frame times fluctuate.
+    VertexSmoothingSpeed = 14,
+
     -- Rate at which the tiled surface recentres towards the active focus point.
     RecenterResponsiveness = 6,
 

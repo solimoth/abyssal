@@ -256,25 +256,66 @@ end
 local function createPivotResolver(root: Model): () -> CFrame
     local anchorName = root:GetAttribute("LODAnchor")
     if typeof(anchorName) == "string" and anchorName ~= "" then
-        local anchor = root:FindFirstChild(anchorName, true)
-        if anchor then
-            if anchor:IsA("Model") then
-                return function()
-                    return anchor:GetPivot()
-                end
-            elseif anchor:IsA("BasePart") then
-                return function()
-                    return anchor.CFrame
-                end
-            elseif anchor:IsA("Attachment") then
-                return function()
-                    return anchor.WorldCFrame
-                end
-            else
-                warn(string.format("[LOD] Anchor %s on %s is not a supported type", anchor:GetFullName(), root:GetFullName()))
+        local cachedAnchor: Instance? = nil
+        local hasResolvedPivot = false
+
+        local function tryResolveAnchor(): Instance?
+            local anchor = cachedAnchor
+            if anchor and anchor.Parent then
+                return anchor
             end
-        else
-            warn(string.format("[LOD] Anchor %s not found on %s; falling back to model pivot", anchorName, root:GetFullName()))
+
+            anchor = root:FindFirstChild(anchorName, true)
+            if anchor then
+                cachedAnchor = anchor
+                return anchor
+            end
+
+            cachedAnchor = nil
+            return nil
+        end
+
+        return function()
+            local anchor = tryResolveAnchor()
+            if anchor then
+                if anchor:IsA("Model") then
+                    local ok, pivot = pcall(anchor.GetPivot, anchor)
+                    if not ok then
+                        error(string.format(
+                            "Anchor '%s' on %s pivot unavailable: %s",
+                            anchor:GetFullName(),
+                            root:GetFullName(),
+                            tostring(pivot)
+                        ))
+                    end
+
+                    hasResolvedPivot = true
+                    return pivot
+                elseif anchor:IsA("BasePart") then
+                    hasResolvedPivot = true
+                    return anchor.CFrame
+                elseif anchor:IsA("Attachment") then
+                    hasResolvedPivot = true
+                    return anchor.WorldCFrame
+                else
+                    error(string.format(
+                        "Anchor '%s' on %s is not a supported type (%s)",
+                        anchor:GetFullName(),
+                        root:GetFullName(),
+                        anchor.ClassName
+                    ))
+                end
+            end
+
+            if not hasResolvedPivot then
+                error(string.format(
+                    "Anchor '%s' not available on %s",
+                    anchorName,
+                    root:GetFullName()
+                ))
+            end
+
+            return root:GetPivot()
         end
     end
 

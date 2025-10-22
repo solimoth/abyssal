@@ -52,6 +52,26 @@ local function readNumberAttribute(instance: Instance, names: {string}): number?
     return nil
 end
 
+local streamingServiceRequest: ((StreamingService, Vector3) -> ())? = nil
+do
+    local ok, value = pcall(function()
+        return StreamingService and StreamingService.RequestStreamAroundAsync
+    end)
+    if ok and typeof(value) == "function" then
+        streamingServiceRequest = value
+    end
+end
+
+local workspaceStreamingRequest: ((Workspace, Vector3) -> ())? = nil
+do
+    local ok, value = pcall(function()
+        return (Workspace :: any).RequestStreamAroundAsync
+    end)
+    if ok and typeof(value) == "function" then
+        workspaceStreamingRequest = value
+    end
+end
+
 local function requestStreamingAround(position: Vector3)
     if not Workspace.StreamingEnabled then
         return
@@ -59,15 +79,15 @@ local function requestStreamingAround(position: Vector3)
 
     local attempts = {}
 
-    if StreamingService and typeof(StreamingService.RequestStreamAroundAsync) == "function" then
+    if streamingServiceRequest then
         table.insert(attempts, function()
-            StreamingService:RequestStreamAroundAsync(position)
+            streamingServiceRequest(StreamingService, position)
         end)
     end
 
-    if typeof(Workspace.RequestStreamAroundAsync) == "function" then
+    if workspaceStreamingRequest then
         table.insert(attempts, function()
-            Workspace:RequestStreamAroundAsync(position)
+            workspaceStreamingRequest(Workspace, position)
         end)
     end
 

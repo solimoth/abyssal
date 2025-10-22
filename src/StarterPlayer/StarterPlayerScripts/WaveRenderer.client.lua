@@ -113,27 +113,37 @@ local tileSizeZ = spacing * (gridHeight - 1)
 
 local waves = GerstnerWave.BuildWaveInfos(WaveConfig.Waves)
 
-local waveStates = table.create(#waves)
-for i = 1, #waves do
+local waveCount = #waves
+local waveDirAX = table.create(waveCount)
+local waveDirAY = table.create(waveCount)
+local waveAmplitude = table.create(waveCount)
+local waveKDirX = table.create(waveCount)
+local waveKDirY = table.create(waveCount)
+local waveKc = table.create(waveCount)
+local wavePhaseOffset = table.create(waveCount)
+local waveTimePhase = table.create(waveCount)
+local waveStepCos = table.create(waveCount)
+local waveStepSin = table.create(waveCount)
+
+for i = 1, waveCount do
     local info = waves[i]
-    local state = {}
     local k, c, A, dir, _steepness, phaseOffset = GerstnerWave.System:CalculateWave(info)
     local dirX = dir.X
     local dirY = dir.Y
+    local kDirX = k * dirX
+    local kDirY = k * dirY
 
-    state.dirAX = dirX * A
-    state.dirAY = dirY * A
-    state.A = A
-    state.kDirX = k * dirX
-    state.kDirY = k * dirY
-    state.kc = k * c
-    state.phaseOffset = phaseOffset
-    state.timePhase = 0
-
-    waveStates[i] = state
+    waveDirAX[i] = dirX * A
+    waveDirAY[i] = dirY * A
+    waveAmplitude[i] = A
+    waveKDirX[i] = kDirX
+    waveKDirY[i] = kDirY
+    waveKc[i] = k * c
+    wavePhaseOffset[i] = phaseOffset
+    waveTimePhase[i] = 0
+    waveStepCos[i] = cos(kDirX * spacing)
+    waveStepSin[i] = sin(kDirX * spacing)
 end
-
-local waveCount = #waveStates
 
 local lastClockAttribute = attributeNumber("WaveClock", Workspace:GetServerTimeNow())
 local clockSyncedAt = os.clock()
@@ -391,6 +401,43 @@ local function updateTile(tile, scaledChoppiness, globalIntensity, checkLandZone
     local tileSeaLevel = originPos.Y
     local shouldSample = waveCount > 0 and (scaledChoppiness ~= 0 or globalIntensity ~= 0)
     local doSmoothing = smoothingAlpha and smoothingAlpha > 0 and smoothingAlpha < 0.999
+    local dirAX = waveDirAX
+    local dirAY = waveDirAY
+    local amplitudes = waveAmplitude
+    local kDirX = waveKDirX
+    local kDirY = waveKDirY
+    local timePhases = waveTimePhase
+    local stepCos = waveStepCos
+    local stepSin = waveStepSin
+
+    -- Cache per-tile wave phase offsets so we avoid recomputing origin terms for
+    -- every vertex. This keeps the runtime cost proportional to the number of
+    -- vertices while still supporting arbitrarily many wave layers.
+    local phaseOrigins = tile.PhaseOrigins
+    if not phaseOrigins then
+        phaseOrigins = table.create(waveCount)
+        tile.PhaseOrigins = phaseOrigins
+    end
+
+    if shouldSample then
+        for i = 1, waveCount do
+            phaseOrigins[i] = (kDirX[i] * tileOriginX) + (kDirY[i] * tileOriginZ) + timePhases[i]
+        end
+    end
+
+    -- Row-level cosine/sine caches let us advance each wave along the row with
+    -- inexpensive multiplies instead of calling sin/cos for every vertex.
+    local rowCosBuffer = tile.RowCosBuffer
+    if not rowCosBuffer then
+        rowCosBuffer = table.create(waveCount)
+        tile.RowCosBuffer = rowCosBuffer
+    end
+
+    local rowSinBuffer = tile.RowSinBuffer
+    if not rowSinBuffer then
+        rowSinBuffer = table.create(waveCount)
+        tile.RowSinBuffer = rowSinBuffer
+    end
 
     -- Cache per-tile wave phase offsets so we avoid recomputing origin terms for
     -- every vertex. This keeps the runtime cost proportional to the number of
@@ -421,9 +468,13 @@ local function updateTile(tile, scaledChoppiness, globalIntensity, checkLandZone
         local worldZ = tileOriginZ + baseZ
 
         if shouldSample then
+            local firstBaseX = firstVertex and firstVertex.OffsetX or 0
+
             for i = 1, waveCount do
-                local state = waveStates[i]
-                rowPhaseBuffer[i] = phaseOrigins[i] + (state.kDirY * baseZ)
+                local phaseBase = phaseOrigins[i] + (kDirY[i] * baseZ)
+                local phase = phaseBase + (kDirX[i] * firstBaseX)
+                rowCosBuffer[i] = cos(phase)
+                rowSinBuffer[i] = sin(phase)
             end
         end
 
@@ -443,14 +494,17 @@ local function updateTile(tile, scaledChoppiness, globalIntensity, checkLandZone
                 local sumZ = 0
 
                 for i = 1, waveCount do
-                    local state = waveStates[i]
-                    local phase = rowPhaseBuffer[i] + (state.kDirX * baseX)
-                    local cosPhase = cos(phase)
-                    local sinPhase = sin(phase)
+                    local cosPhase = rowCosBuffer[i]
+                    local sinPhase = rowSinBuffer[i]
+                    local cosStep = stepCos[i]
+                    local sinStep = stepSin[i]
 
-                    sumX += state.dirAX * cosPhase
-                    sumY += state.A * sinPhase
-                    sumZ += state.dirAY * cosPhase
+                    sumX += dirAX[i] * cosPhase
+                    sumY += amplitudes[i] * sinPhase
+                    sumZ += dirAY[i] * cosPhase
+
+                    rowCosBuffer[i] = (cosPhase * cosStep) - (sinPhase * sinStep)
+                    rowSinBuffer[i] = (sinPhase * cosStep) + (cosPhase * sinStep)
                 end
 
                 local zoneMultiplier = 1
@@ -536,8 +590,7 @@ local function step(dt)
     local runTime = getWaveClock()
     if waveCount > 0 then
         for i = 1, waveCount do
-            local state = waveStates[i]
-            state.timePhase = -(state.kc * runTime) + state.phaseOffset
+            waveTimePhase[i] = -(waveKc[i] * runTime) + wavePhaseOffset[i]
         end
     end
     local scaledChoppiness = choppiness * intensity
@@ -624,7 +677,8 @@ local function cleanup()
         end
 
         tile.PhaseOrigins = nil
-        tile.RowPhaseBuffer = nil
+        tile.RowCosBuffer = nil
+        tile.RowSinBuffer = nil
     end
 
     table.clear(tiles)

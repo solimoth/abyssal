@@ -21,21 +21,23 @@ local v3 = Vector3
 export type WaveInfo = {
     Direction: Vector2,
     WaveLength: number,
-    Steepness: number,
+    Steepness: number?,
     Gravity: number,
     PhaseOffset: number,
+    Amplitude: number?,
     _k: number?,
     _c: number?,
     _A: number?,
 }
 
-function GerstnerWave.WaveInfo.new(direction: Vector2?, waveLength: number?, steepness: number?, gravity: number?, phaseOffset: number?): WaveInfo
+function GerstnerWave.WaveInfo.new(direction: Vector2?, waveLength: number?, steepness: number?, gravity: number?, phaseOffset: number?, amplitude: number?): WaveInfo
     return {
         Direction = direction or v2.new(1, 0),
         WaveLength = waveLength or 1,
-        Steepness = steepness or 0,
+        Steepness = steepness,
         Gravity = gravity or Workspace.Gravity,
         PhaseOffset = phaseOffset or 0,
+        Amplitude = amplitude,
     }
 end
 
@@ -46,17 +48,19 @@ local function sanitizeDirection(direction: Vector2?): Vector2
     return direction.Unit
 end
 
-local function computeSteepness(amplitude: number, waveLength: number, suppliedSteepness: number?): number
+local function computeSteepness(amplitude: number?, waveLength: number, suppliedSteepness: number?): number
     local k = twoPi / waveLength
     if suppliedSteepness then
         return math.clamp(suppliedSteepness, 0, 1.2)
     end
+    amplitude = amplitude or 0
     return math.clamp(amplitude * k, 0, 1.2)
 end
 
 function GerstnerWave.WaveInfo.fromConfig(entry: { [string]: any }): WaveInfo
     local waveLength = entry.Wavelength or entry.WaveLength or 64
-    local amplitude = entry.Amplitude or entry.Height or 1
+    local amplitude = entry.Amplitude or entry.Height or entry.A or 1
+    amplitude = math.max(0, amplitude)
     local speed = entry.Speed or entry.PhaseSpeed
     local gravity = entry.Gravity
     local steepness = computeSteepness(amplitude, waveLength, entry.Steepness)
@@ -68,7 +72,8 @@ function GerstnerWave.WaveInfo.fromConfig(entry: { [string]: any }): WaveInfo
         waveLength,
         steepness,
         gravity,
-        phaseOffset
+        phaseOffset,
+        amplitude
     )
 end
 
@@ -86,21 +91,36 @@ function GerstnerWave.System:CalculateWave(info: WaveInfo): (number, number, num
     local c = info._c
     local A = info._A
 
-    if not (k and c and A) then
+    if not (k and c) then
         local waveLength = info.WaveLength
         local gravity = info.Gravity
-        local steepness = info.Steepness
 
         k = twoPi / waveLength
         c = sqrt(abs(gravity) / k)
-        A = steepness / k
 
         info._k = k
         info._c = c
+    end
+
+    local steepness = info.Steepness
+
+    if A == nil then
+        if info.Amplitude ~= nil then
+            A = info.Amplitude
+        elseif steepness ~= nil then
+            A = steepness / k
+        else
+            A = 0
+        end
         info._A = A
     end
 
-    return k, c, A, info.Direction, info.Steepness, info.PhaseOffset or 0
+    if steepness == nil then
+        steepness = A * k
+        info.Steepness = steepness
+    end
+
+    return k, c, A, info.Direction, steepness, info.PhaseOffset or 0
 end
 
 function GerstnerWave.System:CalculateTransform(position: Vector2, runTime: number, calcNormals: boolean, k: number, c: number, A: number, dir: Vector2, steepness: number, phaseOffset: number)

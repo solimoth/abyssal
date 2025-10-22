@@ -439,6 +439,28 @@ local function updateTile(tile, scaledChoppiness, globalIntensity, checkLandZone
         tile.RowSinBuffer = rowSinBuffer
     end
 
+    -- Cache per-tile wave phase offsets so we avoid recomputing origin terms for
+    -- every vertex. This keeps the runtime cost proportional to the number of
+    -- vertices while still supporting arbitrarily many wave layers.
+    local phaseOrigins = tile.PhaseOrigins
+    if not phaseOrigins then
+        phaseOrigins = table.create(waveCount)
+        tile.PhaseOrigins = phaseOrigins
+    end
+
+    if shouldSample then
+        for i = 1, waveCount do
+            local state = waveStates[i]
+            phaseOrigins[i] = (state.kDirX * tileOriginX) + (state.kDirY * tileOriginZ) + state.timePhase
+        end
+    end
+
+    local rowPhaseBuffer = tile.RowPhaseBuffer
+    if not rowPhaseBuffer then
+        rowPhaseBuffer = table.create(waveCount)
+        tile.RowPhaseBuffer = rowPhaseBuffer
+    end
+
     for y = 1, gridHeight do
         local row = vertices[y]
         local firstVertex = row[1]

@@ -31,6 +31,49 @@ local function readNumberAttribute(instance: Instance, names: {string}): number?
     return nil
 end
 
+local function requestStreamingAround(position: Vector3)
+    if not Workspace.StreamingEnabled then
+        return
+    end
+
+    local ok, err = pcall(function()
+        Workspace:RequestStreamAroundAsync(position)
+    end)
+
+    if not ok then
+        warn(string.format("[LOD] Failed to request streaming around %.1f, %.1f, %.1f: %s", position.X, position.Y, position.Z, tostring(err)))
+    end
+end
+
+local function waitForModelStream(model: Model)
+    if not Workspace.StreamingEnabled then
+        return
+    end
+
+    local deadline = os.clock() + 4
+    local lastCount = #(model:GetDescendants())
+    local stableSteps = 0
+
+    while os.clock() < deadline do
+        task.wait()
+
+        local currentCount = #(model:GetDescendants())
+        if currentCount == 0 then
+            continue
+        end
+
+        if currentCount == lastCount then
+            stableSteps += 1
+            if stableSteps >= 3 then
+                break
+            end
+        else
+            lastCount = currentCount
+            stableSteps = 0
+        end
+    end
+end
+
 local function computeInstancePivot(instance: Instance): CFrame
     if instance:IsA("Model") then
         return instance:GetPivot()
@@ -130,6 +173,10 @@ local function buildLevelConfigurations(root: Model, basePivot: CFrame)
             continue
         end
 
+        if definition:IsA("Model") then
+            waitForModelStream(definition)
+        end
+
         local clone = definition:Clone()
         clone.Parent = nil
         clone.Name = definition.Name
@@ -217,6 +264,8 @@ local function register(root: Instance)
         warn(string.format("[LOD] Failed to get pivot for %s: %s", root:GetFullName(), tostring(basePivot)))
         return
     end
+
+    requestStreamingAround(basePivot.Position)
 
     local levels = buildLevelConfigurations(root, basePivot)
     if not levels then

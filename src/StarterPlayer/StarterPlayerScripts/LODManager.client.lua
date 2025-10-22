@@ -20,6 +20,26 @@ type RegisteredEntry = {
 }
 
 local registered: { [Instance]: RegisteredEntry } = {}
+type PendingEntry = {
+    Connections: {RBXScriptConnection},
+}
+
+local pending: { [Instance]: PendingEntry } = {}
+
+local function cleanupPending(root: Instance)
+    local entry = pending[root]
+    if not entry then
+        return
+    end
+
+    for _, conn in ipairs(entry.Connections) do
+        conn:Disconnect()
+    end
+
+    pending[root] = nil
+end
+
+local unregister
 
 local function readNumberAttribute(instance: Instance, names: {string}): number?
     for _, name in ipairs(names) do
@@ -234,43 +254,28 @@ local function buildLevelConfigurations(root: Model, basePivot: CFrame)
     return levels
 end
 
-local function unregister(root: Instance)
-    local entry = registered[root]
-    if not entry then
-        return
-    end
-
-    entry.Handle:Destroy()
-    for _, conn in ipairs(entry.Connections) do
-        conn:Disconnect()
-    end
-
-    registered[root] = nil
-end
-
-local function register(root: Instance)
+local function attemptRegistration(root: Model, pivotResolver: () -> CFrame): (boolean, string?, any?)
     if registered[root] then
-        return
+        return true
     end
 
-    if not root:IsA("Model") then
-        warn(string.format("[LOD] Only Models can be tagged as LODGroup (%s)", root:GetFullName()))
-        return
+    if not root.Parent then
+        return false, "Orphaned"
     end
 
-    local pivotResolver = createPivotResolver(root)
     local ok, basePivot = pcall(pivotResolver)
     if not ok then
-        warn(string.format("[LOD] Failed to get pivot for %s: %s", root:GetFullName(), tostring(basePivot)))
-        return
+        return false, "PivotUnavailable", basePivot
     end
 
     requestStreamingAround(basePivot.Position)
 
     local levels = buildLevelConfigurations(root, basePivot)
     if not levels then
-        return
+        return false, "LevelsUnavailable"
     end
+
+    cleanupPending(root)
 
     local hysteresis = readNumberAttribute(root, { "LODHysteresis" })
     local unloadDistance = readNumberAttribute(root, { "LODUnloadDistance" })
@@ -306,6 +311,85 @@ local function register(root: Instance)
         Handle = handle,
         Connections = connections,
     }
+
+    return true
+end
+
+function unregister(root: Instance)
+    cleanupPending(root)
+
+    local entry = registered[root]
+    if not entry then
+        return
+    end
+
+    entry.Handle:Destroy()
+    for _, conn in ipairs(entry.Connections) do
+        conn:Disconnect()
+    end
+
+    registered[root] = nil
+end
+
+local function register(root: Instance)
+    if registered[root] or pending[root] then
+        return
+    end
+
+    if not root:IsA("Model") then
+        warn(string.format("[LOD] Only Models can be tagged as LODGroup (%s)", root:GetFullName()))
+        return
+    end
+
+    local pivotResolver = createPivotResolver(root)
+
+    local success, reason, detail = attemptRegistration(root, pivotResolver)
+    if success then
+        return
+    end
+
+    local detailMessage = if reason == "PivotUnavailable" then tostring(detail) elseif reason == "LevelsUnavailable" then "LOD levels are not available yet" elseif reason == "Orphaned" then "instance is not parented" else "unknown reason"
+    warn(string.format("[LOD] Waiting for %s to stream in before registering LODGroup (%s)", root:GetFullName(), detailMessage))
+
+    local function retry()
+        if not pending[root] then
+            return
+        end
+
+        if registered[root] then
+            cleanupPending(root)
+            return
+        end
+
+        if not root.Parent then
+            return
+        end
+
+        local retrySuccess = attemptRegistration(root, pivotResolver)
+        if retrySuccess then
+            return
+        end
+    end
+
+    local connections = {
+        root.DescendantAdded:Connect(function()
+            task.defer(retry)
+        end),
+        root:GetPropertyChangedSignal("Parent"):Connect(function()
+            if root.Parent then
+                task.defer(retry)
+            end
+        end),
+        root.Destroying:Connect(function()
+            cleanupPending(root)
+        end),
+    }
+
+    pending[root] = {
+        Connections = connections,
+    }
+
+    task.defer(retry)
 end
 
 for _, instance in ipairs(CollectionService:GetTagged("LODGroup")) do

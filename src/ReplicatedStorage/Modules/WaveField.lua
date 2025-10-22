@@ -31,6 +31,8 @@ export type WaveField = {
     lastFocusZ: number,
     lastIntensity: number,
     lastClock: number,
+    attributeUpdateInterval: number,
+    attributeUpdateTimer: number,
     tileSizeX: number,
     tileSizeZ: number,
     spacing: number,
@@ -47,6 +49,10 @@ export type WaveField = {
 
 local WaveField = {}
 WaveField.__index = WaveField
+
+local MIN_ATTRIBUTE_UPDATE_INTERVAL = 1 / 60
+local DEFAULT_ATTRIBUTE_UPDATE_INTERVAL = 0.2
+local ATTRIBUTE_TOLERANCE = 1e-3
 
 local function resolveWorldPosition(instance: Instance): Vector3?
     if instance:IsA("BasePart") then
@@ -99,6 +105,11 @@ function WaveField.new(config: any): WaveField
     self.lastFocusZ = self.focusPosition.Z
     self.lastIntensity = self.intensity
     self.lastClock = self.time
+    self.attributeUpdateInterval = math.max(
+        MIN_ATTRIBUTE_UPDATE_INTERVAL,
+        config.AttributeUpdateInterval or DEFAULT_ATTRIBUTE_UPDATE_INTERVAL
+    )
+    self.attributeUpdateTimer = 0
 
     local folder = Instance.new("Folder")
     folder.Name = config.ContainerName or "DynamicWaveSurface"
@@ -194,6 +205,34 @@ function WaveField:_getFocusPosition(): Vector3
     return Vector3.new(bestPosition.X, self.seaLevel, bestPosition.Z)
 end
 
+function WaveField:_syncAttributes(force: boolean?)
+    if not self.folder then
+        return
+    end
+
+    local focusX = self.focusPosition.X
+    if force or math.abs(focusX - self.lastFocusX) > ATTRIBUTE_TOLERANCE then
+        self.lastFocusX = focusX
+        self.folder:SetAttribute("FocusX", self.lastFocusX)
+    end
+
+    local focusZ = self.focusPosition.Z
+    if force or math.abs(focusZ - self.lastFocusZ) > ATTRIBUTE_TOLERANCE then
+        self.lastFocusZ = focusZ
+        self.folder:SetAttribute("FocusZ", self.lastFocusZ)
+    end
+
+    if force or math.abs(self.time - self.lastClock) > ATTRIBUTE_TOLERANCE then
+        self.lastClock = self.time
+        self.folder:SetAttribute("WaveClock", self.lastClock)
+    end
+
+    if force or math.abs(self.intensity - self.lastIntensity) > ATTRIBUTE_TOLERANCE then
+        self.lastIntensity = self.intensity
+        self.folder:SetAttribute("WaveIntensity", self.lastIntensity)
+    end
+end
+
 function WaveField:Step(dt: number)
     self.time += dt * self.timeScale
 
@@ -213,26 +252,10 @@ function WaveField:Step(dt: number)
         end
     end
 
-    if self.folder then
-        if math.abs(self.focusPosition.X - self.lastFocusX) > 1e-3 then
-            self.lastFocusX = self.focusPosition.X
-            self.folder:SetAttribute("FocusX", self.lastFocusX)
-        end
-
-        if math.abs(self.focusPosition.Z - self.lastFocusZ) > 1e-3 then
-            self.lastFocusZ = self.focusPosition.Z
-            self.folder:SetAttribute("FocusZ", self.lastFocusZ)
-        end
-
-        if math.abs(self.time - self.lastClock) > 1e-3 then
-            self.lastClock = self.time
-            self.folder:SetAttribute("WaveClock", self.lastClock)
-        end
-
-        if math.abs(self.intensity - self.lastIntensity) > 1e-3 then
-            self.lastIntensity = self.intensity
-            self.folder:SetAttribute("WaveIntensity", self.lastIntensity)
-        end
+    self.attributeUpdateTimer += dt
+    while self.attributeUpdateTimer >= self.attributeUpdateInterval do
+        self.attributeUpdateTimer -= self.attributeUpdateInterval
+        self:_syncAttributes()
     end
 end
 

@@ -12,6 +12,7 @@ local Workspace = game:GetService("Workspace")
 
 local WaveConfig = require(ReplicatedStorage.Modules.WaveConfig)
 local GerstnerWave = require(ReplicatedStorage.Modules.GerstnerWave)
+local WaterColorController = require(ReplicatedStorage.Modules.WaterColorController)
 
 local ContentLib: any = (getfenv() :: any).Content
 
@@ -87,7 +88,8 @@ local intensity = math.max(0, attributeNumber("WaveIntensity", WaveConfig.Defaul
 local targetIntensity = intensity
 local intensityResponsiveness = math.max(0, attributeNumber("IntensityResponsiveness", WaveConfig.IntensityResponsiveness or 2.5))
 local material = attributeMaterial("MaterialName", WaveConfig.Material or Enum.Material.Water)
-local color = attributeColor("Color", WaveConfig.Color or Color3.fromRGB(30, 120, 150))
+local baseColor = attributeColor("Color", WaveConfig.Color or Color3.fromRGB(30, 120, 150))
+local color = WaterColorController.GetOverrideColor() or baseColor
 local transparency = attributeNumber("Transparency", WaveConfig.Transparency or 0.2)
 local reflectance = attributeNumber("Reflectance", WaveConfig.Reflectance or 0)
 local landZoneName = attributeString("LandZoneName", WaveConfig.LandZoneName or "LandZone")
@@ -212,6 +214,37 @@ local function createTile(gridOffset: Vector2)
 end
 
 local tiles = {}
+
+local function applyColorToTiles(targetColor: Color3)
+    color = targetColor
+
+    for _, tile in ipairs(tiles) do
+        local part = tile.Part
+        if part then
+            part.Color = targetColor
+        end
+    end
+end
+
+local function refreshBaseColor()
+    local updated = attributeColor("Color", baseColor)
+    if updated ~= baseColor then
+        baseColor = updated
+        if not WaterColorController.GetOverrideColor() then
+            applyColorToTiles(baseColor)
+        end
+    end
+end
+
+local overrideConnection = WaterColorController.OnOverrideChanged(function(overrideColor)
+    if overrideColor then
+        applyColorToTiles(overrideColor)
+    else
+        applyColorToTiles(baseColor)
+    end
+end)
+
+local colorAttributeConnection = container:GetAttributeChangedSignal("Color"):Connect(refreshBaseColor)
 for z = -tileRadius, tileRadius do
     for x = -tileRadius, tileRadius do
         tiles[#tiles + 1] = createTile(Vector2.new(x, z))
@@ -221,6 +254,8 @@ end
 if #tiles == 0 then
     tiles[1] = createTile(Vector2.zero)
 end
+
+applyColorToTiles(color)
 
 local reapplyClock = 0
 
@@ -397,6 +432,16 @@ local function cleanup()
     if heartbeatConn then
         heartbeatConn:Disconnect()
         heartbeatConn = nil
+    end
+
+    if overrideConnection then
+        overrideConnection:Disconnect()
+        overrideConnection = nil
+    end
+
+    if colorAttributeConnection then
+        colorAttributeConnection:Disconnect()
+        colorAttributeConnection = nil
     end
 
     if descendantAddedConn then

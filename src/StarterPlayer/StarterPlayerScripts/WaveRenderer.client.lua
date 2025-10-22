@@ -94,6 +94,9 @@ local landZoneName = attributeString("LandZoneName", WaveConfig.LandZoneName or 
 local landZoneAttenuation = math.clamp(attributeNumber("LandZoneAttenuation", WaveConfig.LandZoneAttenuation or 1), 0, 1)
 local landZoneFadeDistance = math.max(0, attributeNumber("LandZoneFadeDistance", WaveConfig.LandZoneFadeDistance or 0))
 
+local tiles = {}
+local colorChangedConn: RBXScriptConnection?
+
 local tileSizeX = spacing * (gridWidth - 1)
 local tileSizeZ = spacing * (gridHeight - 1)
 
@@ -143,6 +146,18 @@ local function applyEditableToPart(editable: EditableMesh, targetPart: MeshPart)
     targetPart.Color = color
     targetPart.Transparency = transparency
     targetPart.Reflectance = reflectance
+end
+
+local function refreshTileAppearance()
+    for _, tile in ipairs(tiles) do
+        local part = tile.Part
+        if part then
+            part.Material = material
+            part.Color = color
+            part.Transparency = transparency
+            part.Reflectance = reflectance
+        end
+    end
 end
 
 local function buildEditableGrid()
@@ -211,7 +226,6 @@ local function createTile(gridOffset: Vector2)
     }
 end
 
-local tiles = {}
 for z = -tileRadius, tileRadius do
     for x = -tileRadius, tileRadius do
         tiles[#tiles + 1] = createTile(Vector2.new(x, z))
@@ -221,6 +235,17 @@ end
 if #tiles == 0 then
     tiles[1] = createTile(Vector2.zero)
 end
+
+local function updateColorFromAttribute()
+    local newColor = attributeColor("Color", color)
+    if newColor ~= color then
+        color = newColor
+        refreshTileAppearance()
+    end
+end
+
+colorChangedConn = container:GetAttributeChangedSignal("Color"):Connect(updateColorFromAttribute)
+updateColorFromAttribute()
 
 local reapplyClock = 0
 
@@ -397,6 +422,11 @@ local function cleanup()
     if heartbeatConn then
         heartbeatConn:Disconnect()
         heartbeatConn = nil
+    end
+
+    if colorChangedConn then
+        colorChangedConn:Disconnect()
+        colorChangedConn = nil
     end
 
     if descendantAddedConn then

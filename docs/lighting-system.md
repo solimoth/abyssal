@@ -27,7 +27,7 @@ This lighting pipeline allows you to define lighting presets in **ReplicatedStor
    - `LightingConfiguration` (string): Use this if you want the part to activate a different preset name than the part's own name.
    - `LightingPriority` (number): Determines which zone wins when players overlap multiple zones. Higher values take priority. Defaults to `0`.
    - `LightingTransitionTime` (number): Overrides the tween duration in seconds when entering/exiting the zone.
-   - `TransitionDistance` (number): Starts blending into the zone when players are within this many studs from the part's surface (0 keeps the default behaviour of switching only when inside). Larger values begin the tween earlier and stretch the build-up so lighting ramps in gently as players approach the part.
+   - `TransitionDistance` (number): Starts blending into the zone when players are within this many studs from the part's surface (0 keeps the default behaviour of switching only when inside). Larger values begin the tween earlier and stretch the build-up so lighting ramps in gently as players approach the part, pausing when players stop moving and easing back out if they retreat. Crossing fully into the part applies 100% of the preset across the entire volume.
    - `LightingEasingStyle` / `LightingEasingDirection` (string or EnumItem): Controls the easing style/direction for the tween. Accepts names from `Enum.EasingStyle`/`Enum.EasingDirection`.
    - `LightingSourceId` (string): Optional unique identifier for the zone. This is useful if you want to reference the same zone from other scripts; if omitted, the server generates a unique ID for that specific part so duplicated names don't conflict.
 

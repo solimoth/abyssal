@@ -113,7 +113,82 @@ local function mergeOptions(options)
         transitionTime = options.transitionTime or DEFAULT_TRANSITION.transitionTime,
         easingStyle = options.easingStyle or DEFAULT_TRANSITION.easingStyle,
         easingDirection = options.easingDirection or DEFAULT_TRANSITION.easingDirection,
+        transitionProgress = math.clamp(options.transitionProgress or 1, 0, 1),
     }
+end
+
+local function clamp01(value: number): number
+    return math.clamp(value, 0, 1)
+end
+
+local function blendValue(baseValue, targetValue, alpha)
+    alpha = clamp01(alpha)
+
+    if alpha >= 1 then
+        return targetValue
+    end
+
+    if baseValue == nil then
+        return alpha > 0 and targetValue or baseValue
+    end
+
+    local valueType = typeof(targetValue)
+
+    if valueType == "number" then
+        if typeof(baseValue) ~= "number" then
+            return targetValue
+        end
+        return baseValue + (targetValue - baseValue) * alpha
+    elseif valueType == "Color3" then
+        if typeof(baseValue) ~= "Color3" then
+            return targetValue
+        end
+        return baseValue:Lerp(targetValue, alpha)
+    end
+
+    return alpha > 0 and targetValue or baseValue
+end
+
+local function getDefaultConfigurationFolder(): Instance?
+    return ConfigurationsFolder:FindFirstChild(defaultConfigurationName)
+end
+
+local function getDefaultLightingAttribute(propertyName: string)
+    local defaultConfiguration = getDefaultConfigurationFolder()
+    if defaultConfiguration then
+        local value = defaultConfiguration:GetAttribute(propertyName)
+        if value ~= nil then
+            return value
+        end
+    end
+
+    return nil
+end
+
+local function getLightingBaseValue(propertyName: string, targetValue)
+    local defaultValue = getDefaultLightingAttribute(propertyName)
+    if defaultValue ~= nil and typeof(defaultValue) == typeof(targetValue) then
+        return defaultValue
+    end
+
+    local success, currentValue = pcall(function()
+        return Lighting[propertyName]
+    end)
+
+    if success and typeof(currentValue) == typeof(targetValue) then
+        return currentValue
+    end
+
+    return defaultValue
+end
+
+local function getDefaultEffectTemplate(effectName: string): Instance?
+    local defaultConfiguration = getDefaultConfigurationFolder()
+    if not defaultConfiguration then
+        return nil
+    end
+
+    return defaultConfiguration:FindFirstChild(effectName)
 end
 
 local function getBaseWaterColor()
@@ -156,13 +231,14 @@ local function buildTweenInfo(options)
     return TweenInfo.new(transitionTime, options.easingStyle, options.easingDirection)
 end
 
-local function collectLightingGoals(configuration)
+local function collectLightingGoals(configuration, progress)
     local goals = {}
 
     for _, propertyName in ipairs(LIGHTING_PROPERTIES) do
         local attributeValue = configuration:GetAttribute(propertyName)
         if attributeValue ~= nil then
-            goals[propertyName] = attributeValue
+            local baseValue = getLightingBaseValue(propertyName, attributeValue)
+            goals[propertyName] = blendValue(baseValue, attributeValue, progress)
         end
     end
 
@@ -187,29 +263,61 @@ local function ensureEffect(effectTemplate)
     return existing
 end
 
-local function collectEffectGoals(effectTemplate)
+local function collectEffectGoals(effectTemplate, progress)
     local propertyList = EFFECT_PROPERTY_MAP[effectTemplate.ClassName]
     if not propertyList then
         return nil
     end
 
     local goals = {}
+    local hasGoals = false
+    local defaultTemplate = getDefaultEffectTemplate(effectTemplate.Name)
     for _, propertyName in ipairs(propertyList) do
         local success, value = pcall(function()
             return effectTemplate[propertyName]
         end)
 
         if success and value ~= nil then
-            goals[propertyName] = value
+            local baseValue
+
+            if defaultTemplate then
+                local ok, defaultValue = pcall(function()
+                    return defaultTemplate[propertyName]
+                end)
+
+                if ok then
+                    baseValue = defaultValue
+                end
+            end
+
+            if baseValue == nil then
+                local existing = Lighting:FindFirstChild(effectTemplate.Name)
+                if existing then
+                    local ok, existingValue = pcall(function()
+                        return existing[propertyName]
+                    end)
+
+                    if ok then
+                        baseValue = existingValue
+                    end
+                end
+            end
+
+            goals[propertyName] = blendValue(baseValue, value, progress)
+            hasGoals = true
         end
+    end
+
+    if not hasGoals then
+        return nil
     end
 
     return goals
 end
 
-local function updateEffect(effectTemplate, tweenInfo)
+local function updateEffect(effectTemplate, tweenInfo, progress)
     local target = ensureEffect(effectTemplate)
-    local goals = collectEffectGoals(effectTemplate)
+    local goals = collectEffectGoals(effectTemplate, progress)
 
     if goals then
         tweenProperties(target, goals, tweenInfo)
@@ -271,6 +379,7 @@ end
 
 local function applyConfiguration(configurationName, options)
     options = mergeOptions(options)
+    local progress = options.transitionProgress
 
     local configuration = ConfigurationsFolder:FindFirstChild(configurationName)
     if not configuration then
@@ -281,7 +390,7 @@ local function applyConfiguration(configurationName, options)
     stopActiveTweens()
 
     local tweenInfo = buildTweenInfo(options)
-    local lightingGoals = collectLightingGoals(configuration)
+    local lightingGoals = collectLightingGoals(configuration, progress)
     tweenProperties(Lighting, lightingGoals, tweenInfo)
 
     local fallbackWaterColor = getBaseWaterColor()
@@ -290,23 +399,24 @@ local function applyConfiguration(configurationName, options)
         targetWaterColor = fallbackWaterColor
     end
 
-    pendingWaveColor = targetWaterColor
+    local blendedWaterColor = blendValue(fallbackWaterColor, targetWaterColor, progress)
+    pendingWaveColor = blendedWaterColor
     local waveContainerInstance = getWaveContainer()
-    if waveContainerInstance and targetWaterColor then
+    if waveContainerInstance and blendedWaterColor then
         local currentColor = waveContainerInstance:GetAttribute("Color")
-        if typeof(currentColor) ~= "Color3" or currentColor ~= targetWaterColor then
-            waveContainerInstance:SetAttribute("Color", targetWaterColor)
+        if typeof(currentColor) ~= "Color3" or currentColor ~= blendedWaterColor then
+            waveContainerInstance:SetAttribute("Color", blendedWaterColor)
         end
     end
 
-    if targetWaterColor and Terrain.WaterColor ~= targetWaterColor then
-        tweenProperties(Terrain, { WaterColor = targetWaterColor }, tweenInfo)
+    if blendedWaterColor and Terrain.WaterColor ~= blendedWaterColor then
+        tweenProperties(Terrain, { WaterColor = blendedWaterColor }, tweenInfo)
     end
 
     local processedEffects = {}
     for _, child in ipairs(configuration:GetChildren()) do
         if child:IsA("PostEffect") or child:IsA("Atmosphere") or child:IsA("Sky") then
-            updateEffect(child, tweenInfo)
+            updateEffect(child, tweenInfo, progress)
             processedEffects[child.Name] = true
         end
     end

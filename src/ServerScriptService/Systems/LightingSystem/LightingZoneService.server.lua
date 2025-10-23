@@ -108,10 +108,9 @@ local function configurationExists(name)
     return configuration ~= nil
 end
 
-local DEFAULT_TRANSITION_TIME = 1.5
-local TRANSITION_BUILD_SPEED = 12 -- studs per second of build-up
+local PROGRESS_EPSILON = 0.01
 
-local function applyZone(player, zoneState, distance)
+local function applyZone(player, zoneState, progress)
     if not configurationExists(zoneState.configuration) then
         if not zoneState.warnedMissing then
             warn(("[LightingZoneService] Zone '%s' references unknown lighting configuration '%s'"):format(
@@ -125,22 +124,18 @@ local function applyZone(player, zoneState, distance)
 
     zoneState.warnedMissing = nil
 
-    local baseTransitionTime = zoneState.transitionTime or DEFAULT_TRANSITION_TIME
-    local effectiveTransitionTime = baseTransitionTime
-
-    if zoneState.transitionDistance > 0 then
-        local remaining = math.max(distance or 0, 0)
-        if remaining > 0 then
-            effectiveTransitionTime = baseTransitionTime + (remaining / TRANSITION_BUILD_SPEED)
-        end
-    end
-
-    LightingService:SetSource(player, zoneState.sourceId, zoneState.configuration, {
-        transitionTime = effectiveTransitionTime,
+    local options = {
         easingStyle = zoneState.easingStyle,
         easingDirection = zoneState.easingDirection,
         priority = zoneState.priority,
-    })
+        transitionProgress = progress,
+    }
+
+    if zoneState.transitionTime ~= nil then
+        options.transitionTime = zoneState.transitionTime
+    end
+
+    LightingService:SetSource(player, zoneState.sourceId, zoneState.configuration, options)
 end
 
 local function clearZone(player, zoneState)
@@ -151,6 +146,7 @@ local function handlePlayerRemoving(player)
     for _, zoneState in pairs(zones) do
         if zoneState.touchingPlayers[player] then
             zoneState.touchingPlayers[player] = nil
+            zoneState.playerStates[player] = nil
             clearZone(player, zoneState)
         end
     end
@@ -217,15 +213,48 @@ local function updateZoneOccupancy(zoneState, playerPositions)
     end
 
     for player, distance in pairs(currentPlayers) do
-        if not zoneState.touchingPlayers[player] then
-            zoneState.touchingPlayers[player] = true
-            applyZone(player, zoneState, distance)
+        local inside = distance == 0
+        local targetProgress
+
+        if inside then
+            targetProgress = 1
+        elseif zoneState.transitionDistance > 0 then
+            targetProgress = math.clamp(1 - (distance / zoneState.transitionDistance), 0, 1)
+        else
+            targetProgress = 0
+        end
+
+        if targetProgress > 0 then
+            local playerState = zoneState.playerStates[player]
+            if not playerState then
+                playerState = {
+                    progress = -math.huge,
+                }
+                zoneState.playerStates[player] = playerState
+            end
+
+            if math.abs(targetProgress - playerState.progress) >= PROGRESS_EPSILON then
+                applyZone(player, zoneState, targetProgress)
+                playerState.progress = targetProgress
+            elseif inside and playerState.progress ~= 1 then
+                applyZone(player, zoneState, 1)
+                playerState.progress = 1
+            end
+
+            if not zoneState.touchingPlayers[player] then
+                zoneState.touchingPlayers[player] = true
+            end
+        elseif zoneState.touchingPlayers[player] then
+            zoneState.touchingPlayers[player] = nil
+            zoneState.playerStates[player] = nil
+            clearZone(player, zoneState)
         end
     end
 
     for player in pairs(zoneState.touchingPlayers) do
         if not currentPlayers[player] then
             zoneState.touchingPlayers[player] = nil
+            zoneState.playerStates[player] = nil
             clearZone(player, zoneState)
         end
     end
@@ -275,7 +304,10 @@ local function cleanupZone(zoneState)
     for player in pairs(zoneState.touchingPlayers) do
         clearZone(player, zoneState)
         zoneState.touchingPlayers[player] = nil
+        zoneState.playerStates[player] = nil
     end
+
+    clearTable(zoneState.playerStates)
 end
 
 local function registerZone(part)
@@ -318,6 +350,7 @@ local function registerZone(part)
         transitionDistance = transitionDistance,
         touchingPlayers = setmetatable({}, { __mode = "k" }),
         nearbyPlayers = {},
+        playerStates = setmetatable({}, { __mode = "k" }),
         connections = {},
         warnedMissing = nil,
         debugName = part:GetFullName(),

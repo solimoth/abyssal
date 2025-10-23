@@ -111,8 +111,7 @@ function swimModule:Start()
             local surfacedNow = surfaceState.Surfaced and rootSample and rootSample.DynamicHeight
             if surfacedNow then
                 if not lastSurfaced or surfaceOffset == nil then
-                    local referenceHeight = rootSample.CalmHeight or rootSample.DynamicHeight
-                    surfaceOffset = rootPart.Position.Y - referenceHeight
+                    surfaceOffset = rootPart.Position.Y - rootSample.DynamicHeight
                 end
 
                 local targetY = rootSample.DynamicHeight + surfaceOffset

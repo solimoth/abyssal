@@ -32,6 +32,7 @@ local attachments = {}
 local forces = {}
 local surfaceState
 local surfaceOffset
+local depthOffset
 local lastSurfaced = false
 
 local SURFACE_RESPONSIVENESS = 6
@@ -99,6 +100,7 @@ function swimModule:Start()
     self.heartbeatConnection = RunService.Heartbeat:Connect(function()
         if humanoid.MoveDirection.Magnitude > 0 then
             surfaceOffset = nil
+            depthOffset = nil
             rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             return
         end
@@ -116,19 +118,26 @@ function swimModule:Start()
                 local targetY = rootSample.DynamicHeight + surfaceOffset
                 desiredVelocityY = math.clamp((targetY - rootPart.Position.Y) * SURFACE_RESPONSIVENESS, -20, 20)
                 lastSurfaced = true
+                depthOffset = nil
             else
+                local wasSurfaced = lastSurfaced
                 surfaceOffset = nil
                 lastSurfaced = false
 
                 local lowerSample = surfaceState.LowerSample
                 if lowerSample and lowerSample.EffectiveHeight then
-                    local targetY = lowerSample.EffectiveHeight
+                    if wasSurfaced or depthOffset == nil then
+                        depthOffset = rootPart.Position.Y - lowerSample.EffectiveHeight
+                    end
+
+                    local targetY = lowerSample.EffectiveHeight + depthOffset
                     desiredVelocityY = math.clamp((targetY - rootPart.Position.Y) * SURFACE_RESPONSIVENESS, -20, 20)
                 end
             end
         else
             surfaceOffset = nil
             lastSurfaced = false
+            depthOffset = nil
         end
 
         rootPart.AssemblyLinearVelocity = Vector3.new(0, desiredVelocityY, 0)
@@ -145,6 +154,7 @@ function swimModule:Stop()
     antiGrav(false)
     surfaceState = nil
     surfaceOffset = nil
+    depthOffset = nil
     lastSurfaced = false
 
     if self.heartbeatConnection then
@@ -176,6 +186,7 @@ function swimModule:UpdateSurfaceState(state)
     if not self.Enabled then
         surfaceState = nil
         surfaceOffset = nil
+        depthOffset = nil
         lastSurfaced = false
         return
     end
@@ -183,6 +194,7 @@ function swimModule:UpdateSurfaceState(state)
     surfaceState = state
     if not state or not state.Surfaced then
         surfaceOffset = nil
+        depthOffset = nil
         lastSurfaced = false
     end
 end

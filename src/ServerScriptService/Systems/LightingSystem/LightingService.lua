@@ -14,6 +14,7 @@ local DEFAULT_OPTIONS = {
     easingStyle = Enum.EasingStyle.Sine,
     easingDirection = Enum.EasingDirection.Out,
     priority = 0,
+    transitionProgress = 1,
 }
 
 local playerStates = {}
@@ -45,6 +46,10 @@ local function mergeOptions(base, overrides)
         if overrides.priority ~= nil then
             merged.priority = overrides.priority
         end
+
+        if overrides.transitionProgress ~= nil then
+            merged.transitionProgress = math.clamp(overrides.transitionProgress, 0, 1)
+        end
     end
 
     return merged
@@ -59,6 +64,7 @@ local function normalizeOptions(options)
         easingStyle = options.easingStyle or defaults.easingStyle,
         easingDirection = options.easingDirection or defaults.easingDirection,
         priority = options.priority or defaults.priority,
+        transitionProgress = math.clamp(options.transitionProgress or defaults.transitionProgress, 0, 1),
     }
 end
 
@@ -70,6 +76,7 @@ local function compareOptionTables(a, b)
     return a.transitionTime == b.transitionTime
         and a.easingStyle == b.easingStyle
         and a.easingDirection == b.easingDirection
+        and a.transitionProgress == b.transitionProgress
 end
 
 local function getState(player)

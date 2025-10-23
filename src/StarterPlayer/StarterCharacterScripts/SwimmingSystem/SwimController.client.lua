@@ -39,6 +39,8 @@ local CONFIG = {
     EntryDepth = 0.1,
     HeadDepth = 0.05,
     MobileExitCooldown = 0.25,
+    AscendDepthForFullForce = 6,
+    AscendForceMinFactor = 0.2,
 }
 
 local CALM_BLEND_DEPTH = 4
@@ -190,8 +192,21 @@ local function onHeartbeat()
     local force = rootPart:FindFirstChildOfClass("VectorForce")
     if force then
         local defaultForce = rootPart.AssemblyMass * Workspace.Gravity
-        if isInputDown(jumpKeys, pressed) then
-            force.Force = Vector3.new(0, defaultForce * CONFIG.AscendForceScale, 0)
+        local ascendPressed = isInputDown(jumpKeys, pressed)
+        local ascendForce: number? = nil
+
+        if ascendPressed and isHeadIn and lowerSample and lowerSample.Depth then
+            local depthFraction = math.clamp(lowerSample.Depth / CONFIG.AscendDepthForFullForce, 0, 1)
+            depthFraction = math.max(depthFraction, CONFIG.AscendForceMinFactor)
+            depthFraction = math.clamp(depthFraction, 0, 1)
+            local boost = (CONFIG.AscendForceScale - 1) * depthFraction
+            if boost > 0 then
+                ascendForce = defaultForce * (1 + boost)
+            end
+        end
+
+        if ascendForce then
+            force.Force = Vector3.new(0, ascendForce, 0)
         else
             if humanoid.MoveDirection.Magnitude == 0 then
                 if isHeadIn then

@@ -6,19 +6,21 @@
       "$className": "ReplicatedStorage",
       "Modules": { "$path": "src/ReplicatedStorage/Modules" },
       "Remotes": { "$path": "src/ReplicatedStorage/Remotes" },
-      "LightingSystem": { "$path": "src/ReplicatedStorage/LightingSystem" },
-      "SwimmingSystem": { "$path": "src/ReplicatedStorage/SwimmingSystem" }
+      "LightingSystem": { "$path": "src/ReplicatedStorage/LightingSystem" }
     },
     "ServerScriptService": {
       "$className": "ServerScriptService",
       "Config": { "$path": "src/ServerScriptService/Config" },
       "Systems": { "$path": "src/ServerScriptService/Systems" },
       "Security": { "$path": "src/ServerScriptService/Security" },
-      "SwimmingSystem": { "$path": "src/ServerScriptService/SwimmingSystem" },
       "WaterFloatService": { "$path": "src/ServerScriptService/WaterFloatService.server.lua" }
     },
     "StarterPlayer": {
       "$className": "StarterPlayer",
+      "StarterCharacterScripts": {
+        "$className": "StarterCharacterScripts",
+        "$path": "src/StarterPlayer/StarterCharacterScripts"
+      },
       "StarterPlayerScripts": {
         "$className": "StarterPlayerScripts",
         "$path": "src/StarterPlayer/StarterPlayerScripts"

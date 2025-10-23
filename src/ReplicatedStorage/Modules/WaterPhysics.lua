@@ -39,6 +39,11 @@ local BOAT_LEAN_CALM_INTENSITY_THRESHOLD = 0.9
 local BOAT_LEAN_CALM_INTENSITY_EXPONENT = 2.5
 local BOAT_LEAN_CALM_RESIDUAL_SCALE = 0.035
 local BOAT_LEAN_CALM_BASELINE_SCALE = 0.10
+local SUBMARINE_MAX_ROLL = math.rad(8)
+local SUBMARINE_MAX_PITCH = math.rad(6)
+local SUBMARINE_SURFACE_LEAN_SCALE = 0.45
+local SUBMARINE_DEEP_LEAN_SCALE = 0.18
+local SUBMARINE_DEPTH_SUPPRESSION_DEPTH = 12
 
 local waterRaycastParams = RaycastParams.new()
 waterRaycastParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -272,16 +277,19 @@ function WaterPhysics.ComputeBuoyancyForce(part: BasePart, surfaceY: number)
 end
 
 function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: string, deltaTime: number, waterSurfaceOffset: number?)
-	local position = currentCFrame.Position
-	local surfaceSample = WaveRegistry.SampleSurface(position)
-	local surfaceY
-	local surfaceNormal = Vector3.yAxis
-	local leanStrength = 0
-	local intensity = 0
-	local intensityScale = 0
-	local leanIntensityScale = 0
-	local targetPitch = 0
-	local targetRoll = 0
+        local position = currentCFrame.Position
+        local surfaceSample = WaveRegistry.SampleSurface(position)
+        local surfaceY
+        local surfaceNormal = Vector3.yAxis
+        local baseLeanStrength = 0
+        local intensity = 0
+        local intensityScale = 0
+        local leanIntensityScale = 0
+        local targetPitch = 0
+        local targetRoll = 0
+        local rawPitch = 0
+        local rawRoll = 0
+        local isSubmarine = boatType == "Submarine"
 
 	if surfaceSample then
 		surfaceY = surfaceSample.Height
@@ -327,28 +335,47 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
 			local basePitch = applyAngularDeadzone(math.atan(math.clamp(slopeForward, -4, 4)))
 			local baseRoll = applyAngularDeadzone(math.atan(math.clamp(slopeRight, -4, 4)))
 
-			local rawPitch = -basePitch * BOAT_PITCH_GAIN
-			local rawRoll = -baseRoll * BOAT_ROLL_GAIN
+                        rawPitch = -basePitch * BOAT_PITCH_GAIN
+                        rawRoll = -baseRoll * BOAT_ROLL_GAIN
 
-			local slopeScale = 1
-			if BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH > 0 then
-				local slopeMagnitude = math.max(math.abs(basePitch), math.abs(baseRoll))
-				slopeScale = math.clamp(slopeMagnitude / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH, 0, 1)
-			end
+                        local slopeScale = 1
+                        if BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH > 0 then
+                                local slopeMagnitude = math.max(math.abs(basePitch), math.abs(baseRoll))
+                                slopeScale = math.clamp(slopeMagnitude / BOAT_LEAN_SLOPE_FOR_FULL_STRENGTH, 0, 1)
+                        end
 
-			local intensitySlopeScale = leanIntensityScale * slopeScale
-			leanStrength = math.clamp(intensitySlopeScale, 0, 1)
+                        local intensitySlopeScale = leanIntensityScale * slopeScale
+                        baseLeanStrength = math.clamp(intensitySlopeScale, 0, 1)
+                end
+        else
+                surfaceY = WaterPhysics.TryGetWaterSurface(position)
+        end
 
-			targetPitch = math.clamp(rawPitch * leanStrength, -BOAT_MAX_PITCH, BOAT_MAX_PITCH)
-			targetRoll = math.clamp(rawRoll * leanStrength, -BOAT_MAX_ROLL, BOAT_MAX_ROLL)
-		end
-	else
-		surfaceY = WaterPhysics.TryGetWaterSurface(position)
-	end
+        local effectiveLeanStrength = baseLeanStrength
+        local maxPitch = BOAT_MAX_PITCH
+        local maxRoll = BOAT_MAX_ROLL
 
-	if not surfaceY then
-		return currentCFrame, false
-	end
+        if isSubmarine then
+                maxPitch = SUBMARINE_MAX_PITCH
+                maxRoll = SUBMARINE_MAX_ROLL
+
+                local depth = 0
+                if surfaceY then
+                        depth = math.max(0, surfaceY - position.Y)
+                end
+
+                local depthRatio = math.clamp(depth / SUBMARINE_DEPTH_SUPPRESSION_DEPTH, 0, 1)
+                local submarineLeanScale = SUBMARINE_SURFACE_LEAN_SCALE
+                        + (SUBMARINE_DEEP_LEAN_SCALE - SUBMARINE_SURFACE_LEAN_SCALE) * depthRatio
+                effectiveLeanStrength = baseLeanStrength * submarineLeanScale
+        end
+
+        targetPitch = math.clamp(rawPitch * effectiveLeanStrength, -maxPitch, maxPitch)
+        targetRoll = math.clamp(rawRoll * effectiveLeanStrength, -maxRoll, maxRoll)
+
+        if not surfaceY then
+                return currentCFrame, false
+        end
 
         local targetOffset
         if waterSurfaceOffset ~= nil then
@@ -370,16 +397,16 @@ function WaterPhysics.ApplyFloatingPhysics(currentCFrame: CFrame, boatType: stri
 	local _, currentYaw, _ = currentCFrame:ToOrientation()
 	local basePosition = Vector3.new(position.X, newY, position.Z)
 
-	if leanStrength <= BOAT_MIN_LEAN_THRESHOLD then
-		local newCFrame = CFrame.new(basePosition) * CFrame.Angles(0, currentYaw, 0)
-		return newCFrame, true
-	end
+        if effectiveLeanStrength <= BOAT_MIN_LEAN_THRESHOLD then
+                local newCFrame = CFrame.new(basePosition) * CFrame.Angles(0, currentYaw, 0)
+                return newCFrame, true
+        end
 
-	local targetOrientation = CFrame.new(basePosition)
-		* CFrame.Angles(0, currentYaw, 0)
-		* CFrame.Angles(targetPitch, 0, 0)
-		* CFrame.Angles(0, 0, targetRoll)
-	local responsivenessDriver = math.max(leanStrength, leanIntensityScale, intensityScale * 0.1, 0.05)
+        local targetOrientation = CFrame.new(basePosition)
+                * CFrame.Angles(0, currentYaw, 0)
+                * CFrame.Angles(targetPitch, 0, 0)
+                * CFrame.Angles(0, 0, targetRoll)
+        local responsivenessDriver = math.max(effectiveLeanStrength, leanIntensityScale, intensityScale * 0.1, 0.05)
 	local responsivenessScale = BOAT_LEAN_RESPONSIVENESS_MIN_SCALE
 		+ (BOAT_LEAN_RESPONSIVENESS_MAX_SCALE - BOAT_LEAN_RESPONSIVENESS_MIN_SCALE) * responsivenessDriver
 	local alpha = math.clamp(deltaTime * BOAT_LEAN_RESPONSIVENESS * responsivenessScale, 0, 1)

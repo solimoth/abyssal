@@ -11,14 +11,6 @@ function SwimUtils.Configure(constants)
 end
 
 local function getConstants()
-    if not SwimConstants then
-        local swimmingFolder = ReplicatedStorage:FindFirstChild("SwimmingSystem")
-        local constantsModule = swimmingFolder and swimmingFolder:FindFirstChild("SwimConstants")
-        if constantsModule then
-            SwimConstants = require(constantsModule)
-        end
-    end
-
     return SwimConstants or error("SwimUtils.Configure must be called before use", 2)
 end
 

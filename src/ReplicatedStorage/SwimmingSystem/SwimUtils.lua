@@ -1,10 +1,26 @@
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local SwimConstants = require(ReplicatedStorage:WaitForChild("SwimmingSystem"):WaitForChild("SwimConstants"))
+local SwimConstants
 local WaterPhysics = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("WaterPhysics"))
 
 local SwimUtils = {}
+
+function SwimUtils.Configure(constants)
+    SwimConstants = constants
+end
+
+local function getConstants()
+    if not SwimConstants then
+        local swimmingFolder = ReplicatedStorage:FindFirstChild("SwimmingSystem")
+        local constantsModule = swimmingFolder and swimmingFolder:FindFirstChild("SwimConstants")
+        if constantsModule then
+            SwimConstants = require(constantsModule)
+        end
+    end
+
+    return SwimConstants or error("SwimUtils.Configure must be called before use", 2)
+end
 
 local interiorCache = {}
 
@@ -13,11 +29,12 @@ local function computeInteriorStatus(character: Model, rootPart: BasePart)
     overlapParams.FilterType = Enum.RaycastFilterType.Exclude
     overlapParams.FilterDescendantsInstances = { character }
 
-    local regionSize = rootPart.Size + SwimConstants.InteriorRegionPadding
+    local constants = getConstants()
+    local regionSize = rootPart.Size + constants.InteriorRegionPadding
     local parts = Workspace:GetPartBoundsInBox(rootPart.CFrame, regionSize, overlapParams)
 
     for _, part in ipairs(parts) do
-        if part:IsA("BasePart") and part.Name == SwimConstants.InteriorPartName then
+        if part:IsA("BasePart") and part.Name == constants.InteriorPartName then
             return true
         end
     end
@@ -50,7 +67,7 @@ function SwimUtils.IsInsideShipInterior(character: Model?): boolean
     local inside = computeInteriorStatus(character, rootPart)
     interiorCache[character] = {
         value = inside,
-        expiry = now + SwimConstants.InteriorCacheDuration,
+        expiry = now + getConstants().InteriorCacheDuration,
         rootPart = rootPart,
     }
 

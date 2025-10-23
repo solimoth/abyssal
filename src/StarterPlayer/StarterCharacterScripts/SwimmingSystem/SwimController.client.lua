@@ -5,6 +5,7 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local WaterPhysics = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("WaterPhysics"))
+local WaveRegistry = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("WaveRegistry"))
 local SwimInteriorUtils = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("SwimInteriorUtils"))
 
 local Libraries = script:WaitForChild("Libraries")
@@ -39,6 +40,8 @@ local CONFIG = {
     HeadDepth = 0.05,
     MobileExitCooldown = 0.25,
 }
+
+local CALM_BLEND_DEPTH = 4
 
 local function isInputDown(keyCodes, pressed)
     for _, keyCode in ipairs(keyCodes) do
@@ -79,26 +82,56 @@ local function gOut()
     end
 end
 
-local function depthAt(position: Vector3)
-    local surfaceY = WaterPhysics.TryGetWaterSurface(position)
-    if not surfaceY then
-        return 0
+local function sampleWater(position: Vector3)
+    local dynamicHeight = WaterPhysics.TryGetWaterSurface(position)
+    if not dynamicHeight then
+        return nil
     end
-    return math.max(0, surfaceY - position.Y)
+
+    local calmHeight = dynamicHeight
+    local field = WaveRegistry.GetActiveField()
+    if field and field.GetSeaLevel then
+        local ok, seaLevel = pcall(field.GetSeaLevel, field)
+        if ok and typeof(seaLevel) == "number" then
+            calmHeight = seaLevel
+        end
+    end
+
+    local effectiveHeight = dynamicHeight
+    if calmHeight then
+        local calmDepth = calmHeight - position.Y
+        if calmDepth > CALM_BLEND_DEPTH then
+            effectiveHeight = calmHeight
+        elseif calmDepth > 0 then
+            local alpha = math.clamp(calmDepth / CALM_BLEND_DEPTH, 0, 1)
+            effectiveHeight = calmHeight + (dynamicHeight - calmHeight) * (1 - alpha)
+        end
+    end
+
+    return {
+        DynamicHeight = dynamicHeight,
+        CalmHeight = calmHeight,
+        EffectiveHeight = effectiveHeight,
+        Depth = math.max(0, effectiveHeight - position.Y),
+    }
 end
 
 local function computeDetectorStatus(rootCFrame: CFrame, insideInterior: boolean)
     if insideInterior then
-        return false, false, false, false
+        return false, false, false, false, nil
     end
 
     local upperPosition = rootCFrame:PointToWorldSpace(detectorOffsets.Upper)
     local lowerPosition = rootCFrame:PointToWorldSpace(detectorOffsets.Lower)
     local headPosition = rootCFrame:PointToWorldSpace(detectorOffsets.Head)
 
-    local upperDepth = depthAt(upperPosition)
-    local lowerDepth = depthAt(lowerPosition)
-    local headDepth = depthAt(headPosition)
+    local upperSample = sampleWater(upperPosition)
+    local lowerSample = sampleWater(lowerPosition)
+    local headSample = sampleWater(headPosition)
+
+    local upperDepth = upperSample and upperSample.Depth or 0
+    local lowerDepth = lowerSample and lowerSample.Depth or 0
+    local headDepth = headSample and headSample.Depth or 0
 
     local isUpperIn = upperDepth > CONFIG.EntryDepth
     local isLowerIn = lowerDepth > CONFIG.EntryDepth
@@ -107,11 +140,12 @@ local function computeDetectorStatus(rootCFrame: CFrame, insideInterior: boolean
     local camera = Workspace.CurrentCamera
     local isCameraIn = false
     if camera then
-        local cameraDepth = depthAt(camera.CFrame.Position)
+        local cameraSample = sampleWater(camera.CFrame.Position)
+        local cameraDepth = cameraSample and cameraSample.Depth or 0
         isCameraIn = cameraDepth > CONFIG.EntryDepth
     end
 
-    return isUpperIn, isLowerIn, isHeadIn, isCameraIn
+    return isUpperIn, isLowerIn, isHeadIn, isCameraIn, lowerSample
 end
 
 local function onHeartbeat()
@@ -127,7 +161,7 @@ local function onHeartbeat()
     local insideInterior = SwimInteriorUtils.IsInsideShipInterior(character)
 
     local rootCFrame = rootPart.CFrame
-    local isUpperIn, isLowerIn, isHeadIn, isCameraIn = computeDetectorStatus(rootCFrame, insideInterior)
+    local isUpperIn, isLowerIn, isHeadIn, isCameraIn, lowerSample = computeDetectorStatus(rootCFrame, insideInterior)
 
     if not insideInterior and not isUpperIn and not isLowerIn then
         gotOut = false
@@ -170,6 +204,15 @@ local function onHeartbeat()
             end
         end
     end
+
+    local rootSample = sampleWater(rootCFrame.Position)
+    local surfaced = not isHeadIn and isLowerIn and not insideInterior
+    swimModule:UpdateSurfaceState({
+        Surfaced = surfaced,
+        RootY = rootPart.Position.Y,
+        LowerSample = lowerSample,
+        RootSample = rootSample or lowerSample,
+    })
 
     tapConnection = UserInputService.TouchTapInWorld:Connect(function()
         if not swimModule.Enabled or isHeadIn or not isLowerIn then

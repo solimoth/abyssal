@@ -13,6 +13,52 @@ local zones = {}
 local folderConnections = {}
 local fallbackSourceIds = setmetatable({}, { __mode = "k" })
 
+local clearTable = table.clear or function(tbl)
+    for key in pairs(tbl) do
+        tbl[key] = nil
+    end
+end
+
+local function getCharacterRootPart(player)
+    local character = player.Character
+    if not character then
+        return nil
+    end
+
+    local root = character:FindFirstChild("HumanoidRootPart")
+    if root and root:IsA("BasePart") then
+        return root
+    end
+
+    local primary = character.PrimaryPart
+    if primary and primary:IsA("BasePart") then
+        return primary
+    end
+
+    for _, child in ipairs(character:GetChildren()) do
+        if child:IsA("BasePart") then
+            return child
+        end
+    end
+
+    return nil
+end
+
+local function distanceFromPart(part, position)
+    local localPosition = part.CFrame:PointToObjectSpace(position)
+    local halfSize = part.Size * 0.5
+
+    local dx = math.max(math.abs(localPosition.X) - halfSize.X, 0)
+    local dy = math.max(math.abs(localPosition.Y) - halfSize.Y, 0)
+    local dz = math.max(math.abs(localPosition.Z) - halfSize.Z, 0)
+
+    if dx == 0 and dy == 0 and dz == 0 then
+        return 0
+    end
+
+    return math.sqrt(dx * dx + dy * dy + dz * dz)
+end
+
 local function getFallbackSourceId(part)
     local sourceId = fallbackSourceIds[part]
     if not sourceId then
@@ -62,7 +108,10 @@ local function configurationExists(name)
     return configuration ~= nil
 end
 
-local function applyZone(player, zoneState)
+local DEFAULT_TRANSITION_TIME = 1.5
+local TRANSITION_BUILD_SPEED = 12 -- studs per second of build-up
+
+local function applyZone(player, zoneState, distance)
     if not configurationExists(zoneState.configuration) then
         if not zoneState.warnedMissing then
             warn(("[LightingZoneService] Zone '%s' references unknown lighting configuration '%s'"):format(
@@ -76,8 +125,18 @@ local function applyZone(player, zoneState)
 
     zoneState.warnedMissing = nil
 
+    local baseTransitionTime = zoneState.transitionTime or DEFAULT_TRANSITION_TIME
+    local effectiveTransitionTime = baseTransitionTime
+
+    if zoneState.transitionDistance > 0 then
+        local remaining = math.max(distance or 0, 0)
+        if remaining > 0 then
+            effectiveTransitionTime = baseTransitionTime + (remaining / TRANSITION_BUILD_SPEED)
+        end
+    end
+
     LightingService:SetSource(player, zoneState.sourceId, zoneState.configuration, {
-        transitionTime = zoneState.transitionTime,
+        transitionTime = effectiveTransitionTime,
         easingStyle = zoneState.easingStyle,
         easingDirection = zoneState.easingDirection,
         priority = zoneState.priority,
@@ -113,7 +172,7 @@ end
 
 local heartbeatConnection
 
-local function updateZoneOccupancy(zoneState)
+local function updateZoneOccupancy(zoneState, playerPositions)
     local overlappingParts
 
     local success, result = pcall(function()
@@ -130,19 +189,37 @@ local function updateZoneOccupancy(zoneState)
         overlappingParts = {}
     end
 
-    local currentPlayers = {}
+    local currentPlayers = zoneState.nearbyPlayers
+    clearTable(currentPlayers)
 
     for _, otherPart in ipairs(overlappingParts) do
         local player = getPlayerFromPart(otherPart)
         if player then
-            currentPlayers[player] = true
+            local existing = currentPlayers[player]
+            if existing == nil or existing > 0 then
+                currentPlayers[player] = 0
+            end
         end
     end
 
-    for player in pairs(currentPlayers) do
+    if zoneState.transitionDistance > 0 and playerPositions then
+        local threshold = zoneState.transitionDistance
+        local part = zoneState.part
+
+        for player, position in pairs(playerPositions) do
+            if not currentPlayers[player] then
+                local distance = distanceFromPart(part, position)
+                if distance <= threshold then
+                    currentPlayers[player] = distance
+                end
+            end
+        end
+    end
+
+    for player, distance in pairs(currentPlayers) do
         if not zoneState.touchingPlayers[player] then
             zoneState.touchingPlayers[player] = true
-            applyZone(player, zoneState)
+            applyZone(player, zoneState, distance)
         end
     end
 
@@ -155,8 +232,27 @@ local function updateZoneOccupancy(zoneState)
 end
 
 local function updateZones()
+    local playerPositions
+    local positionsComputed = false
+
     for _, zoneState in pairs(zones) do
-        updateZoneOccupancy(zoneState)
+        if zoneState.transitionDistance > 0 then
+            if not positionsComputed then
+                positionsComputed = true
+                playerPositions = {}
+
+                for _, player in ipairs(Players:GetPlayers()) do
+                    local rootPart = getCharacterRootPart(player)
+                    if rootPart then
+                        playerPositions[player] = rootPart.Position
+                    end
+                end
+            end
+
+            updateZoneOccupancy(zoneState, playerPositions)
+        else
+            updateZoneOccupancy(zoneState)
+        end
     end
 end
 
@@ -197,6 +293,10 @@ local function registerZone(part)
     local easingDirection = parseEnum(Enum.EasingDirection, part:GetAttribute("LightingEasingDirection"))
     local priority = part:GetAttribute("LightingPriority")
     local sourceId = part:GetAttribute("LightingSourceId")
+    local transitionDistance = part:GetAttribute("TransitionDistance")
+    if typeof(transitionDistance) ~= "number" or transitionDistance <= 0 then
+        transitionDistance = 0
+    end
     if typeof(sourceId) ~= "string" or sourceId == "" then
         sourceId = getFallbackSourceId(part)
     end
@@ -215,7 +315,9 @@ local function registerZone(part)
         easingDirection = easingDirection,
         priority = typeof(priority) == "number" and priority or 0,
         sourceId = sourceId,
+        transitionDistance = transitionDistance,
         touchingPlayers = setmetatable({}, { __mode = "k" }),
+        nearbyPlayers = {},
         connections = {},
         warnedMissing = nil,
         debugName = part:GetFullName(),

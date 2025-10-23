@@ -5,8 +5,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SwimConstants = require(ReplicatedStorage:WaitForChild("SwimmingSystem"):WaitForChild("SwimConstants"))
 local SwimUtils = require(ReplicatedStorage:WaitForChild("SwimmingSystem"):WaitForChild("SwimUtils"))
 
-SwimUtils.Configure(SwimConstants)
-
 local playerStates = {}
 
 local function ensureState(player: Player)

@@ -7,8 +7,6 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local SwimConstants = require(ReplicatedStorage:WaitForChild("SwimmingSystem"):WaitForChild("SwimConstants"))
 local SwimUtils = require(ReplicatedStorage:WaitForChild("SwimmingSystem"):WaitForChild("SwimUtils"))
 
-SwimUtils.Configure(SwimConstants)
-
 local LOCAL_PLAYER = Players.LocalPlayer
 local DESIRED_ATTRIBUTE = SwimConstants.DesiredVelocityAttribute
 local UPDATE_THRESHOLD_SQUARED = SwimConstants.DesiredVelocityUpdateThresholdSquared or 0.25

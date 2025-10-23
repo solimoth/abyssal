@@ -4,12 +4,23 @@
 -- sampling utilities to systems that require water height queries (boats,
 -- characters, particle effects, etc.).
 
+local RunService = game:GetService("RunService")
+local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local GerstnerWave = require(ReplicatedStorage.Modules.GerstnerWave)
+local WaveConfig = require(ReplicatedStorage.Modules.WaveConfig)
+
 local WaveRegistry = {}
 
 local activeField: any? = nil
 
-function WaveRegistry.SetActiveField(field)
+local function setActiveField(field)
     activeField = field
+end
+
+function WaveRegistry.SetActiveField(field)
+    setActiveField(field)
 end
 
 function WaveRegistry.GetActiveField()
@@ -28,6 +39,202 @@ function WaveRegistry.SampleSurface(position: Vector3)
         return activeField:GetSurface(position)
     end
     return nil
+end
+
+if RunService:IsClient() then
+    local ClientWaveField = {}
+    ClientWaveField.__index = ClientWaveField
+
+    local DEFAULT_CONTAINER_NAME = WaveConfig.ContainerName or "DynamicWaveSurface"
+    local DEFAULT_SEA_LEVEL = WaveConfig.SeaLevel or 0
+    local DEFAULT_INTENSITY = WaveConfig.DefaultIntensity or 1
+    local DEFAULT_TIME_SCALE = WaveConfig.TimeScale or 1
+    local DEFAULT_LAND_ZONE_NAME = WaveConfig.LandZoneName or "LandZone"
+    local DEFAULT_LAND_ZONE_ATTENUATION = WaveConfig.LandZoneAttenuation or 1
+    local DEFAULT_LAND_ZONE_FADE = WaveConfig.LandZoneFadeDistance or 0
+
+    local function attributeNumber(container: Instance, name: string, fallback: number): number
+        local value = container:GetAttribute(name)
+        if typeof(value) == "number" then
+            return value
+        end
+        return fallback
+    end
+
+    local function attributeString(container: Instance, name: string, fallback: string): string
+        local value = container:GetAttribute(name)
+        if typeof(value) == "string" and value ~= "" then
+            return value
+        end
+        return fallback
+    end
+
+    function ClientWaveField.new(container: Instance)
+        local self = setmetatable({}, ClientWaveField)
+
+        self.container = container
+        self.waves = GerstnerWave.BuildWaveInfos(WaveConfig.Waves)
+        self.timeScale = math.max(0, attributeNumber(container, "TimeScale", DEFAULT_TIME_SCALE))
+        self.lastClock = attributeNumber(container, "WaveClock", Workspace:GetServerTimeNow())
+        self.clockSyncedAt = os.clock()
+        self.landZoneName = attributeString(container, "LandZoneName", DEFAULT_LAND_ZONE_NAME)
+        self.landZoneAttenuation = math.clamp(attributeNumber(container, "LandZoneAttenuation", DEFAULT_LAND_ZONE_ATTENUATION), 0, 1)
+        self.landZoneFadeDistance = math.max(0, attributeNumber(container, "LandZoneFadeDistance", DEFAULT_LAND_ZONE_FADE))
+        self.landZones = {}
+
+        local function onClockChanged()
+            local attr = container:GetAttribute("WaveClock")
+            if typeof(attr) == "number" and attr ~= self.lastClock then
+                self.lastClock = attr
+                self.clockSyncedAt = os.clock()
+            end
+        end
+
+        local function onTimeScaleChanged()
+            self.timeScale = math.max(0, attributeNumber(container, "TimeScale", DEFAULT_TIME_SCALE))
+        end
+
+        local function onLandZoneNameChanged()
+            self.landZoneName = attributeString(container, "LandZoneName", DEFAULT_LAND_ZONE_NAME)
+            self:_refreshLandZones()
+        end
+
+        local function onLandZoneSettingsChanged()
+            self.landZoneAttenuation = math.clamp(attributeNumber(container, "LandZoneAttenuation", DEFAULT_LAND_ZONE_ATTENUATION), 0, 1)
+            self.landZoneFadeDistance = math.max(0, attributeNumber(container, "LandZoneFadeDistance", DEFAULT_LAND_ZONE_FADE))
+        end
+
+        container:GetAttributeChangedSignal("WaveClock"):Connect(onClockChanged)
+        container:GetAttributeChangedSignal("TimeScale"):Connect(onTimeScaleChanged)
+        container:GetAttributeChangedSignal("LandZoneName"):Connect(onLandZoneNameChanged)
+        container:GetAttributeChangedSignal("LandZoneAttenuation"):Connect(onLandZoneSettingsChanged)
+        container:GetAttributeChangedSignal("LandZoneFadeDistance"):Connect(onLandZoneSettingsChanged)
+
+        self.descendantAddedConn = Workspace.DescendantAdded:Connect(function(instance)
+            self:_tryRegisterLandZone(instance)
+        end)
+
+        self.descendantRemovingConn = Workspace.DescendantRemoving:Connect(function(instance)
+            if self.landZones[instance] then
+                self.landZones[instance] = nil
+            end
+        end)
+
+        self:_refreshLandZones()
+
+        return self
+    end
+
+    function ClientWaveField:_refreshLandZones()
+        table.clear(self.landZones)
+        for _, descendant in ipairs(Workspace:GetDescendants()) do
+            self:_tryRegisterLandZone(descendant)
+        end
+    end
+
+    function ClientWaveField:_tryRegisterLandZone(instance: Instance)
+        if instance:IsA("BasePart") and instance.Name == self.landZoneName then
+            self.landZones[instance] = true
+        end
+    end
+
+    function ClientWaveField:_getWaveClock(): number
+        local elapsed = os.clock() - self.clockSyncedAt
+        return self.lastClock + (elapsed * self.timeScale)
+    end
+
+    function ClientWaveField:_computeLandZoneAttenuation(position: Vector3): number
+        if self.landZoneAttenuation >= 0.999 or not next(self.landZones) then
+            return 1
+        end
+
+        local best = 1
+        for part in pairs(self.landZones) do
+            if typeof(part) ~= "Instance" then
+                continue
+            end
+
+            if part.Parent then
+                local halfSize = part.Size * 0.5
+                local localPos = part.CFrame:PointToObjectSpace(position)
+                local dx = math.max(math.abs(localPos.X) - halfSize.X, 0)
+                local dz = math.max(math.abs(localPos.Z) - halfSize.Z, 0)
+                local distanceOutside = math.sqrt((dx * dx) + (dz * dz))
+
+                if distanceOutside <= self.landZoneFadeDistance then
+                    local t = self.landZoneFadeDistance > 0 and math.clamp(distanceOutside / self.landZoneFadeDistance, 0, 1) or 0
+                    local multiplier = self.landZoneAttenuation + (1 - self.landZoneAttenuation) * t
+                    if multiplier < best then
+                        best = multiplier
+                        if best <= self.landZoneAttenuation then
+                            break
+                        end
+                    end
+                end
+            else
+                self.landZones[part] = nil
+            end
+        end
+
+        return best
+    end
+
+    function ClientWaveField:GetSurface(position: Vector3)
+        local runTime = self:_getWaveClock()
+        local baseTransform, tangent, binormal = GerstnerWave:GetHeightAndNormal(
+            self.waves,
+            Vector2.new(position.X, position.Z),
+            runTime
+        )
+
+        local seaLevel = attributeNumber(self.container, "SeaLevel", DEFAULT_SEA_LEVEL)
+        local intensity = math.max(0, attributeNumber(self.container, "WaveIntensity", DEFAULT_INTENSITY))
+        local localIntensity = math.max(0, intensity * self:_computeLandZoneAttenuation(position))
+
+        local scaledX = baseTransform.X * localIntensity
+        local scaledY = math.max(0, baseTransform.Y * localIntensity)
+        local scaledZ = baseTransform.Z * localIntensity
+
+        local tangentScaled = tangent * localIntensity
+        local binormalScaled = binormal * localIntensity
+
+        local normal = tangentScaled:Cross(binormalScaled)
+        if normal.Magnitude < 1e-3 then
+            normal = Vector3.yAxis
+        else
+            normal = normal.Unit
+        end
+
+        return {
+            Height = seaLevel + scaledY,
+            Normal = normal,
+            Intensity = localIntensity,
+            Displacement = Vector3.new(scaledX, scaledY, scaledZ),
+        }
+    end
+
+    function ClientWaveField:GetHeight(position: Vector3): number
+        local surface = self:GetSurface(position)
+        return surface.Height
+    end
+
+    function ClientWaveField:GetSeaLevel(): number
+        return attributeNumber(self.container, "SeaLevel", DEFAULT_SEA_LEVEL)
+    end
+
+    local function ensureClientField()
+        local container = Workspace:FindFirstChild(DEFAULT_CONTAINER_NAME)
+        if not container then
+            container = Workspace:WaitForChild(DEFAULT_CONTAINER_NAME)
+        end
+
+        if container then
+            local clientField = ClientWaveField.new(container)
+            setActiveField(clientField)
+        end
+    end
+
+    task.defer(ensureClientField)
 end
 
 return WaveRegistry

@@ -108,7 +108,10 @@ local function configurationExists(name)
     return configuration ~= nil
 end
 
-local function applyZone(player, zoneState)
+local DEFAULT_TRANSITION_TIME = 1.5
+local TRANSITION_BUILD_SPEED = 12 -- studs per second of build-up
+
+local function applyZone(player, zoneState, distance)
     if not configurationExists(zoneState.configuration) then
         if not zoneState.warnedMissing then
             warn(("[LightingZoneService] Zone '%s' references unknown lighting configuration '%s'"):format(
@@ -122,8 +125,18 @@ local function applyZone(player, zoneState)
 
     zoneState.warnedMissing = nil
 
+    local baseTransitionTime = zoneState.transitionTime or DEFAULT_TRANSITION_TIME
+    local effectiveTransitionTime = baseTransitionTime
+
+    if zoneState.transitionDistance > 0 then
+        local remaining = math.max(distance or 0, 0)
+        if remaining > 0 then
+            effectiveTransitionTime = baseTransitionTime + (remaining / TRANSITION_BUILD_SPEED)
+        end
+    end
+
     LightingService:SetSource(player, zoneState.sourceId, zoneState.configuration, {
-        transitionTime = zoneState.transitionTime,
+        transitionTime = effectiveTransitionTime,
         easingStyle = zoneState.easingStyle,
         easingDirection = zoneState.easingDirection,
         priority = zoneState.priority,
@@ -182,7 +195,10 @@ local function updateZoneOccupancy(zoneState, playerPositions)
     for _, otherPart in ipairs(overlappingParts) do
         local player = getPlayerFromPart(otherPart)
         if player then
-            currentPlayers[player] = true
+            local existing = currentPlayers[player]
+            if existing == nil or existing > 0 then
+                currentPlayers[player] = 0
+            end
         end
     end
 
@@ -194,16 +210,16 @@ local function updateZoneOccupancy(zoneState, playerPositions)
             if not currentPlayers[player] then
                 local distance = distanceFromPart(part, position)
                 if distance <= threshold then
-                    currentPlayers[player] = true
+                    currentPlayers[player] = distance
                 end
             end
         end
     end
 
-    for player in pairs(currentPlayers) do
+    for player, distance in pairs(currentPlayers) do
         if not zoneState.touchingPlayers[player] then
             zoneState.touchingPlayers[player] = true
-            applyZone(player, zoneState)
+            applyZone(player, zoneState, distance)
         end
     end
 

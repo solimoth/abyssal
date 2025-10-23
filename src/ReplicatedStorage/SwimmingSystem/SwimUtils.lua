@@ -1,18 +1,68 @@
 local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-local SwimConstants
+local DEFAULT_CONSTANTS = table.freeze({
+    DesiredVelocityAttribute = "WaterSwimDesiredVelocity",
+
+    InteriorPartName = "ShipInterior",
+    InteriorRegionPadding = Vector3.new(4, 6, 4),
+    InteriorCacheDuration = 0.35,
+
+    BuoyancyAttachmentName = "SwimmingBuoyancyAttachment",
+    LinearVelocityName = "SwimmingLinearVelocity",
+
+    SurfaceHoldOffset = 1,
+    SurfaceHoldStiffness = 6,
+    SurfaceHoldDamping = 3,
+
+    BaseSwimSpeed = 16,
+    MinSwimSpeed = 6,
+    MaxHorizontalSpeed = 24,
+    MaxVerticalSpeed = 18,
+    DepthSlowFactor = 0.2,
+
+    MaxOxygenTime = 20,
+    OxygenRecoveryRate = 8,
+    DrowningDamage = 10,
+    DrowningDamageInterval = 1,
+
+    DesiredVelocityUpdateThresholdSquared = 0.25,
+})
+
+local SwimConstants = {}
 local WaterPhysics = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("WaterPhysics"))
 
 local SwimUtils = {}
+SwimUtils.DefaultConstants = DEFAULT_CONSTANTS
+
+local function applyConstants(overrides)
+    table.clear(SwimConstants)
+
+    for key, value in pairs(DEFAULT_CONSTANTS) do
+        SwimConstants[key] = value
+    end
+
+    if overrides then
+        for key, value in pairs(overrides) do
+            SwimConstants[key] = value
+        end
+    end
+end
 
 function SwimUtils.Configure(constants)
-    SwimConstants = constants
+    applyConstants(constants)
+end
+
+function SwimUtils.GetConstants()
+    return SwimConstants
 end
 
 local function getConstants()
-    return SwimConstants or error("SwimUtils.Configure must be called before use", 2)
+    return SwimConstants
 end
+
+-- Ensure defaults are applied even if Configure is never invoked externally.
+applyConstants()
 
 local interiorCache = {}
 

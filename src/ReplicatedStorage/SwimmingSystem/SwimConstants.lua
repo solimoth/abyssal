@@ -1,4 +1,6 @@
-local SwimConstants = {
+local SwimUtils = require(script.Parent:WaitForChild("SwimUtils"))
+
+local constants = {
     DesiredVelocityAttribute = "WaterSwimDesiredVelocity",
 
     InteriorPartName = "ShipInterior",
@@ -26,4 +28,6 @@ local SwimConstants = {
     DesiredVelocityUpdateThresholdSquared = 0.25,
 }
 
-return SwimConstants
+SwimUtils.Configure(constants)
+
+return SwimUtils.GetConstants()

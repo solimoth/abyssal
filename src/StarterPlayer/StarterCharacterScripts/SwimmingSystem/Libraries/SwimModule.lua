@@ -14,6 +14,7 @@ if RunService:IsServer() then
         CreateAntiGrav = noop,
         GetOut = noop,
         ActivateStates = noop,
+        UpdateSurfaceState = noop,
     }, swimModule)
 end
 
@@ -29,6 +30,12 @@ local rootPart = character:WaitForChild("HumanoidRootPart")
 
 local attachments = {}
 local forces = {}
+local surfaceState
+local surfaceOffset
+local depthOffset
+local lastSurfaced = false
+
+local SURFACE_RESPONSIVENESS = 6
 
 local function humStates(activate: boolean, newState: Enum.HumanoidStateType)
     humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, activate)
@@ -92,9 +99,47 @@ function swimModule:Start()
 
     self.heartbeatConnection = RunService.Heartbeat:Connect(function()
         if humanoid.MoveDirection.Magnitude > 0 then
+            surfaceOffset = nil
+            depthOffset = nil
+            rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             return
         end
-        rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
+
+        local desiredVelocityY = 0
+        if surfaceState then
+            local rootSample = surfaceState.RootSample
+            local surfacedNow = surfaceState.Surfaced and rootSample and rootSample.DynamicHeight
+            if surfacedNow then
+                if not lastSurfaced or surfaceOffset == nil then
+                    surfaceOffset = rootPart.Position.Y - rootSample.DynamicHeight
+                end
+
+                local targetY = rootSample.DynamicHeight + surfaceOffset
+                desiredVelocityY = math.clamp((targetY - rootPart.Position.Y) * SURFACE_RESPONSIVENESS, -20, 20)
+                lastSurfaced = true
+                depthOffset = nil
+            else
+                local wasSurfaced = lastSurfaced
+                surfaceOffset = nil
+                lastSurfaced = false
+
+                local lowerSample = surfaceState.LowerSample
+                if lowerSample and lowerSample.EffectiveHeight then
+                    if wasSurfaced or depthOffset == nil then
+                        depthOffset = rootPart.Position.Y - lowerSample.EffectiveHeight
+                    end
+
+                    local targetY = lowerSample.EffectiveHeight + depthOffset
+                    desiredVelocityY = math.clamp((targetY - rootPart.Position.Y) * SURFACE_RESPONSIVENESS, -20, 20)
+                end
+            end
+        else
+            surfaceOffset = nil
+            lastSurfaced = false
+            depthOffset = nil
+        end
+
+        rootPart.AssemblyLinearVelocity = Vector3.new(0, desiredVelocityY, 0)
     end)
 end
 
@@ -106,6 +151,10 @@ function swimModule:Stop()
     self.Enabled = false
     humStates(true, Enum.HumanoidStateType.Freefall)
     antiGrav(false)
+    surfaceState = nil
+    surfaceOffset = nil
+    depthOffset = nil
+    lastSurfaced = false
 
     if self.heartbeatConnection then
         self.heartbeatConnection:Disconnect()
@@ -130,6 +179,23 @@ end
 
 function swimModule:ActivateStates()
     humStates(false, Enum.HumanoidStateType.Swimming)
+end
+
+function swimModule:UpdateSurfaceState(state)
+    if not self.Enabled then
+        surfaceState = nil
+        surfaceOffset = nil
+        depthOffset = nil
+        lastSurfaced = false
+        return
+    end
+
+    surfaceState = state
+    if not state or not state.Surfaced then
+        surfaceOffset = nil
+        depthOffset = nil
+        lastSurfaced = false
+    end
 end
 
 return setmetatable({ Enabled = false }, swimModule)

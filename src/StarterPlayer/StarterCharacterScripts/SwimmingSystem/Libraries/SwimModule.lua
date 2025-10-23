@@ -191,9 +191,17 @@ function swimModule:UpdateSurfaceState(state)
     end
 
     surfaceState = state
-    if not state or not state.Surfaced then
+    if not state then
         surfaceOffset = nil
         depthOffset = nil
+        lastSurfaced = false
+        return
+    end
+
+    if state.Surfaced then
+        depthOffset = nil
+    else
+        surfaceOffset = nil
         lastSurfaced = false
     end
 end

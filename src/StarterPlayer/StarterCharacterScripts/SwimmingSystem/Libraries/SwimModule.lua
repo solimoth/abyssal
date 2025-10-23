@@ -101,7 +101,6 @@ function swimModule:Start()
         if humanoid.MoveDirection.Magnitude > 0 then
             surfaceOffset = nil
             depthOffset = nil
-            rootPart.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
             return
         end
 

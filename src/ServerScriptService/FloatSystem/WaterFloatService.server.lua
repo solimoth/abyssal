@@ -312,7 +312,7 @@ RunService.Heartbeat:Connect(function(dt)
         local horizontalVelocity = Vector3.new(part.AssemblyLinearVelocity.X, 0, part.AssemblyLinearVelocity.Z)
 
         local targetImmersion = math.max(data.minImmersion, ratio)
-        local depthError = targetDepth - depth
+        local depthError = depth - targetDepth
         local correctiveForce = depthError * SURFACE_RESPONSE * mass * gravity
         local dampingForceY = -verticalVelocity * mass * LINEAR_DAMPING
         local verticalForce = (targetImmersion * mass * gravity) + correctiveForce + dampingForceY

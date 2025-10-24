@@ -19,6 +19,10 @@ local floaters: {[BasePart]: {
         force: VectorForce,
         createdForce: boolean,
         ancestryConn: RBXScriptConnection?,
+        weightConn: RBXScriptConnection?,
+        weightSource: Instance?,
+        weightAlpha: number,
+        minImmersion: number,
 }} = {}
 local modelConnections: {[Instance]: {RBXScriptConnection, RBXScriptConnection}} = {}
 local anchoredConnections: {[BasePart]: RBXScriptConnection} = {}
@@ -42,6 +46,10 @@ local function cleanupPart(part: BasePart, keepAnchoredListener: boolean?)
 
         if data.ancestryConn then
                 data.ancestryConn:Disconnect()
+        end
+
+        if data.weightConn then
+                data.weightConn:Disconnect()
         end
 
         if data.force and data.force.Parent then
@@ -87,6 +95,55 @@ local function createVectorForce(part: BasePart)
         return attachment, force, createdAttachment, createdForce
 end
 
+local MIN_FLOAT_WEIGHT = 1
+local MAX_FLOAT_WEIGHT = 10
+local DEFAULT_FLOAT_WEIGHT = MIN_FLOAT_WEIGHT
+local HEAVY_DEPTH_MULTIPLIER = 1.5
+local SURFACE_STIFFNESS = 0.65
+
+local function findFloatWeightSource(part: BasePart)
+        local current: Instance? = part
+        while current do
+                local attributeValue = current:GetAttribute("FloatWeight")
+                if typeof(attributeValue) == "number" then
+                        local clamped = math.clamp(attributeValue, MIN_FLOAT_WEIGHT, MAX_FLOAT_WEIGHT)
+                        return clamped, current
+                end
+                current = current.Parent
+        end
+
+        return DEFAULT_FLOAT_WEIGHT, nil
+end
+
+local function updateFloatWeight(part: BasePart)
+        local data = floaters[part]
+        if not data then
+                return
+        end
+
+        local weight, source = findFloatWeightSource(part)
+        local previousSource = data.weightSource
+
+        if previousSource ~= source then
+                if data.weightConn then
+                        data.weightConn:Disconnect()
+                        data.weightConn = nil
+                end
+
+                data.weightSource = source
+
+                if source then
+                        data.weightConn = source:GetAttributeChangedSignal("FloatWeight"):Connect(function()
+                                updateFloatWeight(part)
+                        end)
+                end
+        end
+
+        local alpha = (weight - MIN_FLOAT_WEIGHT) / (MAX_FLOAT_WEIGHT - MIN_FLOAT_WEIGHT)
+        data.weightAlpha = alpha
+        data.minImmersion = 1 - alpha
+end
+
 local function setupPart(part: BasePart)
         if floaters[part] then
                 return
@@ -115,9 +172,17 @@ local function setupPart(part: BasePart)
                 ancestryConn = part.AncestryChanged:Connect(function(_, parent)
                         if not parent then
                                 cleanupPart(part)
+                                return
                         end
+                        updateFloatWeight(part)
                 end),
+                weightConn = nil,
+                weightSource = nil,
+                weightAlpha = 0,
+                minImmersion = 1,
         }
+
+        updateFloatWeight(part)
 
 end
 
@@ -199,7 +264,7 @@ RunService.Heartbeat:Connect(function(_dt)
                         continue
                 end
 
-                local buoyancy, ratio = WaterPhysics.ComputeBuoyancyForce(part, surfaceY)
+                local _, ratio = WaterPhysics.ComputeBuoyancyForce(part, surfaceY)
                 if ratio <= 0 then
                         data.force.Force = Vector3.zero
                         continue
@@ -209,9 +274,21 @@ RunService.Heartbeat:Connect(function(_dt)
                 local verticalVelocity = part.AssemblyLinearVelocity.Y
                 local horizontalVelocity = Vector3.new(part.AssemblyLinearVelocity.X, 0, part.AssemblyLinearVelocity.Z)
 
+                local halfHeight = part.Size.Y * 0.5
+                local normalizedWeight = data.weightAlpha or 0
+                local depth = surfaceY - part.Position.Y
+                local targetDepth = halfHeight + part.Size.Y * normalizedWeight * HEAVY_DEPTH_MULTIPLIER
+                local gravity = Workspace.Gravity
+                local baseImmersion = math.max(data.minImmersion or 0, ratio)
+                local upwardForce = mass * gravity * baseImmersion
+                        + (depth - targetDepth) * mass * gravity * SURFACE_STIFFNESS
+                if upwardForce < 0 then
+                        upwardForce = 0
+                end
+
                 local dampingForce = Vector3.new(0, -verticalVelocity * mass * LINEAR_DAMPING, 0)
                 local horizontalDamping = -horizontalVelocity * mass * HORIZONTAL_DAMPING
 
-                data.force.Force = buoyancy + dampingForce + horizontalDamping
+                data.force.Force = Vector3.new(0, upwardForce, 0) + dampingForce + horizontalDamping
         end
 end)

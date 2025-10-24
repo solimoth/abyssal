@@ -10,7 +10,6 @@ local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 local FloatingModule = {}
 
 local config = {
-    MaxForce = Vector3.new(math.huge, math.huge, math.huge),
     OffsetY = 0.05,
     EnableRotation = false,
     RotationSpeed = 0.5,
@@ -21,9 +20,15 @@ local config = {
     RotationAxis = Vector3.new(0, 1, 0),
     MaxRotationSpeed = 1,
     DampingFactor = 0,
-    EnableWaveEffect = true,
-    WaveFrequency = 2,
-    WaveAmplitude = 0.1,
+    EnableBobbing = true,
+    BobbingFrequency = 2,
+    BobbingAmplitude = 0.1,
+    LockYawToInitial = true,
+    YawMaxTorque = 5000,
+    YawResponsiveness = 2000,
+    YawDamping = 200,
+    PreventYawSpin = true,
+    AngularDamping = 2,
     EnableDrag = false,
     DragCoefficient = 0.05,
     EnableBuoyancyVariation = false,
@@ -33,15 +38,19 @@ local config = {
     EnableCustomGravity = false,
     CustomGravity = Vector3.new(0, 0, 0),
     ActivationPadding = 0.5,
+    HorizontalMaxForce = 2500,
+    VerticalMaxForce = math.huge,
 }
 
 type PartData = {
     sources: { [Instance]: boolean },
     bodyPosition: BodyPosition?,
-    bodyGyro: BodyGyro?,
+    alignOrientation: AlignOrientation?,
+    orientationAttachment: Attachment?,
     waveOffset: number,
     rotationAngle: number,
     rotationAxis: Vector3,
+    horizontalForward: Vector3?,
     tagged: boolean,
     part: BasePart?,
     lastTargetPosition: Vector3?,
@@ -68,6 +77,12 @@ local initialized = false
 local heartbeatConn: RBXScriptConnection?
 
 local FLOAT_TAG = "WaterFloat"
+
+local function getBodyPositionMaxForce(): Vector3
+    local horizontal = math.max(config.HorizontalMaxForce, 0)
+    local vertical = math.max(config.VerticalMaxForce, 0)
+    return Vector3.new(horizontal, vertical, horizontal)
+end
 
 local function debugPrint(message: string)
     if config.DebugMode then
@@ -105,6 +120,21 @@ local function resolveBasePart(part: Instance, data: PartData?): BasePart?
     end
 
     return nil
+end
+
+local function computeHorizontalForward(part: BasePart): Vector3
+    local forward = part.CFrame.LookVector
+    local horizontal = Vector3.new(forward.X, 0, forward.Z)
+
+    if horizontal.Magnitude < 1e-4 then
+        local right = part.CFrame.RightVector
+        horizontal = Vector3.new(right.X, 0, right.Z)
+        if horizontal.Magnitude < 1e-4 then
+            horizontal = Vector3.new(0, 0, -1)
+        end
+    end
+
+    return horizontal.Unit
 end
 
 local function findTrackedEntryForBasePart(basePart: BasePart): (Instance?, PartData?)
@@ -166,9 +196,14 @@ local function cleanupPart(part: Instance)
         data.lastMaxForce = nil
     end
 
-    if data.bodyGyro then
-        data.bodyGyro:Destroy()
-        data.bodyGyro = nil
+    if data.alignOrientation then
+        data.alignOrientation:Destroy()
+        data.alignOrientation = nil
+    end
+
+    if data.orientationAttachment then
+        data.orientationAttachment:Destroy()
+        data.orientationAttachment = nil
     end
 
     if basePart and data.tagged then
@@ -194,9 +229,14 @@ local function removeBodyMovers(part: BasePart, data: PartData)
         data.lastMaxForce = nil
     end
 
-    if data.bodyGyro then
-        data.bodyGyro:Destroy()
-        data.bodyGyro = nil
+    if data.alignOrientation then
+        data.alignOrientation:Destroy()
+        data.alignOrientation = nil
+    end
+
+    if data.orientationAttachment then
+        data.orientationAttachment:Destroy()
+        data.orientationAttachment = nil
     end
 end
 
@@ -205,27 +245,50 @@ local function ensureBodyPosition(part: BasePart, data: PartData): BodyPosition
     if not bodyPosition then
         bodyPosition = Instance.new("BodyPosition")
         bodyPosition.Name = "FloatingBodyPosition"
-        bodyPosition.MaxForce = config.MaxForce
+        bodyPosition.MaxForce = getBodyPositionMaxForce()
         bodyPosition.Parent = part
         data.bodyPosition = bodyPosition
-        data.lastMaxForce = config.MaxForce
+        data.lastMaxForce = bodyPosition.MaxForce
         data.lastTargetPosition = nil
     end
 
     return bodyPosition
 end
 
-local function ensureBodyGyro(part: BasePart, data: PartData): BodyGyro
-    local bodyGyro = data.bodyGyro
-    if not bodyGyro then
-        bodyGyro = Instance.new("BodyGyro")
-        bodyGyro.Name = "FloatingBodyGyro"
-        bodyGyro.MaxTorque = config.MaxForce
-        bodyGyro.Parent = part
-        data.bodyGyro = bodyGyro
+local function ensureOrientationAttachment(part: BasePart, data: PartData): Attachment
+    local attachment = data.orientationAttachment
+    if attachment and attachment.Parent ~= part then
+        attachment:Destroy()
+        attachment = nil
     end
 
-    return bodyGyro
+    if not attachment then
+        attachment = Instance.new("Attachment")
+        attachment.Name = "FloatingOrientationAttachment"
+        attachment.Parent = part
+        data.orientationAttachment = attachment
+    end
+
+    return attachment
+end
+
+local function ensureAlignOrientation(part: BasePart, data: PartData): AlignOrientation
+    local attachment = ensureOrientationAttachment(part, data)
+    local align = data.alignOrientation
+
+    if not align then
+        align = Instance.new("AlignOrientation")
+        align.Name = "FloatingAlignOrientation"
+        align.Mode = Enum.OrientationAlignmentMode.OneAttachment
+        align.RigidityEnabled = false
+        align.Attachment0 = attachment
+        align.Parent = part
+        data.alignOrientation = align
+    else
+        align.Attachment0 = attachment
+    end
+
+    return align
 end
 
 local function registerPart(part: BasePart, source: Instance)
@@ -265,10 +328,13 @@ local function registerPart(part: BasePart, source: Instance)
 
     if not data then
         local axis = config.RotationAxis.Magnitude > 0 and config.RotationAxis.Unit or Vector3.new(0, 1, 0)
+        local horizontalForward = computeHorizontalForward(part)
+
         data = {
             sources = {},
             bodyPosition = nil,
-            bodyGyro = nil,
+            alignOrientation = nil,
+            orientationAttachment = nil,
             waveOffset = math.random() * math.pi * 2,
             rotationAngle = 0,
             rotationAxis = axis,
@@ -276,6 +342,7 @@ local function registerPart(part: BasePart, source: Instance)
             part = part,
             lastTargetPosition = nil,
             lastMaxForce = nil,
+            horizontalForward = horizontalForward,
         }
         trackedParts[part] = data
     elseif trackedPart ~= part then
@@ -284,6 +351,10 @@ local function registerPart(part: BasePart, source: Instance)
     end
 
     data.part = part
+
+    if not data.horizontalForward then
+        data.horizontalForward = computeHorizontalForward(part)
+    end
 
     partLookup[part] = part
 
@@ -512,24 +583,88 @@ local function monitorInstance(instance: Instance)
 end
 
 local function updateRotation(part: BasePart, data: PartData, dt: number)
-    if not config.EnableRotation then
-        if data.bodyGyro then
-            data.bodyGyro:Destroy()
-            data.bodyGyro = nil
+    if config.EnableRotation then
+        local alignOrientation = ensureAlignOrientation(part, data)
+        local maxSpeed = math.max(config.MaxRotationSpeed, 0)
+        local speed = config.RotationSpeed
+        if maxSpeed > 0 then
+            speed = math.clamp(speed, -maxSpeed, maxSpeed)
         end
+        data.rotationAngle += math.rad(speed) * dt
+        local rotation = CFrame.fromAxisAngle(data.rotationAxis, data.rotationAngle)
+        if config.YawMaxTorque > 0 then
+            alignOrientation.MaxTorque = config.YawMaxTorque
+        else
+            alignOrientation.MaxTorque = math.huge
+        end
+        alignOrientation.Responsiveness = math.max(config.YawResponsiveness, 0)
+        if config.YawDamping > 0 then
+            alignOrientation.MaxAngularVelocity = config.YawDamping
+        else
+            alignOrientation.MaxAngularVelocity = math.huge
+        end
+        alignOrientation.CFrame = rotation
         return
     end
 
-    local bodyGyro = ensureBodyGyro(part, data)
-    local maxSpeed = math.max(config.MaxRotationSpeed, 0)
-    local speed = config.RotationSpeed
-    if maxSpeed > 0 then
-        speed = math.clamp(speed, -maxSpeed, maxSpeed)
+    if data.alignOrientation and not config.EnableRotation and not config.LockYawToInitial then
+        data.alignOrientation:Destroy()
+        data.alignOrientation = nil
     end
-    data.rotationAngle += math.rad(speed) * dt
-    local rotation = CFrame.fromAxisAngle(data.rotationAxis, data.rotationAngle)
-    bodyGyro.MaxTorque = config.MaxForce
-    bodyGyro.CFrame = rotation
+
+    if not config.EnableRotation and not config.LockYawToInitial and data.orientationAttachment then
+        data.orientationAttachment:Destroy()
+        data.orientationAttachment = nil
+    end
+
+    if config.LockYawToInitial and not config.EnableRotation and config.YawMaxTorque > 0 then
+        local alignOrientation = ensureAlignOrientation(part, data)
+        alignOrientation.MaxTorque = config.YawMaxTorque
+        alignOrientation.Responsiveness = math.max(config.YawResponsiveness, 0)
+        if config.YawDamping > 0 then
+            alignOrientation.MaxAngularVelocity = config.YawDamping
+        else
+            alignOrientation.MaxAngularVelocity = math.huge
+        end
+
+        if not data.horizontalForward then
+            data.horizontalForward = computeHorizontalForward(part)
+        end
+
+        local forward = data.horizontalForward or Vector3.new(0, 0, -1)
+        local targetPosition = part.Position + forward
+        alignOrientation.CFrame = CFrame.lookAt(part.Position, targetPosition, Vector3.yAxis)
+    elseif config.LockYawToInitial and not config.EnableRotation and config.YawMaxTorque <= 0 and data.orientationAttachment then
+        data.orientationAttachment:Destroy()
+        data.orientationAttachment = nil
+    elseif not config.EnableRotation and data.alignOrientation then
+        data.alignOrientation:Destroy()
+        data.alignOrientation = nil
+        if not config.LockYawToInitial and data.orientationAttachment then
+            data.orientationAttachment:Destroy()
+            data.orientationAttachment = nil
+        end
+    end
+
+    local angularVelocity = part.AssemblyAngularVelocity
+    local adjusted = false
+
+    if config.PreventYawSpin and math.abs(angularVelocity.Y) > 1e-4 then
+        angularVelocity = Vector3.new(angularVelocity.X, 0, angularVelocity.Z)
+        adjusted = true
+    end
+
+    if config.AngularDamping > 0 then
+        local damping = math.clamp(1 - (config.AngularDamping * dt), 0, 1)
+        if damping < 1 then
+            angularVelocity = Vector3.new(angularVelocity.X * damping, angularVelocity.Y, angularVelocity.Z * damping)
+            adjusted = true
+        end
+    end
+
+    if adjusted then
+        part.AssemblyAngularVelocity = angularVelocity
+    end
 end
 
 local function vectorsDiffer(a: Vector3?, b: Vector3?): boolean
@@ -556,7 +691,7 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
     end
 
     local bodyPosition = ensureBodyPosition(part, data)
-    local maxForce = config.MaxForce
+    local maxForce = getBodyPositionMaxForce()
     if vectorsDiffer(data.lastMaxForce, maxForce) then
         bodyPosition.MaxForce = maxForce
         data.lastMaxForce = maxForce
@@ -564,11 +699,11 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
 
     local basePosition = Vector3.new(part.Position.X, surfaceY + config.OffsetY, part.Position.Z)
 
-    if config.EnableWaveEffect then
-        if config.WaveAmplitude ~= 0 and config.WaveFrequency ~= 0 then
-            local waveOffset = math.sin((now * config.WaveFrequency) + data.waveOffset) * config.WaveAmplitude
-            if waveOffset ~= 0 then
-                basePosition += Vector3.new(0, waveOffset, 0)
+    if config.EnableBobbing then
+        if config.BobbingAmplitude ~= 0 and config.BobbingFrequency ~= 0 then
+            local bobOffset = math.sin((now * config.BobbingFrequency) + data.waveOffset) * config.BobbingAmplitude
+            if bobOffset ~= 0 then
+                basePosition += Vector3.new(0, bobOffset, 0)
             end
         end
     end

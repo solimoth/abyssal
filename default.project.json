@@ -13,7 +13,7 @@
       "Config": { "$path": "src/ServerScriptService/Config" },
       "Systems": { "$path": "src/ServerScriptService/Systems" },
       "Security": { "$path": "src/ServerScriptService/Security" },
-      "WaterFloatService": { "$path": "src/ServerScriptService/WaterFloatService.server.lua" }
+      "FloatSystem": { "$path": "src/ServerScriptService/FloatSystem" }
     },
     "StarterPlayer": {
       "$className": "StarterPlayer",

@@ -43,6 +43,7 @@ type PartData = {
     rotationAngle: number,
     rotationAxis: Vector3,
     tagged: boolean,
+    part: BasePart?,
 }
 
 type SourceInfo = {
@@ -57,7 +58,8 @@ type MonitorInfo = {
     destroyingConn: RBXScriptConnection?,
 }
 
-local trackedParts: { [BasePart]: PartData } = {}
+local trackedParts: { [Instance]: PartData } = {}
+local partLookup: { [BasePart]: Instance } = {}
 local sourceRegistry: { [Instance]: SourceInfo } = {}
 local monitorRegistry: { [Instance]: MonitorInfo } = {}
 local initialized = false
@@ -86,11 +88,74 @@ function FloatingModule.TogglePartFloating(enable: boolean)
     debugPrint("Part floating " .. (enable and "enabled" or "disabled"))
 end
 
-local function cleanupPart(part: BasePart)
+local function resolveBasePart(part: Instance, data: PartData?): BasePart?
+    if part:IsA("BasePart") then
+        return part
+    end
+
+    if data and data.part then
+        return data.part
+    end
+
+    local parent = part.Parent
+    if parent and parent:IsA("BasePart") then
+        return parent
+    end
+
+    return nil
+end
+
+local function findTrackedEntryForBasePart(basePart: BasePart): (Instance?, PartData?)
+    for trackedPart, trackedData in pairs(trackedParts) do
+        local resolved = resolveBasePart(trackedPart, trackedData)
+        if resolved == basePart then
+            return trackedPart, trackedData
+        end
+    end
+
+    return nil, nil
+end
+
+local function cleanupPart(part: Instance)
     local data = trackedParts[part]
+
+    if not data and part:IsA("BasePart") then
+        local lookup = partLookup[part]
+        if lookup then
+            local lookupData = trackedParts[lookup]
+            if lookupData then
+                part = lookup
+                data = lookupData
+            else
+                partLookup[part] = nil
+            end
+        end
+    end
+
+    if not data and part:IsA("BasePart") then
+        local bodyPosition = part:FindFirstChild("FloatingBodyPosition")
+        if bodyPosition and bodyPosition:IsA("BodyPosition") then
+            local bodyData = trackedParts[bodyPosition]
+            if bodyData then
+                part = bodyPosition
+                data = bodyData
+            end
+        end
+    end
+
+    if not data and part:IsA("BasePart") then
+        local trackedPart, trackedData = findTrackedEntryForBasePart(part)
+        if trackedPart and trackedData then
+            part = trackedPart
+            data = trackedData
+        end
+    end
+
     if not data then
         return
     end
+
+    local basePart = resolveBasePart(part, data)
 
     if data.bodyPosition then
         data.bodyPosition:Destroy()
@@ -100,11 +165,19 @@ local function cleanupPart(part: BasePart)
         data.bodyGyro:Destroy()
     end
 
-    if data.tagged then
-        CollectionService:RemoveTag(part, FLOAT_TAG)
+    if basePart and data.tagged then
+        CollectionService:RemoveTag(basePart, FLOAT_TAG)
     end
 
     trackedParts[part] = nil
+
+    if basePart then
+        partLookup[basePart] = nil
+    end
+
+    if basePart and basePart ~= part then
+        trackedParts[basePart] = nil
+    end
 end
 
 local function removeBodyMovers(part: BasePart, data: PartData)
@@ -150,7 +223,36 @@ local function registerPart(part: BasePart, source: Instance)
         return
     end
 
-    local data = trackedParts[part]
+    local trackedPart: Instance = partLookup[part] or part
+    local data = trackedParts[trackedPart]
+
+    if not data and trackedPart ~= part then
+        partLookup[part] = nil
+        trackedPart = part
+        data = trackedParts[part]
+    end
+
+    if not data then
+        local bodyPosition = part:FindFirstChild("FloatingBodyPosition")
+        if bodyPosition and bodyPosition:IsA("BodyPosition") then
+            local bodyData = trackedParts[bodyPosition]
+            if bodyData then
+                trackedPart = bodyPosition
+                data = bodyData
+                trackedParts[bodyPosition] = nil
+            end
+        end
+    end
+
+    if not data and partLookup[part] then
+        local existingPart, existingData = findTrackedEntryForBasePart(part)
+        if existingPart and existingData then
+            trackedParts[existingPart] = nil
+            data = existingData
+            trackedPart = existingPart
+        end
+    end
+
     if not data then
         local axis = config.RotationAxis.Magnitude > 0 and config.RotationAxis.Unit or Vector3.new(0, 1, 0)
         data = {
@@ -161,9 +263,17 @@ local function registerPart(part: BasePart, source: Instance)
             rotationAngle = 0,
             rotationAxis = axis,
             tagged = false,
+            part = part,
         }
         trackedParts[part] = data
+    elseif trackedPart ~= part then
+        trackedParts[trackedPart] = nil
+        trackedParts[part] = data
     end
+
+    data.part = part
+
+    partLookup[part] = part
 
     data.sources[source] = true
 
@@ -176,7 +286,34 @@ local function registerPart(part: BasePart, source: Instance)
 end
 
 local function unregisterPart(part: BasePart, source: Instance)
-    local data = trackedParts[part]
+    local trackedPart: Instance = partLookup[part] or part
+    local data = trackedParts[trackedPart]
+
+    if not data and trackedPart ~= part then
+        partLookup[part] = nil
+        trackedPart = part
+        data = trackedParts[part]
+    end
+
+    if not data then
+        local bodyPosition = part:FindFirstChild("FloatingBodyPosition")
+        if bodyPosition and bodyPosition:IsA("BodyPosition") then
+            local bodyData = trackedParts[bodyPosition]
+            if bodyData then
+                trackedPart = bodyPosition
+                data = bodyData
+            end
+        end
+    end
+
+    if not data and partLookup[part] then
+        local existingPart, existingData = findTrackedEntryForBasePart(part)
+        if existingPart and existingData then
+            trackedPart = existingPart
+            data = existingData
+        end
+    end
+
     if not data then
         return
     end
@@ -187,7 +324,7 @@ local function unregisterPart(part: BasePart, source: Instance)
         return
     end
 
-    cleanupPart(part)
+    cleanupPart(trackedPart)
 end
 
 local function gatherModelParts(model: Model)
@@ -434,7 +571,9 @@ end
 
 local function heartbeatUpdate(dt: number)
     for part, data in pairs(trackedParts) do
-        if not part.Parent or not part:IsDescendantOf(Workspace) then
+        local basePart = resolveBasePart(part, data)
+
+        if not basePart or not basePart.Parent or not basePart:IsDescendantOf(Workspace) then
             cleanupPart(part)
             continue
         end
@@ -444,12 +583,15 @@ local function heartbeatUpdate(dt: number)
             continue
         end
 
-        if part.Anchored then
-            removeBodyMovers(part, data)
+        data.part = basePart
+        partLookup[basePart] = part
+
+        if basePart.Anchored then
+            removeBodyMovers(basePart, data)
             continue
         end
 
-        applyForces(part, data, dt)
+        applyForces(basePart, data, dt)
     end
 end
 

@@ -36,6 +36,7 @@ local depthOffset
 local lastSurfaced = false
 
 local SURFACE_RESPONSIVENESS = 6
+local SURFACE_FLOAT_OFFSET = 0 -- keep the humanoid root aligned with the wave crest so the swimmer rides midway on the surface
 
 local function humStates(activate: boolean, newState: Enum.HumanoidStateType)
     humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, activate)
@@ -117,7 +118,7 @@ function swimModule:Start()
                     depthOffset = nil
                 else
                     if not lastSurfaced or surfaceOffset == nil then
-                        surfaceOffset = rootPart.Position.Y - surfacedHeight
+                        surfaceOffset = SURFACE_FLOAT_OFFSET
                     end
 
                     local targetY = surfacedHeight + surfaceOffset

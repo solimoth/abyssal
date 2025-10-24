@@ -307,7 +307,7 @@ RunService.Heartbeat:Connect(function(dt)
         local targetDepth = halfHeight + part.Size.Y * data.weightAlpha * HEAVY_DEPTH_MULTIPLIER
 
         local gravity = Workspace.Gravity
-        local mass = part.AssemblyMass
+        local mass = part:GetMass()
         local verticalVelocity = part.AssemblyLinearVelocity.Y
         local horizontalVelocity = Vector3.new(part.AssemblyLinearVelocity.X, 0, part.AssemblyLinearVelocity.Z)
 

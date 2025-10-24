@@ -21,9 +21,15 @@ local config = {
     RotationAxis = Vector3.new(0, 1, 0),
     MaxRotationSpeed = 1,
     DampingFactor = 0,
-    EnableWaveEffect = true,
-    WaveFrequency = 2,
-    WaveAmplitude = 0.1,
+    EnableBobbing = true,
+    BobbingFrequency = 2,
+    BobbingAmplitude = 0.1,
+    LockYawToInitial = true,
+    YawMaxTorque = 5000,
+    YawResponsiveness = 2000,
+    YawDamping = 200,
+    PreventYawSpin = true,
+    AngularDamping = 2,
     EnableDrag = false,
     DragCoefficient = 0.05,
     EnableBuoyancyVariation = false,
@@ -42,6 +48,7 @@ type PartData = {
     waveOffset: number,
     rotationAngle: number,
     rotationAxis: Vector3,
+    horizontalForward: Vector3?,
     tagged: boolean,
     part: BasePart?,
     lastTargetPosition: Vector3?,
@@ -105,6 +112,21 @@ local function resolveBasePart(part: Instance, data: PartData?): BasePart?
     end
 
     return nil
+end
+
+local function computeHorizontalForward(part: BasePart): Vector3
+    local forward = part.CFrame.LookVector
+    local horizontal = Vector3.new(forward.X, 0, forward.Z)
+
+    if horizontal.Magnitude < 1e-4 then
+        local right = part.CFrame.RightVector
+        horizontal = Vector3.new(right.X, 0, right.Z)
+        if horizontal.Magnitude < 1e-4 then
+            horizontal = Vector3.new(0, 0, -1)
+        end
+    end
+
+    return horizontal.Unit
 end
 
 local function findTrackedEntryForBasePart(basePart: BasePart): (Instance?, PartData?)
@@ -265,6 +287,8 @@ local function registerPart(part: BasePart, source: Instance)
 
     if not data then
         local axis = config.RotationAxis.Magnitude > 0 and config.RotationAxis.Unit or Vector3.new(0, 1, 0)
+        local horizontalForward = computeHorizontalForward(part)
+
         data = {
             sources = {},
             bodyPosition = nil,
@@ -276,6 +300,7 @@ local function registerPart(part: BasePart, source: Instance)
             part = part,
             lastTargetPosition = nil,
             lastMaxForce = nil,
+            horizontalForward = horizontalForward,
         }
         trackedParts[part] = data
     elseif trackedPart ~= part then
@@ -284,6 +309,10 @@ local function registerPart(part: BasePart, source: Instance)
     end
 
     data.part = part
+
+    if not data.horizontalForward then
+        data.horizontalForward = computeHorizontalForward(part)
+    end
 
     partLookup[part] = part
 
@@ -512,24 +541,62 @@ local function monitorInstance(instance: Instance)
 end
 
 local function updateRotation(part: BasePart, data: PartData, dt: number)
-    if not config.EnableRotation then
-        if data.bodyGyro then
-            data.bodyGyro:Destroy()
-            data.bodyGyro = nil
+    if config.EnableRotation then
+        local bodyGyro = ensureBodyGyro(part, data)
+        local maxSpeed = math.max(config.MaxRotationSpeed, 0)
+        local speed = config.RotationSpeed
+        if maxSpeed > 0 then
+            speed = math.clamp(speed, -maxSpeed, maxSpeed)
         end
+        data.rotationAngle += math.rad(speed) * dt
+        local rotation = CFrame.fromAxisAngle(data.rotationAxis, data.rotationAngle)
+        bodyGyro.MaxTorque = config.MaxForce
+        bodyGyro.CFrame = rotation
         return
     end
 
-    local bodyGyro = ensureBodyGyro(part, data)
-    local maxSpeed = math.max(config.MaxRotationSpeed, 0)
-    local speed = config.RotationSpeed
-    if maxSpeed > 0 then
-        speed = math.clamp(speed, -maxSpeed, maxSpeed)
+    if data.bodyGyro and not config.LockYawToInitial then
+        data.bodyGyro:Destroy()
+        data.bodyGyro = nil
     end
-    data.rotationAngle += math.rad(speed) * dt
-    local rotation = CFrame.fromAxisAngle(data.rotationAxis, data.rotationAngle)
-    bodyGyro.MaxTorque = config.MaxForce
-    bodyGyro.CFrame = rotation
+
+    if config.LockYawToInitial and config.YawMaxTorque > 0 then
+        local bodyGyro = ensureBodyGyro(part, data)
+        bodyGyro.MaxTorque = Vector3.new(0, config.YawMaxTorque, 0)
+        bodyGyro.P = config.YawResponsiveness
+        bodyGyro.D = config.YawDamping
+
+        if not data.horizontalForward then
+            data.horizontalForward = computeHorizontalForward(part)
+        end
+
+        local forward = data.horizontalForward or Vector3.new(0, 0, -1)
+        local targetPosition = part.Position + forward
+        bodyGyro.CFrame = CFrame.lookAt(part.Position, targetPosition, Vector3.yAxis)
+    elseif data.bodyGyro then
+        data.bodyGyro:Destroy()
+        data.bodyGyro = nil
+    end
+
+    local angularVelocity = part.AssemblyAngularVelocity
+    local adjusted = false
+
+    if config.PreventYawSpin and math.abs(angularVelocity.Y) > 1e-4 then
+        angularVelocity = Vector3.new(angularVelocity.X, 0, angularVelocity.Z)
+        adjusted = true
+    end
+
+    if config.AngularDamping > 0 then
+        local damping = math.clamp(1 - (config.AngularDamping * dt), 0, 1)
+        if damping < 1 then
+            angularVelocity = Vector3.new(angularVelocity.X * damping, angularVelocity.Y, angularVelocity.Z * damping)
+            adjusted = true
+        end
+    end
+
+    if adjusted then
+        part.AssemblyAngularVelocity = angularVelocity
+    end
 end
 
 local function vectorsDiffer(a: Vector3?, b: Vector3?): boolean
@@ -564,11 +631,11 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
 
     local basePosition = Vector3.new(part.Position.X, surfaceY + config.OffsetY, part.Position.Z)
 
-    if config.EnableWaveEffect then
-        if config.WaveAmplitude ~= 0 and config.WaveFrequency ~= 0 then
-            local waveOffset = math.sin((now * config.WaveFrequency) + data.waveOffset) * config.WaveAmplitude
-            if waveOffset ~= 0 then
-                basePosition += Vector3.new(0, waveOffset, 0)
+    if config.EnableBobbing then
+        if config.BobbingAmplitude ~= 0 and config.BobbingFrequency ~= 0 then
+            local bobOffset = math.sin((now * config.BobbingFrequency) + data.waveOffset) * config.BobbingAmplitude
+            if bobOffset ~= 0 then
+                basePosition += Vector3.new(0, bobOffset, 0)
             end
         end
     end

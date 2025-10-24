@@ -11,9 +11,10 @@ local BoatSplashService = {}
 
 local boatStates = setmetatable({}, { __mode = "k" })
 
-local ENTRY_HEIGHT_THRESHOLD = 0.85
-local EXIT_HEIGHT_THRESHOLD = 0.2
-local MIN_DOWNWARD_SPEED = 8
+local DEFAULT_ENTRY_HEIGHT = 0.5
+local DEFAULT_EXIT_HEIGHT = 0.1
+local DEFAULT_MIN_DROP = 0.3
+local DEFAULT_MIN_DOWNWARD_SPEED = 6
 local HORIZONTAL_WEIGHT = 0.35
 local MAX_VERTICAL_SPEED = 60
 local MAX_HORIZONTAL_REFERENCE = 50
@@ -21,75 +22,192 @@ local SPLASH_COOLDOWN = 0.9
 local MAX_VISIBILITY_DISTANCE = 250
 
 local ZERO_VECTOR = Vector3.new()
+local WATER_SURFACE_OFFSET_ATTRIBUTE = "WaterSurfaceOffset"
+
+local SAMPLE_POINTS = {
+        {
+                key = "Primary",
+                entryHeight = 0.5,
+                exitHeight = 0.1,
+                minDrop = 0.35,
+                minDownwardSpeed = 5,
+                cooldown = 0.75,
+                intensityMultiplier = 1,
+                getPart = function(boat)
+                        return boat.PrimaryPart
+                end,
+        },
+        {
+                key = "BoatFront",
+                partName = "BoatFront",
+                entryHeight = 0.4,
+                exitHeight = 0,
+                minDrop = 0.25,
+                minDownwardSpeed = 3,
+                cooldown = 0.6,
+                intensityMultiplier = 1.1,
+        },
+        {
+                key = "BoatBack",
+                partName = "BoatBack",
+                entryHeight = 0.4,
+                exitHeight = 0,
+                minDrop = 0.25,
+                minDownwardSpeed = 3,
+                cooldown = 0.6,
+                intensityMultiplier = 1.1,
+        },
+}
 
 local function getBoatState(boat)
-	local state = boatStates[boat]
-	if not state then
-		state = {
-			lastHeight = nil,
-			lastSplashTime = 0,
-		}
-		boatStates[boat] = state
-	end
+        local state = boatStates[boat]
+        if not state then
+                state = {
+                        samples = {},
+                }
+                boatStates[boat] = state
+        end
 
-	return state
+        return state
 end
 
-local function computeIntensity(downwardSpeed, horizontalSpeed)
-	downwardSpeed = math.max(downwardSpeed, 0)
-	horizontalSpeed = math.max(horizontalSpeed, 0)
+local function computeIntensity(downwardSpeed, horizontalSpeed, minDownwardSpeed)
+        minDownwardSpeed = math.max(minDownwardSpeed or DEFAULT_MIN_DOWNWARD_SPEED, 0)
+        downwardSpeed = math.max(downwardSpeed, 0)
+        horizontalSpeed = math.max(horizontalSpeed, 0)
 
-	local combined = downwardSpeed + (horizontalSpeed * HORIZONTAL_WEIGHT)
-	local maxCombined = MAX_VERTICAL_SPEED + (MAX_HORIZONTAL_REFERENCE * HORIZONTAL_WEIGHT)
+        local combined = downwardSpeed + (horizontalSpeed * HORIZONTAL_WEIGHT)
+        local maxCombined = MAX_VERTICAL_SPEED + (MAX_HORIZONTAL_REFERENCE * HORIZONTAL_WEIGHT)
 
-	if maxCombined <= 0 then
-		return 0
-	end
+        if maxCombined <= minDownwardSpeed then
+                return 0
+        end
 
-	local normalized = (combined - MIN_DOWNWARD_SPEED) / (maxCombined - MIN_DOWNWARD_SPEED)
-	return math.clamp(normalized, 0, 1)
+        local normalized = (combined - minDownwardSpeed) / (maxCombined - minDownwardSpeed)
+        return math.clamp(normalized, 0, 1)
+end
+
+local function getSamplerPart(boat, sampler)
+        if sampler.getPart then
+                return sampler.getPart(boat)
+        end
+
+        if sampler.partName then
+                return boat:FindFirstChild(sampler.partName)
+        end
+
+        return nil
+end
+
+local function getVelocity(part)
+        if not part then
+                return ZERO_VECTOR
+        end
+
+        local success, velocity = pcall(part.GetVelocityAtPosition, part, part.Position)
+        if success and typeof(velocity) == "Vector3" then
+                return velocity
+        end
+
+        if part.AssemblyLinearVelocity then
+                return part.AssemblyLinearVelocity
+        end
+
+        if part.Velocity then
+                return part.Velocity
+        end
+
+        return ZERO_VECTOR
+end
+
+local function processSample(player, boat, sampler, state, baseOffset)
+        local part = getSamplerPart(boat, sampler)
+        if not part or not part.Parent or not part:IsA("BasePart") then
+                local sampleState = state.samples[sampler.key]
+                if sampleState then
+                        sampleState.lastHeight = nil
+                end
+                return
+        end
+
+        local offset = baseOffset
+        local partOffset = part:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+        if typeof(partOffset) == "number" then
+                offset = partOffset
+        end
+
+        local success, waterLevel = pcall(WaterPhysics.GetWaterLevel, part.Position)
+        if not success or typeof(waterLevel) ~= "number" then
+                return
+        end
+
+        local sampleState = state.samples[sampler.key]
+        if not sampleState then
+                sampleState = {
+                        lastHeight = nil,
+                        lastSplashTime = 0,
+                }
+                state.samples[sampler.key] = sampleState
+        end
+
+        local surfaceY = part.Position.Y + (typeof(offset) == "number" and offset or 0)
+        local heightDelta = surfaceY - waterLevel
+
+        local velocity = getVelocity(part)
+        local downwardSpeed = math.max(0, -velocity.Y)
+        local horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+
+        local entryHeight = sampler.entryHeight or DEFAULT_ENTRY_HEIGHT
+        local exitHeight = sampler.exitHeight or DEFAULT_EXIT_HEIGHT
+        local minDrop = sampler.minDrop or DEFAULT_MIN_DROP
+        local minDownwardSpeed = sampler.minDownwardSpeed or DEFAULT_MIN_DOWNWARD_SPEED
+        local cooldown = sampler.cooldown or SPLASH_COOLDOWN
+
+        local lastHeight = sampleState.lastHeight
+        if lastHeight ~= nil then
+                local drop = lastHeight - heightDelta
+                local crossedSurface = lastHeight > entryHeight and heightDelta <= exitHeight
+                local strongDrop = drop >= minDrop
+                local nowBelow = heightDelta <= exitHeight
+
+                if (crossedSurface or (nowBelow and strongDrop)) and downwardSpeed > minDownwardSpeed then
+                        local now = tick()
+                        if now - sampleState.lastSplashTime >= cooldown then
+                                local intensity = computeIntensity(downwardSpeed, horizontalSpeed, minDownwardSpeed)
+                                if intensity > 0 then
+                                        local dropReference = sampler.dropReference or (minDrop + 0.55)
+                                        local dropFactor = math.clamp(drop / dropReference, 0, 1.5)
+                                        intensity = math.clamp(intensity * (0.6 + dropFactor * 0.6) * (sampler.intensityMultiplier or 1), 0, 1)
+
+                                        BoatSplashService._dispatchSplash(
+                                                Vector3.new(part.Position.X, waterLevel, part.Position.Z),
+                                                intensity,
+                                                player
+                                        )
+
+                                        sampleState.lastSplashTime = now
+                                end
+                        end
+                end
+        end
+
+        sampleState.lastHeight = heightDelta
 end
 
 function BoatSplashService.ProcessBoat(player, boat, primaryPart, waterSurfaceOffset)
-	if not boat or not primaryPart or not primaryPart.Parent then
-		return
-	end
+        if not boat or not primaryPart or not primaryPart.Parent then
+                return
+        end
 
-	local success, waterLevel = pcall(WaterPhysics.GetWaterLevel, primaryPart.Position)
-	if not success or typeof(waterLevel) ~= "number" then
-		return
-	end
+        local state = getBoatState(boat)
+        if not state.samples then
+                state.samples = {}
+        end
+        local offset = typeof(waterSurfaceOffset) == "number" and waterSurfaceOffset or 0
 
-	local state = getBoatState(boat)
-	local offset = typeof(waterSurfaceOffset) == "number" and waterSurfaceOffset or 0
-	local boatSurfaceY = primaryPart.Position.Y + offset
-	local heightDelta = boatSurfaceY - waterLevel
-
-	local velocity = primaryPart.AssemblyLinearVelocity or primaryPart.Velocity or ZERO_VECTOR
-	local downwardSpeed = math.max(0, -velocity.Y)
-	local horizontalSpeed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
-
-	if state.lastHeight ~= nil then
-		local wasAbove = state.lastHeight > ENTRY_HEIGHT_THRESHOLD
-		local nowBelow = heightDelta <= EXIT_HEIGHT_THRESHOLD
-
-		if wasAbove and nowBelow and downwardSpeed > MIN_DOWNWARD_SPEED then
-			local now = tick()
-			if now - state.lastSplashTime >= SPLASH_COOLDOWN then
-				local intensity = computeIntensity(downwardSpeed, horizontalSpeed)
-				if intensity > 0 then
-					BoatSplashService._dispatchSplash(
-						Vector3.new(primaryPart.Position.X, waterLevel, primaryPart.Position.Z),
-						intensity,
-						player
-					)
-					state.lastSplashTime = now
-				end
-			end
-		end
-	end
-
-	state.lastHeight = heightDelta
+        for _, sampler in ipairs(SAMPLE_POINTS) do
+                processSample(player, boat, sampler, state, offset)
+        end
 end
 
 function BoatSplashService._dispatchSplash(position, intensity, owner)

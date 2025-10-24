@@ -1,6 +1,7 @@
 --!strict
 
 local CollectionService = game:GetService("CollectionService")
+local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local Workspace = game:GetService("Workspace")
@@ -40,6 +41,10 @@ local config = {
 	ActivationPadding = 0.5,
 	HorizontalMaxForce = 2500,
 	VerticalMaxForce = math.huge,
+	EnableLOD = true,
+	LODActivationRadius = 160,
+	LODDeactivationRadius = 210,
+	LODCheckInterval = 0.35,
 }
 
 type PartData = {
@@ -55,6 +60,8 @@ type PartData = {
 	part: BasePart?,
 	lastTargetPosition: Vector3?,
 	lastMaxForce: Vector3?,
+	isActive: boolean?,
+	nextDistanceCheck: number?,
 }
 
 type SourceInfo = {
@@ -77,6 +84,7 @@ local initialized = false
 local heartbeatConn: RBXScriptConnection?
 
 local FLOAT_TAG = "WaterFloat"
+local playerPositionBuffer: { Vector3 } = {}
 
 local function getBodyPositionMaxForce(): Vector3
 	local horizontal = math.max(config.HorizontalMaxForce, 0)
@@ -219,6 +227,9 @@ local function cleanupPart(part: Instance)
 	if basePart and basePart ~= part then
 		trackedParts[basePart] = nil
 	end
+
+	data.isActive = nil
+	data.nextDistanceCheck = nil
 end
 
 local function removeBodyMovers(part: BasePart, data: PartData)
@@ -343,6 +354,8 @@ local function registerPart(part: BasePart, source: Instance)
 			lastTargetPosition = nil,
 			lastMaxForce = nil,
 			horizontalForward = horizontalForward,
+			isActive = nil,
+			nextDistanceCheck = nil,
 		}
 		trackedParts[part] = data
 	elseif trackedPart ~= part then
@@ -359,6 +372,14 @@ local function registerPart(part: BasePart, source: Instance)
 	partLookup[part] = part
 
 	data.sources[source] = true
+
+	if config.EnableLOD then
+		data.isActive = false
+		data.nextDistanceCheck = 0
+	else
+		data.isActive = true
+		data.nextDistanceCheck = nil
+	end
 
 	if not data.tagged then
 		CollectionService:AddTag(part, FLOAT_TAG)
@@ -676,6 +697,84 @@ local function vectorsDiffer(a: Vector3?, b: Vector3?): boolean
 	return math.abs(delta.X) > 1e-4 or math.abs(delta.Y) > 1e-4 or math.abs(delta.Z) > 1e-4
 end
 
+local function gatherActivePlayerPositions(buffer: { Vector3 }): { Vector3 }
+	table.clear(buffer)
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		local character = player.Character
+		if not character then
+			continue
+		end
+
+		local root = character:FindFirstChild("HumanoidRootPart")
+		if root and root:IsA("BasePart") then
+			buffer[#buffer + 1] = root.Position
+		end
+	end
+
+	return buffer
+end
+
+local function shouldPartBeActive(partPosition: Vector3, playerPositions: { Vector3 }, wasActive: boolean): boolean
+	if #playerPositions == 0 then
+		return false
+	end
+
+	local activationRadius = math.max(config.LODActivationRadius, 0)
+	local deactivationRadius = math.max(config.LODDeactivationRadius, activationRadius)
+
+	local activationThreshold = activationRadius * activationRadius
+	local deactivationThreshold = deactivationRadius * deactivationRadius
+	local threshold = wasActive and deactivationThreshold or activationThreshold
+
+	for _, position in ipairs(playerPositions) do
+		local offset = partPosition - position
+		if offset:Dot(offset) <= threshold then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function updatePartActivation(basePart: BasePart, data: PartData, now: number, playerPositions: { Vector3 }): boolean
+	if not config.EnableLOD then
+		data.isActive = true
+		data.nextDistanceCheck = nil
+		return true
+	end
+
+	local nextCheck = data.nextDistanceCheck or 0
+	if now < nextCheck and data.isActive ~= nil then
+		return data.isActive
+	end
+
+	local interval = math.max(config.LODCheckInterval, 0)
+	if interval == 0 then
+		data.nextDistanceCheck = now
+	else
+		data.nextDistanceCheck = now + interval
+	end
+
+	local wasActive = data.isActive == true
+	local shouldActivate = shouldPartBeActive(basePart.Position, playerPositions, wasActive)
+
+	if shouldActivate then
+		if not wasActive then
+			data.lastTargetPosition = nil
+			data.lastMaxForce = nil
+		end
+		data.isActive = true
+	else
+		if wasActive then
+			removeBodyMovers(basePart, data)
+		end
+		data.isActive = false
+	end
+
+	return data.isActive
+end
+
 local function applyForces(part: BasePart, data: PartData, dt: number, now: number)
 	local surfaceY = WaterPhysics.TryGetWaterSurface(part.Position)
 	if not surfaceY then
@@ -745,6 +844,8 @@ end
 
 local function heartbeatUpdate(dt: number)
 	local now = Workspace:GetServerTimeNow()
+	local playerPositions = config.EnableLOD and gatherActivePlayerPositions(playerPositionBuffer) or playerPositionBuffer
+
 	for part, data in pairs(trackedParts) do
 		local basePart = resolveBasePart(part, data)
 
@@ -763,6 +864,13 @@ local function heartbeatUpdate(dt: number)
 
 		if basePart.Anchored then
 			removeBodyMovers(basePart, data)
+			continue
+		end
+
+		if not updatePartActivation(basePart, data, now, playerPositions) then
+			if data.bodyPosition or data.alignOrientation or data.orientationAttachment then
+				removeBodyMovers(basePart, data)
+			end
 			continue
 		end
 
@@ -787,7 +895,5 @@ function FloatingModule.Initialize()
 
 	debugPrint("FloatingModule initialized")
 end
-
-return FloatingModule
 
 return FloatingModule

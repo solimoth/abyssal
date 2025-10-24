@@ -416,9 +416,7 @@ local function applyForces(part: BasePart, data: PartData, dt: number)
     bodyPosition.Position = basePosition
 
     if config.EnableCustomGravity then
-        bodyPosition.Velocity = config.CustomGravity
-    else
-        bodyPosition.Velocity = Vector3.zero
+        part.Velocity = part.Velocity + (config.CustomGravity * dt)
     end
 
     updateRotation(part, data, dt)

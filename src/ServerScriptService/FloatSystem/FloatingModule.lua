@@ -10,7 +10,6 @@ local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 local FloatingModule = {}
 
 local config = {
-    MaxForce = Vector3.new(math.huge, math.huge, math.huge),
     OffsetY = 0.05,
     EnableRotation = false,
     RotationSpeed = 0.5,
@@ -39,6 +38,8 @@ local config = {
     EnableCustomGravity = false,
     CustomGravity = Vector3.new(0, 0, 0),
     ActivationPadding = 0.5,
+    HorizontalMaxForce = 2500,
+    VerticalMaxForce = math.huge,
 }
 
 type PartData = {
@@ -75,6 +76,12 @@ local initialized = false
 local heartbeatConn: RBXScriptConnection?
 
 local FLOAT_TAG = "WaterFloat"
+
+local function getBodyPositionMaxForce(): Vector3
+    local horizontal = math.max(config.HorizontalMaxForce, 0)
+    local vertical = math.max(config.VerticalMaxForce, 0)
+    return Vector3.new(horizontal, vertical, horizontal)
+end
 
 local function debugPrint(message: string)
     if config.DebugMode then
@@ -227,10 +234,10 @@ local function ensureBodyPosition(part: BasePart, data: PartData): BodyPosition
     if not bodyPosition then
         bodyPosition = Instance.new("BodyPosition")
         bodyPosition.Name = "FloatingBodyPosition"
-        bodyPosition.MaxForce = config.MaxForce
+        bodyPosition.MaxForce = getBodyPositionMaxForce()
         bodyPosition.Parent = part
         data.bodyPosition = bodyPosition
-        data.lastMaxForce = config.MaxForce
+        data.lastMaxForce = bodyPosition.MaxForce
         data.lastTargetPosition = nil
     end
 
@@ -242,7 +249,7 @@ local function ensureBodyGyro(part: BasePart, data: PartData): BodyGyro
     if not bodyGyro then
         bodyGyro = Instance.new("BodyGyro")
         bodyGyro.Name = "FloatingBodyGyro"
-        bodyGyro.MaxTorque = config.MaxForce
+        bodyGyro.MaxTorque = Vector3.zero
         bodyGyro.Parent = part
         data.bodyGyro = bodyGyro
     end
@@ -550,7 +557,7 @@ local function updateRotation(part: BasePart, data: PartData, dt: number)
         end
         data.rotationAngle += math.rad(speed) * dt
         local rotation = CFrame.fromAxisAngle(data.rotationAxis, data.rotationAngle)
-        bodyGyro.MaxTorque = config.MaxForce
+        bodyGyro.MaxTorque = getBodyPositionMaxForce()
         bodyGyro.CFrame = rotation
         return
     end
@@ -623,7 +630,7 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
     end
 
     local bodyPosition = ensureBodyPosition(part, data)
-    local maxForce = config.MaxForce
+    local maxForce = getBodyPositionMaxForce()
     if vectorsDiffer(data.lastMaxForce, maxForce) then
         bodyPosition.MaxForce = maxForce
         data.lastMaxForce = maxForce

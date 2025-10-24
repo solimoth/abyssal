@@ -45,8 +45,7 @@ local config = {
 type PartData = {
     sources: { [Instance]: boolean },
     bodyPosition: BodyPosition?,
-    alignOrientation: AlignOrientation?,
-    orientationAttachment: Attachment?,
+    bodyGyro: BodyGyro?,
     waveOffset: number,
     rotationAngle: number,
     rotationAxis: Vector3,
@@ -196,14 +195,9 @@ local function cleanupPart(part: Instance)
         data.lastMaxForce = nil
     end
 
-    if data.alignOrientation then
-        data.alignOrientation:Destroy()
-        data.alignOrientation = nil
-    end
-
-    if data.orientationAttachment then
-        data.orientationAttachment:Destroy()
-        data.orientationAttachment = nil
+    if data.bodyGyro then
+        data.bodyGyro:Destroy()
+        data.bodyGyro = nil
     end
 
     if basePart and data.tagged then
@@ -229,14 +223,9 @@ local function removeBodyMovers(part: BasePart, data: PartData)
         data.lastMaxForce = nil
     end
 
-    if data.alignOrientation then
-        data.alignOrientation:Destroy()
-        data.alignOrientation = nil
-    end
-
-    if data.orientationAttachment then
-        data.orientationAttachment:Destroy()
-        data.orientationAttachment = nil
+    if data.bodyGyro then
+        data.bodyGyro:Destroy()
+        data.bodyGyro = nil
     end
 end
 
@@ -255,40 +244,17 @@ local function ensureBodyPosition(part: BasePart, data: PartData): BodyPosition
     return bodyPosition
 end
 
-local function ensureOrientationAttachment(part: BasePart, data: PartData): Attachment
-    local attachment = data.orientationAttachment
-    if attachment and attachment.Parent ~= part then
-        attachment:Destroy()
-        attachment = nil
+local function ensureBodyGyro(part: BasePart, data: PartData): BodyGyro
+    local bodyGyro = data.bodyGyro
+    if not bodyGyro then
+        bodyGyro = Instance.new("BodyGyro")
+        bodyGyro.Name = "FloatingBodyGyro"
+        bodyGyro.MaxTorque = Vector3.zero
+        bodyGyro.Parent = part
+        data.bodyGyro = bodyGyro
     end
 
-    if not attachment then
-        attachment = Instance.new("Attachment")
-        attachment.Name = "FloatingOrientationAttachment"
-        attachment.Parent = part
-        data.orientationAttachment = attachment
-    end
-
-    return attachment
-end
-
-local function ensureAlignOrientation(part: BasePart, data: PartData): AlignOrientation
-    local attachment = ensureOrientationAttachment(part, data)
-    local align = data.alignOrientation
-
-    if not align then
-        align = Instance.new("AlignOrientation")
-        align.Name = "FloatingAlignOrientation"
-        align.Mode = Enum.OrientationAlignmentMode.OneAttachment
-        align.RigidityEnabled = false
-        align.Attachment0 = attachment
-        align.Parent = part
-        data.alignOrientation = align
-    else
-        align.Attachment0 = attachment
-    end
-
-    return align
+    return bodyGyro
 end
 
 local function registerPart(part: BasePart, source: Instance)
@@ -333,8 +299,7 @@ local function registerPart(part: BasePart, source: Instance)
         data = {
             sources = {},
             bodyPosition = nil,
-            alignOrientation = nil,
-            orientationAttachment = nil,
+            bodyGyro = nil,
             waveOffset = math.random() * math.pi * 2,
             rotationAngle = 0,
             rotationAxis = axis,
@@ -584,7 +549,7 @@ end
 
 local function updateRotation(part: BasePart, data: PartData, dt: number)
     if config.EnableRotation then
-        local alignOrientation = ensureAlignOrientation(part, data)
+        local bodyGyro = ensureBodyGyro(part, data)
         local maxSpeed = math.max(config.MaxRotationSpeed, 0)
         local speed = config.RotationSpeed
         if maxSpeed > 0 then
@@ -592,40 +557,21 @@ local function updateRotation(part: BasePart, data: PartData, dt: number)
         end
         data.rotationAngle += math.rad(speed) * dt
         local rotation = CFrame.fromAxisAngle(data.rotationAxis, data.rotationAngle)
-        if config.YawMaxTorque > 0 then
-            alignOrientation.MaxTorque = config.YawMaxTorque
-        else
-            alignOrientation.MaxTorque = math.huge
-        end
-        alignOrientation.Responsiveness = math.max(config.YawResponsiveness, 0)
-        if config.YawDamping > 0 then
-            alignOrientation.MaxAngularVelocity = config.YawDamping
-        else
-            alignOrientation.MaxAngularVelocity = math.huge
-        end
-        alignOrientation.CFrame = rotation
+        bodyGyro.MaxTorque = getBodyPositionMaxForce()
+        bodyGyro.CFrame = rotation
         return
     end
 
-    if data.alignOrientation and not config.EnableRotation and not config.LockYawToInitial then
-        data.alignOrientation:Destroy()
-        data.alignOrientation = nil
+    if data.bodyGyro and not config.LockYawToInitial then
+        data.bodyGyro:Destroy()
+        data.bodyGyro = nil
     end
 
-    if not config.EnableRotation and not config.LockYawToInitial and data.orientationAttachment then
-        data.orientationAttachment:Destroy()
-        data.orientationAttachment = nil
-    end
-
-    if config.LockYawToInitial and not config.EnableRotation and config.YawMaxTorque > 0 then
-        local alignOrientation = ensureAlignOrientation(part, data)
-        alignOrientation.MaxTorque = config.YawMaxTorque
-        alignOrientation.Responsiveness = math.max(config.YawResponsiveness, 0)
-        if config.YawDamping > 0 then
-            alignOrientation.MaxAngularVelocity = config.YawDamping
-        else
-            alignOrientation.MaxAngularVelocity = math.huge
-        end
+    if config.LockYawToInitial and config.YawMaxTorque > 0 then
+        local bodyGyro = ensureBodyGyro(part, data)
+        bodyGyro.MaxTorque = Vector3.new(0, config.YawMaxTorque, 0)
+        bodyGyro.P = config.YawResponsiveness
+        bodyGyro.D = config.YawDamping
 
         if not data.horizontalForward then
             data.horizontalForward = computeHorizontalForward(part)
@@ -633,17 +579,10 @@ local function updateRotation(part: BasePart, data: PartData, dt: number)
 
         local forward = data.horizontalForward or Vector3.new(0, 0, -1)
         local targetPosition = part.Position + forward
-        alignOrientation.CFrame = CFrame.lookAt(part.Position, targetPosition, Vector3.yAxis)
-    elseif config.LockYawToInitial and not config.EnableRotation and config.YawMaxTorque <= 0 and data.orientationAttachment then
-        data.orientationAttachment:Destroy()
-        data.orientationAttachment = nil
-    elseif not config.EnableRotation and data.alignOrientation then
-        data.alignOrientation:Destroy()
-        data.alignOrientation = nil
-        if not config.LockYawToInitial and data.orientationAttachment then
-            data.orientationAttachment:Destroy()
-            data.orientationAttachment = nil
-        end
+        bodyGyro.CFrame = CFrame.lookAt(part.Position, targetPosition, Vector3.yAxis)
+    elseif data.bodyGyro then
+        data.bodyGyro:Destroy()
+        data.bodyGyro = nil
     end
 
     local angularVelocity = part.AssemblyAngularVelocity

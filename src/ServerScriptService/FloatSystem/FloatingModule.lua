@@ -44,6 +44,8 @@ type PartData = {
     rotationAxis: Vector3,
     tagged: boolean,
     part: BasePart?,
+    lastTargetPosition: Vector3?,
+    lastMaxForce: Vector3?,
 }
 
 type SourceInfo = {
@@ -58,10 +60,10 @@ type MonitorInfo = {
     destroyingConn: RBXScriptConnection?,
 }
 
-local trackedParts: { [Instance]: PartData } = {}
-local partLookup: { [BasePart]: Instance } = {}
-local sourceRegistry: { [Instance]: SourceInfo } = {}
-local monitorRegistry: { [Instance]: MonitorInfo } = {}
+local trackedParts: { [Instance]: PartData } = setmetatable({}, { __mode = "k" })
+local partLookup: { [BasePart]: Instance } = setmetatable({}, { __mode = "k" })
+local sourceRegistry: { [Instance]: SourceInfo } = setmetatable({}, { __mode = "k" })
+local monitorRegistry: { [Instance]: MonitorInfo } = setmetatable({}, { __mode = "k" })
 local initialized = false
 local heartbeatConn: RBXScriptConnection?
 
@@ -159,10 +161,14 @@ local function cleanupPart(part: Instance)
 
     if data.bodyPosition then
         data.bodyPosition:Destroy()
+        data.bodyPosition = nil
+        data.lastTargetPosition = nil
+        data.lastMaxForce = nil
     end
 
     if data.bodyGyro then
         data.bodyGyro:Destroy()
+        data.bodyGyro = nil
     end
 
     if basePart and data.tagged then
@@ -184,6 +190,8 @@ local function removeBodyMovers(part: BasePart, data: PartData)
     if data.bodyPosition then
         data.bodyPosition:Destroy()
         data.bodyPosition = nil
+        data.lastTargetPosition = nil
+        data.lastMaxForce = nil
     end
 
     if data.bodyGyro then
@@ -200,6 +208,8 @@ local function ensureBodyPosition(part: BasePart, data: PartData): BodyPosition
         bodyPosition.MaxForce = config.MaxForce
         bodyPosition.Parent = part
         data.bodyPosition = bodyPosition
+        data.lastMaxForce = config.MaxForce
+        data.lastTargetPosition = nil
     end
 
     return bodyPosition
@@ -264,6 +274,8 @@ local function registerPart(part: BasePart, source: Instance)
             rotationAxis = axis,
             tagged = false,
             part = part,
+            lastTargetPosition = nil,
+            lastMaxForce = nil,
         }
         trackedParts[part] = data
     elseif trackedPart ~= part then
@@ -520,7 +532,16 @@ local function updateRotation(part: BasePart, data: PartData, dt: number)
     bodyGyro.CFrame = rotation
 end
 
-local function applyForces(part: BasePart, data: PartData, dt: number)
+local function vectorsDiffer(a: Vector3?, b: Vector3?): boolean
+    if a == nil or b == nil then
+        return true
+    end
+
+    local delta = a - b
+    return math.abs(delta.X) > 1e-4 or math.abs(delta.Y) > 1e-4 or math.abs(delta.Z) > 1e-4
+end
+
+local function applyForces(part: BasePart, data: PartData, dt: number, now: number)
     local surfaceY = WaterPhysics.TryGetWaterSurface(part.Position)
     if not surfaceY then
         removeBodyMovers(part, data)
@@ -535,41 +556,60 @@ local function applyForces(part: BasePart, data: PartData, dt: number)
     end
 
     local bodyPosition = ensureBodyPosition(part, data)
-    bodyPosition.MaxForce = config.MaxForce
+    local maxForce = config.MaxForce
+    if vectorsDiffer(data.lastMaxForce, maxForce) then
+        bodyPosition.MaxForce = maxForce
+        data.lastMaxForce = maxForce
+    end
 
-    local now = Workspace:GetServerTimeNow()
     local basePosition = Vector3.new(part.Position.X, surfaceY + config.OffsetY, part.Position.Z)
 
     if config.EnableWaveEffect then
-        local waveOffset = math.sin((now * config.WaveFrequency) + data.waveOffset) * config.WaveAmplitude
-        basePosition += Vector3.new(0, waveOffset, 0)
+        if config.WaveAmplitude ~= 0 and config.WaveFrequency ~= 0 then
+            local waveOffset = math.sin((now * config.WaveFrequency) + data.waveOffset) * config.WaveAmplitude
+            if waveOffset ~= 0 then
+                basePosition += Vector3.new(0, waveOffset, 0)
+            end
+        end
     end
 
     if config.EnableBuoyancyVariation then
-        local variation = math.sin((now + data.waveOffset) * 1.7) * config.BuoyancyVariationAmount
-        basePosition += Vector3.new(0, variation, 0)
+        if config.BuoyancyVariationAmount ~= 0 then
+            local variation = math.sin((now + data.waveOffset) * 1.7) * config.BuoyancyVariationAmount
+            if variation ~= 0 then
+                basePosition += Vector3.new(0, variation, 0)
+            end
+        end
     end
 
-    bodyPosition.Position = basePosition
+    if vectorsDiffer(data.lastTargetPosition, basePosition) then
+        bodyPosition.Position = basePosition
+        data.lastTargetPosition = basePosition
+    end
+
+    local velocity = part.AssemblyLinearVelocity
 
     if config.EnableCustomGravity then
-        part.Velocity = part.Velocity + (config.CustomGravity * dt)
+        velocity = velocity + (config.CustomGravity * dt)
     end
 
     updateRotation(part, data, dt)
 
     if config.DampingFactor > 0 then
         local damping = math.clamp(1 - config.DampingFactor, 0, 1)
-        part.Velocity = part.Velocity * damping
+        velocity = velocity * damping
     end
 
     if config.EnableDrag then
         local drag = math.clamp(1 - config.DragCoefficient, 0, 1)
-        part.Velocity = part.Velocity * drag
+        velocity = velocity * drag
     end
+
+    part.AssemblyLinearVelocity = velocity
 end
 
 local function heartbeatUpdate(dt: number)
+    local now = Workspace:GetServerTimeNow()
     for part, data in pairs(trackedParts) do
         local basePart = resolveBasePart(part, data)
 
@@ -591,7 +631,7 @@ local function heartbeatUpdate(dt: number)
             continue
         end
 
-        applyForces(basePart, data, dt)
+        applyForces(basePart, data, dt, now)
     end
 end
 

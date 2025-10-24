@@ -57,9 +57,10 @@ local config = {
         PositionQuantization = 0.02,
         VelocityQuantization = 0.1,
         BobbingStepsPerCycle = 6,
-	EnableNetworkOwnershipManagement = true,
-	NetworkOwnershipCheckInterval = 0.5,
-	}
+        EnableNetworkOwnershipManagement = true,
+        NetworkOwnershipCheckInterval = 0.5,
+        WaterDespawnSeconds = 300,
+}
 
 type PartData = {
 	sources: { [Instance]: boolean },
@@ -90,7 +91,9 @@ type PartData = {
         nextVelocityUpdate: number?,
         lastReplicatedVelocity: Vector3?,
         lastBobbingSample: number?,
-        }
+        waterEntryTime: number?,
+        isDespawning: boolean?,
+}
 
 type SourceInfo = {
 	parts: { [BasePart]: boolean },
@@ -115,6 +118,79 @@ local FLOAT_TAG = "WaterFloat"
 type PlayerInfo = { player: Player, position: Vector3 }
 local playerInfoBuffer: { PlayerInfo } = {}
 local ZERO_VECTOR = Vector3.new(0, 0, 0)
+
+local function hasPermanentFloatAttribute(instance: Instance?): boolean
+        if not instance then
+                return false
+        end
+
+        local value = instance:GetAttribute("PermanentFloat")
+        return value == true
+end
+
+local function shouldPreventDespawn(part: BasePart, data: PartData): boolean
+        if hasPermanentFloatAttribute(part) then
+                return true
+        end
+
+        local parent = part.Parent
+        if hasPermanentFloatAttribute(parent) then
+                return true
+        end
+
+        for source in pairs(data.sources) do
+                if source ~= nil and hasPermanentFloatAttribute(source) then
+                        return true
+                end
+        end
+
+        return false
+end
+
+local function evaluateWaterState(part: BasePart): (boolean, number?)
+        local surfaceY = WaterPhysics.TryGetWaterSurface(part.Position)
+        if not surfaceY then
+                return false, nil
+        end
+
+        local halfHeight = part.Size.Y * 0.5
+        local bottomY = part.Position.Y - halfHeight
+        if bottomY > surfaceY + config.ActivationPadding then
+                return false, surfaceY
+        end
+
+        return true, surfaceY
+end
+
+local function updateWaterDespawn(part: BasePart, data: PartData, now: number, inWater: boolean): boolean
+        local limit = math.max(config.WaterDespawnSeconds or 0, 0)
+        if limit <= 0 then
+                data.waterEntryTime = nil
+                return false
+        end
+
+        if not inWater then
+                data.waterEntryTime = nil
+                return false
+        end
+
+        if shouldPreventDespawn(part, data) then
+                data.waterEntryTime = nil
+                return false
+        end
+
+        local entryTime = data.waterEntryTime
+        if not entryTime then
+                data.waterEntryTime = now
+                return false
+        end
+
+        if now - entryTime >= limit then
+                return true
+        end
+
+        return false
+end
 
 local function roundToStep(value: number, step: number): number
         if step <= 0 then
@@ -190,8 +266,20 @@ function FloatingModule.ToggleToolFloating(enable: boolean)
 end
 
 function FloatingModule.TogglePartFloating(enable: boolean)
-	config.EnablePartFloating = enable
-	debugPrint("Part floating " .. (enable and "enabled" or "disabled"))
+        config.EnablePartFloating = enable
+        debugPrint("Part floating " .. (enable and "enabled" or "disabled"))
+end
+
+function FloatingModule.SetWaterDespawnSeconds(seconds: number)
+        if typeof(seconds) ~= "number" then
+                return
+        end
+
+        if seconds < 0 then
+                seconds = 0
+        end
+
+        config.WaterDespawnSeconds = seconds
 end
 
 local function resolveBasePart(part: Instance, data: PartData?): BasePart?
@@ -426,10 +514,12 @@ local function cleanupPart(part: Instance)
 	data.nextDistanceCheck = nil
 	data.pendingVelocityDelta = nil
 	data.pendingVelocityBase = nil
-	data.pendingVelocityMagnitude = nil
-	data.nextVelocityUpdate = nil
-	data.lastReplicatedVelocity = nil
-	data.lastBobbingSample = nil
+        data.pendingVelocityMagnitude = nil
+        data.nextVelocityUpdate = nil
+        data.lastReplicatedVelocity = nil
+        data.lastBobbingSample = nil
+        data.waterEntryTime = nil
+        data.isDespawning = nil
 end
 
 local function removeBodyMovers(part: BasePart, data: PartData)
@@ -454,9 +544,39 @@ local function removeBodyMovers(part: BasePart, data: PartData)
 	data.pendingVelocityDelta = nil
 	data.pendingVelocityBase = nil
 	data.pendingVelocityMagnitude = nil
-	data.nextVelocityUpdate = nil
-	data.lastReplicatedVelocity = nil
-	data.lastBobbingSample = nil
+        data.nextVelocityUpdate = nil
+        data.lastReplicatedVelocity = nil
+        data.lastBobbingSample = nil
+end
+
+local function despawnFloatingInstance(part: Instance, data: PartData)
+        if data.isDespawning then
+                return
+        end
+
+        data.isDespawning = true
+
+        local target: Instance? = nil
+        for source in pairs(data.sources) do
+                if source and source.Parent then
+                        target = source
+                        break
+                end
+        end
+
+        if not target then
+                target = resolveBasePart(part, data)
+        end
+
+        cleanupPart(part)
+
+        if target and target.Parent then
+                task.defer(function()
+                        if target and target.Parent then
+                                target:Destroy()
+                        end
+                end)
+        end
 end
 
 local function ensureBodyPosition(part: BasePart, data: PartData): BodyPosition
@@ -570,10 +690,12 @@ local function registerPart(part: BasePart, source: Instance)
 			preSleepCanCollide = nil,
 			lodSleeping = false,
 			hasActivated = false,
-			pendingTargetPosition = nil,
-			nextPositionUpdate = nil,
-			nextVelocityUpdate = nil,
-			}
+                        pendingTargetPosition = nil,
+                        nextPositionUpdate = nil,
+                        nextVelocityUpdate = nil,
+                        waterEntryTime = nil,
+                        isDespawning = nil,
+                }
                 trackedParts[part] = data
         elseif trackedPart ~= part then
                 trackedParts[trackedPart] = nil
@@ -1109,19 +1231,11 @@ local function updateNetworkOwnership(basePart: BasePart, data: PartData, now: n
         end
 end
 
-local function applyForces(part: BasePart, data: PartData, dt: number, now: number)
-        local surfaceY = WaterPhysics.TryGetWaterSurface(part.Position)
-        if not surfaceY then
+local function applyForces(part: BasePart, data: PartData, dt: number, now: number, surfaceY: number?, inWater: boolean)
+        if not inWater or surfaceY == nil then
                 removeBodyMovers(part, data)
                 return
-	end
-
-	local halfHeight = part.Size.Y * 0.5
-	local bottomY = part.Position.Y - halfHeight
-	if bottomY > surfaceY + config.ActivationPadding then
-		removeBodyMovers(part, data)
-		return
-	end
+        end
 
 	local bodyPosition = ensureBodyPosition(part, data)
 	local maxForce = getBodyPositionMaxForce()
@@ -1130,7 +1244,7 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
 		data.lastMaxForce = maxForce
 	end
 
-	local basePosition = Vector3.new(part.Position.X, surfaceY + config.OffsetY, part.Position.Z)
+        local basePosition = Vector3.new(part.Position.X, surfaceY + config.OffsetY, part.Position.Z)
 
         local positionQuantStep = math.max(config.PositionQuantization or 0, 0)
 
@@ -1341,6 +1455,13 @@ local function heartbeatUpdate(dt: number)
 		data.part = basePart
 		partLookup[basePart] = part
 
+                local inWater, surfaceY = evaluateWaterState(basePart)
+
+                if updateWaterDespawn(basePart, data, now, inWater) then
+                        despawnFloatingInstance(part, data)
+                        continue
+                end
+
                 if basePart.Anchored and not data.lodSleeping then
                         releaseNetworkOwnership(basePart, data)
                         data.nextOwnershipCheck = nil
@@ -1356,7 +1477,7 @@ local function heartbeatUpdate(dt: number)
                 end
 
                 updateNetworkOwnership(basePart, data, now, playerInfos)
-                applyForces(basePart, data, dt, now)
+                applyForces(basePart, data, dt, now, surfaceY, inWater)
         end
 end
 

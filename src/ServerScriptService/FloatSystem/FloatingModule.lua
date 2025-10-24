@@ -233,16 +233,33 @@ local function exitSleepState(basePart: BasePart, data: PartData)
                 return
         end
 
-        if data.preSleepAnchored ~= nil then
-                basePart.Anchored = data.preSleepAnchored
-        else
-                basePart.Anchored = false
+        local parent = basePart.Parent
+        local okDescendant, isDescendant = pcall(basePart.IsDescendantOf, basePart, game)
+
+        if parent == nil and (not okDescendant or not isDescendant) then
+                data.preSleepAnchored = nil
+                data.preSleepCanCollide = nil
+                data.lodSleeping = false
+                return
         end
 
-        if data.preSleepCanCollide ~= nil then
-                basePart.CanCollide = data.preSleepCanCollide
-        else
-                basePart.CanCollide = true
+        local function restore()
+                if data.preSleepAnchored ~= nil then
+                        basePart.Anchored = data.preSleepAnchored
+                else
+                        basePart.Anchored = false
+                end
+
+                if data.preSleepCanCollide ~= nil then
+                        basePart.CanCollide = data.preSleepCanCollide
+                else
+                        basePart.CanCollide = true
+                end
+        end
+
+        local success = pcall(restore)
+        if not success and config.DebugMode then
+                warn("[FloatingModule] Failed to restore sleep state for", basePart)
         end
 
         data.preSleepAnchored = nil

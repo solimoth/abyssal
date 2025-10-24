@@ -16,6 +16,14 @@ local WaveRegistry = {}
 local activeField: any? = nil
 
 local function setActiveField(field)
+    if activeField == field then
+        return
+    end
+
+    if activeField and activeField._isClientField and typeof(activeField.Destroy) == "function" then
+        activeField:Destroy()
+    end
+
     activeField = field
 end
 
@@ -42,6 +50,8 @@ function WaveRegistry.SampleSurface(position: Vector3)
 end
 
 if RunService:IsClient() then
+    local ensureClientField
+
     local ClientWaveField = {}
     ClientWaveField.__index = ClientWaveField
 
@@ -69,18 +79,34 @@ if RunService:IsClient() then
         return fallback
     end
 
-    function ClientWaveField.new(container: Instance)
+    function ClientWaveField.new(container: Instance, onContainerInvalidated: (() -> ())?)
         local self = setmetatable({}, ClientWaveField)
 
+        self._isClientField = true
         self.container = container
         self.waves = GerstnerWave.BuildWaveInfos(WaveConfig.Waves)
         self.timeScale = math.max(0, attributeNumber(container, "TimeScale", DEFAULT_TIME_SCALE))
         self.lastClock = attributeNumber(container, "WaveClock", Workspace:GetServerTimeNow())
         self.clockSyncedAt = os.clock()
         self.landZoneName = attributeString(container, "LandZoneName", DEFAULT_LAND_ZONE_NAME)
-        self.landZoneAttenuation = math.clamp(attributeNumber(container, "LandZoneAttenuation", DEFAULT_LAND_ZONE_ATTENUATION), 0, 1)
+        self.landZoneAttenuation = math.clamp(
+            attributeNumber(container, "LandZoneAttenuation", DEFAULT_LAND_ZONE_ATTENUATION),
+            0,
+            1
+        )
         self.landZoneFadeDistance = math.max(0, attributeNumber(container, "LandZoneFadeDistance", DEFAULT_LAND_ZONE_FADE))
         self.landZones = {}
+        self.destroyed = false
+        self.invalidated = false
+        self.onContainerInvalidated = onContainerInvalidated
+
+        local connections = {}
+        self.connections = connections
+
+        local function trackConnection(conn)
+            table.insert(connections, conn)
+            return conn
+        end
 
         local function onClockChanged()
             local attr = container:GetAttribute("WaveClock")
@@ -100,15 +126,19 @@ if RunService:IsClient() then
         end
 
         local function onLandZoneSettingsChanged()
-            self.landZoneAttenuation = math.clamp(attributeNumber(container, "LandZoneAttenuation", DEFAULT_LAND_ZONE_ATTENUATION), 0, 1)
+            self.landZoneAttenuation = math.clamp(
+                attributeNumber(container, "LandZoneAttenuation", DEFAULT_LAND_ZONE_ATTENUATION),
+                0,
+                1
+            )
             self.landZoneFadeDistance = math.max(0, attributeNumber(container, "LandZoneFadeDistance", DEFAULT_LAND_ZONE_FADE))
         end
 
-        container:GetAttributeChangedSignal("WaveClock"):Connect(onClockChanged)
-        container:GetAttributeChangedSignal("TimeScale"):Connect(onTimeScaleChanged)
-        container:GetAttributeChangedSignal("LandZoneName"):Connect(onLandZoneNameChanged)
-        container:GetAttributeChangedSignal("LandZoneAttenuation"):Connect(onLandZoneSettingsChanged)
-        container:GetAttributeChangedSignal("LandZoneFadeDistance"):Connect(onLandZoneSettingsChanged)
+        trackConnection(container:GetAttributeChangedSignal("WaveClock"):Connect(onClockChanged))
+        trackConnection(container:GetAttributeChangedSignal("TimeScale"):Connect(onTimeScaleChanged))
+        trackConnection(container:GetAttributeChangedSignal("LandZoneName"):Connect(onLandZoneNameChanged))
+        trackConnection(container:GetAttributeChangedSignal("LandZoneAttenuation"):Connect(onLandZoneSettingsChanged))
+        trackConnection(container:GetAttributeChangedSignal("LandZoneFadeDistance"):Connect(onLandZoneSettingsChanged))
 
         self.descendantAddedConn = Workspace.DescendantAdded:Connect(function(instance)
             self:_tryRegisterLandZone(instance)
@@ -120,9 +150,31 @@ if RunService:IsClient() then
             end
         end)
 
+        self.containerDestroyingConn = container.Destroying:Connect(function()
+            self:_handleContainerInvalidated()
+        end)
+
+        self.containerAncestryConn = container.AncestryChanged:Connect(function(_, parent)
+            if not parent or not parent:IsDescendantOf(Workspace) then
+                self:_handleContainerInvalidated()
+            end
+        end)
+
         self:_refreshLandZones()
 
         return self
+    end
+
+    function ClientWaveField:_handleContainerInvalidated()
+        if self.destroyed or self.invalidated then
+            return
+        end
+
+        self.invalidated = true
+
+        if self.onContainerInvalidated then
+            self.onContainerInvalidated()
+        end
     end
 
     function ClientWaveField:_refreshLandZones()
@@ -222,14 +274,61 @@ if RunService:IsClient() then
         return attributeNumber(self.container, "SeaLevel", DEFAULT_SEA_LEVEL)
     end
 
-    local function ensureClientField()
+    function ClientWaveField:Destroy()
+        if self.destroyed then
+            return
+        end
+
+        self.destroyed = true
+        self.onContainerInvalidated = nil
+
+        if self.connections then
+            for _, connection in ipairs(self.connections) do
+                connection:Disconnect()
+            end
+            table.clear(self.connections)
+            self.connections = nil
+        end
+
+        if self.descendantAddedConn then
+            self.descendantAddedConn:Disconnect()
+            self.descendantAddedConn = nil
+        end
+
+        if self.descendantRemovingConn then
+            self.descendantRemovingConn:Disconnect()
+            self.descendantRemovingConn = nil
+        end
+
+        if self.containerDestroyingConn then
+            self.containerDestroyingConn:Disconnect()
+            self.containerDestroyingConn = nil
+        end
+
+        if self.containerAncestryConn then
+            self.containerAncestryConn:Disconnect()
+            self.containerAncestryConn = nil
+        end
+
+        self.container = nil
+        table.clear(self.landZones)
+    end
+
+    function ensureClientField()
         local container = Workspace:FindFirstChild(DEFAULT_CONTAINER_NAME)
         if not container then
             container = Workspace:WaitForChild(DEFAULT_CONTAINER_NAME)
         end
 
         if container then
-            local clientField = ClientWaveField.new(container)
+            local clientField
+            clientField = ClientWaveField.new(container, function()
+                if activeField == clientField then
+                    setActiveField(nil)
+                    task.defer(ensureClientField)
+                end
+            end)
+
             setActiveField(clientField)
         end
     end

@@ -77,6 +77,7 @@ type PartData = {
         hasActivated: boolean?,
         pendingVelocityDelta: Vector3?,
         pendingVelocityBase: Vector3?,
+        pendingVelocityMagnitude: number?,
 }
 
 type SourceInfo = {
@@ -1079,13 +1080,17 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
         local delta = velocity - originalVelocity
         if delta.Magnitude > 0 then
                 local combinedDelta = delta
+                local totalDeltaMagnitude = delta.Magnitude
 
                 if data.pendingVelocityDelta then
-                        if data.pendingVelocityBase and not vectorsDiffer(originalVelocity, data.pendingVelocityBase, config.VelocityUpdateThreshold * 0.5) then
+                        local baseVelocity = data.pendingVelocityBase
+                        if baseVelocity and not vectorsDiffer(originalVelocity, baseVelocity, config.VelocityUpdateThreshold * 0.5) then
                                 combinedDelta += data.pendingVelocityDelta
+                                totalDeltaMagnitude += data.pendingVelocityMagnitude or 0
                         else
                                 data.pendingVelocityDelta = nil
                                 data.pendingVelocityBase = nil
+                                data.pendingVelocityMagnitude = nil
                         end
                 end
 
@@ -1093,19 +1098,24 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
                 local componentChanged = vectorsDiffer(targetVelocity, originalVelocity, config.VelocityUpdateThreshold)
                 local magnitudeThreshold = math.max(config.VelocityUpdateThreshold, 1e-5)
                 local magnitudeChanged = combinedDelta.Magnitude >= magnitudeThreshold or targetVelocity.Magnitude <= magnitudeThreshold
+                local accumulatedExceeded = totalDeltaMagnitude >= magnitudeThreshold
 
-                if componentChanged or magnitudeChanged then
+                if componentChanged or magnitudeChanged or accumulatedExceeded then
                         part.AssemblyLinearVelocity = targetVelocity
                         data.pendingVelocityDelta = nil
                         data.pendingVelocityBase = nil
+                        data.pendingVelocityMagnitude = nil
                 else
                         data.pendingVelocityDelta = combinedDelta
                         data.pendingVelocityBase = originalVelocity
+                        data.pendingVelocityMagnitude = totalDeltaMagnitude
                 end
         elseif data.pendingVelocityDelta then
                 data.pendingVelocityDelta = nil
                 data.pendingVelocityBase = nil
+                data.pendingVelocityMagnitude = nil
         end
+
 end
 
 local function heartbeatUpdate(dt: number)

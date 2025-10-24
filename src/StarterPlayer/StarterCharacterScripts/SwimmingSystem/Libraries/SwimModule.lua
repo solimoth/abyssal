@@ -98,7 +98,8 @@ function swimModule:Start()
     self.Enabled = true
 
     self.heartbeatConnection = RunService.Heartbeat:Connect(function()
-        local moving = humanoid.MoveDirection.Magnitude > 0
+        local moveDirection = humanoid.MoveDirection
+        local moving = moveDirection.Magnitude > 0
         local desiredVelocityY: number? = nil
 
         if surfaceState then
@@ -109,14 +110,21 @@ function swimModule:Start()
             end
 
             if surfacedHeight then
-                if not lastSurfaced or surfaceOffset == nil then
-                    surfaceOffset = rootPart.Position.Y - surfacedHeight
-                end
+                local descending = moveDirection.Y < -0.1
+                if descending then
+                    surfaceOffset = nil
+                    lastSurfaced = false
+                    depthOffset = nil
+                else
+                    if not lastSurfaced or surfaceOffset == nil then
+                        surfaceOffset = rootPart.Position.Y - surfacedHeight
+                    end
 
-                local targetY = surfacedHeight + surfaceOffset
-                desiredVelocityY = math.clamp((targetY - rootPart.Position.Y) * SURFACE_RESPONSIVENESS, -20, 20)
-                lastSurfaced = true
-                depthOffset = nil
+                    local targetY = surfacedHeight + surfaceOffset
+                    desiredVelocityY = math.clamp((targetY - rootPart.Position.Y) * SURFACE_RESPONSIVENESS, -20, 20)
+                    lastSurfaced = true
+                    depthOffset = nil
+                end
             else
                 surfaceOffset = nil
                 lastSurfaced = false
@@ -139,10 +147,18 @@ function swimModule:Start()
             lastSurfaced = false
         end
 
+        local velocity = rootPart.AssemblyLinearVelocity
+
         if desiredVelocityY then
-            local velocity = rootPart.AssemblyLinearVelocity
-            if velocity.Y ~= desiredVelocityY then
-                rootPart.AssemblyLinearVelocity = Vector3.new(velocity.X, desiredVelocityY, velocity.Z)
+            local newX = moving and velocity.X or 0
+            local newZ = moving and velocity.Z or 0
+
+            if velocity.X ~= newX or velocity.Y ~= desiredVelocityY or velocity.Z ~= newZ then
+                rootPart.AssemblyLinearVelocity = Vector3.new(newX, desiredVelocityY, newZ)
+            end
+        elseif not moving then
+            if math.abs(velocity.X) > 1e-3 or math.abs(velocity.Z) > 1e-3 then
+                rootPart.AssemblyLinearVelocity = Vector3.new(0, velocity.Y, 0)
             end
         end
     end)

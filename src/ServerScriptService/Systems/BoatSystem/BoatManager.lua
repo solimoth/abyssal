@@ -17,6 +17,7 @@ local BoatSecurity = require(ReplicatedStorage.Modules.BoatSecurity)
 local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 local SubmarinePhysics = require(ReplicatedStorage.Modules.SubmarinePhysics)
 local Remotes = ReplicatedStorage.Remotes.BoatRemotes
+local BoatSplashService = require(script.Parent.Parent:WaitForChild("VFXSystem"):WaitForChild("BoatSplashService"))
 
 -- Boat storage
 local ActiveBoats = {}
@@ -451,10 +452,11 @@ local function CleanupBoat(player)
 	PlayerViolations[player] = nil
 
 	-- Clean up boat and physics
-        local boat = ActiveBoats[player]
-        if boat then
-                SubmarinePhysics.CleanupBoat(boat)
-                -- Clean up physics objects first
+	local boat = ActiveBoats[player]
+	if boat then
+		SubmarinePhysics.CleanupBoat(boat)
+		BoatSplashService.ClearBoat(boat)
+		-- Clean up physics objects first
                 local physicsObjs = BoatPhysicsObjects[boat]
 		if physicsObjs then
 			for _, obj in pairs(physicsObjs) do
@@ -2047,14 +2049,18 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
 		if not accelData then return end
 	end
 
-        local primaryPart = boat.PrimaryPart
-        if not primaryPart then
-                CleanupBoat(player)
-                return
-        end
+	local primaryPart = boat.PrimaryPart
+	if not primaryPart then
+		CleanupBoat(player)
+		return
+	end
 
-        local waterSurfaceOffset = boat:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
-                or primaryPart:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+	local waterSurfaceOffset = boat:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+		or primaryPart:GetAttribute(WATER_SURFACE_OFFSET_ATTRIBUTE)
+
+	if BoatSplashService then
+		BoatSplashService.ProcessBoat(player, boat, primaryPart, waterSurfaceOffset)
+	end
 
 	-- Performance: Check distance to nearest player for physics throttling
 	local shouldThrottle = true

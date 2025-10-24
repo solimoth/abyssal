@@ -13,10 +13,10 @@ local FloatingModule = {}
 type Player = Players.Player
 
 local config = {
-	OffsetY = 0.05,
-	EnableRotation = false,
-	RotationSpeed = 0.5,
-	DebugMode = false,
+        OffsetY = 0.05,
+        EnableRotation = false,
+        RotationSpeed = 0.5,
+        DebugMode = false,
 	EnableToolFloating = true,
 	EnablePartFloating = true,
 	BuoyancyForce = Vector3.new(0, 100, 0),
@@ -43,10 +43,11 @@ local config = {
 	ActivationPadding = 0.5,
 	HorizontalMaxForce = 2500,
 	VerticalMaxForce = math.huge,
-	EnableLOD = true,
+        EnableLOD = true,
         LODActivationRadius = 160,
         LODDeactivationRadius = 210,
         LODCheckInterval = 0.35,
+        LODSleepDropDistance = 0.5,
         PositionUpdateThreshold = 0.015,
         EnableNetworkOwnershipManagement = true,
         NetworkOwnershipCheckInterval = 0.5,
@@ -62,13 +63,17 @@ type PartData = {
 	rotationAxis: Vector3,
 	horizontalForward: Vector3?,
 	tagged: boolean,
-	part: BasePart?,
-	lastTargetPosition: Vector3?,
-	lastMaxForce: Vector3?,
+        part: BasePart?,
+        lastTargetPosition: Vector3?,
+        lastMaxForce: Vector3?,
         isActive: boolean?,
         nextDistanceCheck: number?,
         currentOwner: Player?,
         nextOwnershipCheck: number?,
+        preSleepAnchored: boolean?,
+        preSleepCanCollide: boolean?,
+        lodSleeping: boolean?,
+        hasActivated: boolean?,
 }
 
 type SourceInfo = {
@@ -93,6 +98,7 @@ local heartbeatConn: RBXScriptConnection?
 local FLOAT_TAG = "WaterFloat"
 type PlayerInfo = { player: Player, position: Vector3 }
 local playerInfoBuffer: { PlayerInfo } = {}
+local ZERO_VECTOR = Vector3.new(0, 0, 0)
 
 local function getBodyPositionMaxForce(): Vector3
 	local horizontal = math.max(config.HorizontalMaxForce, 0)
@@ -198,6 +204,51 @@ local function releaseNetworkOwnership(basePart: BasePart?, data: PartData)
         end
 end
 
+local function enterSleepState(basePart: BasePart, data: PartData)
+        if data.lodSleeping then
+                return
+        end
+
+        data.preSleepAnchored = basePart.Anchored
+        data.preSleepCanCollide = basePart.CanCollide
+
+        if data.hasActivated then
+                local dropDistance = math.max(config.LODSleepDropDistance or 0, 0)
+                if dropDistance > 0 then
+                        basePart.CFrame = basePart.CFrame + Vector3.new(0, -dropDistance, 0)
+                end
+        end
+
+        basePart.AssemblyLinearVelocity = ZERO_VECTOR
+        basePart.AssemblyAngularVelocity = ZERO_VECTOR
+        basePart.Anchored = true
+        basePart.CanCollide = false
+
+        data.lodSleeping = true
+end
+
+local function exitSleepState(basePart: BasePart, data: PartData)
+        if not data.lodSleeping then
+                return
+        end
+
+        if data.preSleepAnchored ~= nil then
+                basePart.Anchored = data.preSleepAnchored
+        else
+                basePart.Anchored = false
+        end
+
+        if data.preSleepCanCollide ~= nil then
+                basePart.CanCollide = data.preSleepCanCollide
+        else
+                basePart.CanCollide = true
+        end
+
+        data.preSleepAnchored = nil
+        data.preSleepCanCollide = nil
+        data.lodSleeping = false
+end
+
 local function cleanupPart(part: Instance)
         local data = trackedParts[part]
 
@@ -238,6 +289,10 @@ local function cleanupPart(part: Instance)
         end
 
         local basePart = resolveBasePart(part, data)
+
+        if basePart then
+                exitSleepState(basePart, data)
+        end
 
         if basePart then
                 releaseNetworkOwnership(basePart, data)
@@ -408,6 +463,10 @@ local function registerPart(part: BasePart, source: Instance)
                         nextDistanceCheck = nil,
                         currentOwner = nil,
                         nextOwnershipCheck = nil,
+                        preSleepAnchored = nil,
+                        preSleepCanCollide = nil,
+                        lodSleeping = false,
+                        hasActivated = false,
                 }
                 trackedParts[part] = data
         elseif trackedPart ~= part then
@@ -809,20 +868,25 @@ local function updatePartActivation(basePart: BasePart, data: PartData, now: num
 		data.nextDistanceCheck = now + interval
 	end
 
-	local wasActive = data.isActive == true
+        local wasActive = data.isActive == true
         local shouldActivate = shouldPartBeActive(basePart.Position, playerInfos, wasActive)
 
-	if shouldActivate then
-		if not wasActive then
-			data.lastTargetPosition = nil
-			data.lastMaxForce = nil
-		end
-		data.isActive = true
-	else
+        if shouldActivate then
+                if data.lodSleeping then
+                        exitSleepState(basePart, data)
+                end
+                if not wasActive then
+                        data.lastTargetPosition = nil
+                        data.lastMaxForce = nil
+                end
+                data.hasActivated = true
+                data.isActive = true
+        else
                 if wasActive then
                         removeBodyMovers(basePart, data)
-                        releaseNetworkOwnership(basePart, data)
                 end
+                releaseNetworkOwnership(basePart, data)
+                enterSleepState(basePart, data)
                 data.isActive = false
                 data.nextOwnershipCheck = nil
         end
@@ -1002,7 +1066,7 @@ local function heartbeatUpdate(dt: number)
 		data.part = basePart
 		partLookup[basePart] = part
 
-                if basePart.Anchored then
+                if basePart.Anchored and not data.lodSleeping then
                         releaseNetworkOwnership(basePart, data)
                         data.nextOwnershipCheck = nil
                         removeBodyMovers(basePart, data)

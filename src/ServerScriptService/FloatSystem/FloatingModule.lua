@@ -49,20 +49,21 @@ local config = {
         LODCheckInterval = 0.35,
         LODSleepDropDistance = 0.5,
         PositionUpdateThreshold = 0.015,
+        VelocityUpdateThreshold = 0.01,
         EnableNetworkOwnershipManagement = true,
         NetworkOwnershipCheckInterval = 0.5,
 }
 
 type PartData = {
-	sources: { [Instance]: boolean },
-	bodyPosition: BodyPosition?,
-	alignOrientation: AlignOrientation?,
-	orientationAttachment: Attachment?,
-	waveOffset: number,
-	rotationAngle: number,
-	rotationAxis: Vector3,
-	horizontalForward: Vector3?,
-	tagged: boolean,
+        sources: { [Instance]: boolean },
+        bodyPosition: BodyPosition?,
+        alignOrientation: AlignOrientation?,
+        orientationAttachment: Attachment?,
+        waveOffset: number,
+        rotationAngle: number,
+        rotationAxis: Vector3,
+        horizontalForward: Vector3?,
+        tagged: boolean,
         part: BasePart?,
         lastTargetPosition: Vector3?,
         lastMaxForce: Vector3?,
@@ -74,6 +75,9 @@ type PartData = {
         preSleepCanCollide: boolean?,
         lodSleeping: boolean?,
         hasActivated: boolean?,
+        pendingVelocityDelta: Vector3?,
+        pendingVelocityBase: Vector3?,
+        pendingVelocityMagnitude: number?,
 }
 
 type SourceInfo = {
@@ -232,16 +236,33 @@ local function exitSleepState(basePart: BasePart, data: PartData)
                 return
         end
 
-        if data.preSleepAnchored ~= nil then
-                basePart.Anchored = data.preSleepAnchored
-        else
-                basePart.Anchored = false
+        local parent = basePart.Parent
+        local okDescendant, isDescendant = pcall(basePart.IsDescendantOf, basePart, game)
+
+        if parent == nil and (not okDescendant or not isDescendant) then
+                data.preSleepAnchored = nil
+                data.preSleepCanCollide = nil
+                data.lodSleeping = false
+                return
         end
 
-        if data.preSleepCanCollide ~= nil then
-                basePart.CanCollide = data.preSleepCanCollide
-        else
-                basePart.CanCollide = true
+        local function restore()
+                if data.preSleepAnchored ~= nil then
+                        basePart.Anchored = data.preSleepAnchored
+                else
+                        basePart.Anchored = false
+                end
+
+                if data.preSleepCanCollide ~= nil then
+                        basePart.CanCollide = data.preSleepCanCollide
+                else
+                        basePart.CanCollide = true
+                end
+        end
+
+        local success = pcall(restore)
+        if not success and config.DebugMode then
+                warn("[FloatingModule] Failed to restore sleep state for", basePart)
         end
 
         data.preSleepAnchored = nil
@@ -715,32 +736,38 @@ local function monitorInstance(instance: Instance)
 end
 
 local function updateRotation(part: BasePart, data: PartData, dt: number)
-	if config.EnableRotation then
-		local alignOrientation = ensureAlignOrientation(part, data)
-		local maxSpeed = math.max(config.MaxRotationSpeed, 0)
-		local speed = config.RotationSpeed
-		if maxSpeed > 0 then
-			speed = math.clamp(speed, -maxSpeed, maxSpeed)
-		end
-		data.rotationAngle += math.rad(speed) * dt
-		local rotation = CFrame.fromAxisAngle(data.rotationAxis, data.rotationAngle)
-		if config.YawMaxTorque > 0 then
-			alignOrientation.MaxTorque = config.YawMaxTorque
-		else
-			alignOrientation.MaxTorque = math.huge
-		end
-		alignOrientation.Responsiveness = math.max(config.YawResponsiveness, 0)
-		if config.YawDamping > 0 then
-			alignOrientation.MaxAngularVelocity = config.YawDamping
-		else
-			alignOrientation.MaxAngularVelocity = math.huge
-		end
-		alignOrientation.CFrame = rotation
-		return
-	end
+        if config.EnableRotation then
+                local alignOrientation = ensureAlignOrientation(part, data)
+                local maxSpeed = math.max(config.MaxRotationSpeed, 0)
+                local speed = config.RotationSpeed
+                if maxSpeed > 0 then
+                        speed = math.clamp(speed, -maxSpeed, maxSpeed)
+                end
+                data.rotationAngle += math.rad(speed) * dt
+                local rotation = CFrame.fromAxisAngle(data.rotationAxis, data.rotationAngle)
+                local desiredMaxTorque = config.YawMaxTorque > 0 and config.YawMaxTorque or math.huge
+                if alignOrientation.MaxTorque ~= desiredMaxTorque then
+                        alignOrientation.MaxTorque = desiredMaxTorque
+                end
 
-	if data.alignOrientation and not config.EnableRotation and not config.LockYawToInitial then
-		data.alignOrientation:Destroy()
+                local desiredResponsiveness = math.max(config.YawResponsiveness, 0)
+                if alignOrientation.Responsiveness ~= desiredResponsiveness then
+                        alignOrientation.Responsiveness = desiredResponsiveness
+                end
+
+                local desiredMaxAngularVelocity = config.YawDamping > 0 and config.YawDamping or math.huge
+                if alignOrientation.MaxAngularVelocity ~= desiredMaxAngularVelocity then
+                        alignOrientation.MaxAngularVelocity = desiredMaxAngularVelocity
+                end
+
+                if alignOrientation.CFrame ~= rotation then
+                        alignOrientation.CFrame = rotation
+                end
+                return
+        end
+
+        if data.alignOrientation and not config.EnableRotation and not config.LockYawToInitial then
+                data.alignOrientation:Destroy()
 		data.alignOrientation = nil
 	end
 
@@ -749,28 +776,38 @@ local function updateRotation(part: BasePart, data: PartData, dt: number)
 		data.orientationAttachment = nil
 	end
 
-	if config.LockYawToInitial and not config.EnableRotation and config.YawMaxTorque > 0 then
-		local alignOrientation = ensureAlignOrientation(part, data)
-		alignOrientation.MaxTorque = config.YawMaxTorque
-		alignOrientation.Responsiveness = math.max(config.YawResponsiveness, 0)
-		if config.YawDamping > 0 then
-			alignOrientation.MaxAngularVelocity = config.YawDamping
-		else
-			alignOrientation.MaxAngularVelocity = math.huge
-		end
+        if config.LockYawToInitial and not config.EnableRotation and config.YawMaxTorque > 0 then
+                local alignOrientation = ensureAlignOrientation(part, data)
+                local desiredMaxTorque = config.YawMaxTorque
+                if alignOrientation.MaxTorque ~= desiredMaxTorque then
+                        alignOrientation.MaxTorque = desiredMaxTorque
+                end
 
-		if not data.horizontalForward then
-			data.horizontalForward = computeHorizontalForward(part)
-		end
+                local desiredResponsiveness = math.max(config.YawResponsiveness, 0)
+                if alignOrientation.Responsiveness ~= desiredResponsiveness then
+                        alignOrientation.Responsiveness = desiredResponsiveness
+                end
 
-		local forward = data.horizontalForward or Vector3.new(0, 0, -1)
-		local targetPosition = part.Position + forward
-		alignOrientation.CFrame = CFrame.lookAt(part.Position, targetPosition, Vector3.yAxis)
-	elseif config.LockYawToInitial and not config.EnableRotation and config.YawMaxTorque <= 0 and data.orientationAttachment then
-		data.orientationAttachment:Destroy()
-		data.orientationAttachment = nil
-	elseif not config.EnableRotation and data.alignOrientation then
-		data.alignOrientation:Destroy()
+                local desiredMaxAngularVelocity = config.YawDamping > 0 and config.YawDamping or math.huge
+                if alignOrientation.MaxAngularVelocity ~= desiredMaxAngularVelocity then
+                        alignOrientation.MaxAngularVelocity = desiredMaxAngularVelocity
+                end
+
+                if not data.horizontalForward then
+                        data.horizontalForward = computeHorizontalForward(part)
+                end
+
+                local forward = data.horizontalForward or Vector3.new(0, 0, -1)
+                local targetPosition = part.Position + forward
+                local desiredCFrame = CFrame.lookAt(part.Position, targetPosition, Vector3.yAxis)
+                if alignOrientation.CFrame ~= desiredCFrame then
+                        alignOrientation.CFrame = desiredCFrame
+                end
+        elseif config.LockYawToInitial and not config.EnableRotation and config.YawMaxTorque <= 0 and data.orientationAttachment then
+                data.orientationAttachment:Destroy()
+                data.orientationAttachment = nil
+        elseif not config.EnableRotation and data.alignOrientation then
+                data.alignOrientation:Destroy()
 		data.alignOrientation = nil
 		if not config.LockYawToInitial and data.orientationAttachment then
 			data.orientationAttachment:Destroy()
@@ -1021,11 +1058,12 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
                 data.lastTargetPosition = basePosition
         end
 
-	local velocity = part.AssemblyLinearVelocity
+        local velocity = part.AssemblyLinearVelocity
+        local originalVelocity = velocity
 
-	if config.EnableCustomGravity then
-		velocity = velocity + (config.CustomGravity * dt)
-	end
+        if config.EnableCustomGravity then
+                velocity = velocity + (config.CustomGravity * dt)
+        end
 
 	updateRotation(part, data, dt)
 
@@ -1034,12 +1072,50 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
 		velocity = velocity * damping
 	end
 
-	if config.EnableDrag then
-		local drag = math.clamp(1 - config.DragCoefficient, 0, 1)
-		velocity = velocity * drag
-	end
+        if config.EnableDrag then
+                local drag = math.clamp(1 - config.DragCoefficient, 0, 1)
+                velocity = velocity * drag
+        end
 
-	part.AssemblyLinearVelocity = velocity
+        local delta = velocity - originalVelocity
+        if delta.Magnitude > 0 then
+                local combinedDelta = delta
+                local totalDeltaMagnitude = delta.Magnitude
+
+                if data.pendingVelocityDelta then
+                        local baseVelocity = data.pendingVelocityBase
+                        if baseVelocity and not vectorsDiffer(originalVelocity, baseVelocity, config.VelocityUpdateThreshold * 0.5) then
+                                combinedDelta += data.pendingVelocityDelta
+                                totalDeltaMagnitude += data.pendingVelocityMagnitude or 0
+                        else
+                                data.pendingVelocityDelta = nil
+                                data.pendingVelocityBase = nil
+                                data.pendingVelocityMagnitude = nil
+                        end
+                end
+
+                local targetVelocity = originalVelocity + combinedDelta
+                local componentChanged = vectorsDiffer(targetVelocity, originalVelocity, config.VelocityUpdateThreshold)
+                local magnitudeThreshold = math.max(config.VelocityUpdateThreshold, 1e-5)
+                local magnitudeChanged = combinedDelta.Magnitude >= magnitudeThreshold or targetVelocity.Magnitude <= magnitudeThreshold
+                local accumulatedExceeded = totalDeltaMagnitude >= magnitudeThreshold
+
+                if componentChanged or magnitudeChanged or accumulatedExceeded then
+                        part.AssemblyLinearVelocity = targetVelocity
+                        data.pendingVelocityDelta = nil
+                        data.pendingVelocityBase = nil
+                        data.pendingVelocityMagnitude = nil
+                else
+                        data.pendingVelocityDelta = combinedDelta
+                        data.pendingVelocityBase = originalVelocity
+                        data.pendingVelocityMagnitude = totalDeltaMagnitude
+                end
+        elseif data.pendingVelocityDelta then
+                data.pendingVelocityDelta = nil
+                data.pendingVelocityBase = nil
+                data.pendingVelocityMagnitude = nil
+        end
+
 end
 
 local function heartbeatUpdate(dt: number)

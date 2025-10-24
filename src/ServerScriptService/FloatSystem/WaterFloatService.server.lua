@@ -36,7 +36,7 @@ export type FloatData = {
 }
 
 local floaters: { [BasePart]: FloatData } = {}
-local modelConnections: { [Instance]: { RBXScriptConnection, RBXScriptConnection } } = {}
+local modelConnections: { [Instance]: { RBXScriptConnection } } = {}
 local anchoredConnections: { [BasePart]: RBXScriptConnection } = {}
 
 local setupPart: (BasePart) -> ()

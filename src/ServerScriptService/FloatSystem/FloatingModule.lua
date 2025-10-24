@@ -55,15 +55,15 @@ local config = {
 }
 
 type PartData = {
-	sources: { [Instance]: boolean },
-	bodyPosition: BodyPosition?,
-	alignOrientation: AlignOrientation?,
-	orientationAttachment: Attachment?,
-	waveOffset: number,
-	rotationAngle: number,
-	rotationAxis: Vector3,
-	horizontalForward: Vector3?,
-	tagged: boolean,
+        sources: { [Instance]: boolean },
+        bodyPosition: BodyPosition?,
+        alignOrientation: AlignOrientation?,
+        orientationAttachment: Attachment?,
+        waveOffset: number,
+        rotationAngle: number,
+        rotationAxis: Vector3,
+        horizontalForward: Vector3?,
+        tagged: boolean,
         part: BasePart?,
         lastTargetPosition: Vector3?,
         lastMaxForce: Vector3?,
@@ -75,6 +75,8 @@ type PartData = {
         preSleepCanCollide: boolean?,
         lodSleeping: boolean?,
         hasActivated: boolean?,
+        pendingVelocityDelta: Vector3?,
+        pendingVelocityBase: Vector3?,
 }
 
 type SourceInfo = {
@@ -1074,8 +1076,35 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
                 velocity = velocity * drag
         end
 
-        if vectorsDiffer(velocity, originalVelocity, config.VelocityUpdateThreshold) then
-                part.AssemblyLinearVelocity = velocity
+        local delta = velocity - originalVelocity
+        if delta.Magnitude > 0 then
+                local combinedDelta = delta
+
+                if data.pendingVelocityDelta then
+                        if data.pendingVelocityBase and not vectorsDiffer(originalVelocity, data.pendingVelocityBase, config.VelocityUpdateThreshold * 0.5) then
+                                combinedDelta += data.pendingVelocityDelta
+                        else
+                                data.pendingVelocityDelta = nil
+                                data.pendingVelocityBase = nil
+                        end
+                end
+
+                local targetVelocity = originalVelocity + combinedDelta
+                local componentChanged = vectorsDiffer(targetVelocity, originalVelocity, config.VelocityUpdateThreshold)
+                local magnitudeThreshold = math.max(config.VelocityUpdateThreshold, 1e-5)
+                local magnitudeChanged = combinedDelta.Magnitude >= magnitudeThreshold or targetVelocity.Magnitude <= magnitudeThreshold
+
+                if componentChanged or magnitudeChanged then
+                        part.AssemblyLinearVelocity = targetVelocity
+                        data.pendingVelocityDelta = nil
+                        data.pendingVelocityBase = nil
+                else
+                        data.pendingVelocityDelta = combinedDelta
+                        data.pendingVelocityBase = originalVelocity
+                end
+        elseif data.pendingVelocityDelta then
+                data.pendingVelocityDelta = nil
+                data.pendingVelocityBase = nil
         end
 end
 

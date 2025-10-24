@@ -37,6 +37,7 @@ local lastSurfaced = false
 
 local SURFACE_RESPONSIVENESS = 6
 local SURFACE_FLOAT_OFFSET = 0 -- keep the humanoid root aligned with the wave crest so the swimmer rides midway on the surface
+local DEFAULT_SURFACE_SPEED = 16
 
 local function humStates(activate: boolean, newState: Enum.HumanoidStateType)
     humanoid:SetStateEnabled(Enum.HumanoidStateType.Running, activate)
@@ -149,18 +150,49 @@ function swimModule:Start()
         end
 
         local velocity = rootPart.AssemblyLinearVelocity
+        local enforceSurfaceMovement = surfaceState and surfaceState.Surfaced
+        local desiredHorizontal: Vector3? = nil
+
+        if enforceSurfaceMovement then
+            if moving then
+                local horizontalDirection = Vector3.new(moveDirection.X, 0, moveDirection.Z)
+                if horizontalDirection.Magnitude > 1e-4 then
+                    local horizontalUnit = horizontalDirection.Unit
+                    local speed = humanoid.WalkSpeed or 0
+                    if speed <= 0 then
+                        speed = Vector3.new(velocity.X, 0, velocity.Z).Magnitude
+                        if speed <= 1e-3 then
+                            speed = DEFAULT_SURFACE_SPEED
+                        end
+                    end
+
+                    desiredHorizontal = Vector3.new(horizontalUnit.X * speed, 0, horizontalUnit.Z * speed)
+                else
+                    desiredHorizontal = Vector3.new()
+                end
+            else
+                desiredHorizontal = Vector3.new()
+            end
+        end
+
+        local newX, newY, newZ = velocity.X, velocity.Y, velocity.Z
 
         if desiredVelocityY then
-            local newX = moving and velocity.X or 0
-            local newZ = moving and velocity.Z or 0
+            newY = desiredVelocityY
+        end
 
-            if velocity.X ~= newX or velocity.Y ~= desiredVelocityY or velocity.Z ~= newZ then
-                rootPart.AssemblyLinearVelocity = Vector3.new(newX, desiredVelocityY, newZ)
-            end
+        if desiredHorizontal then
+            newX = desiredHorizontal.X
+            newZ = desiredHorizontal.Z
         elseif not moving then
-            if math.abs(velocity.X) > 1e-3 or math.abs(velocity.Z) > 1e-3 then
-                rootPart.AssemblyLinearVelocity = Vector3.new(0, velocity.Y, 0)
+            if math.abs(newX) > 1e-3 or math.abs(newZ) > 1e-3 then
+                newX = 0
+                newZ = 0
             end
+        end
+
+        if newX ~= velocity.X or newY ~= velocity.Y or newZ ~= velocity.Z then
+            rootPart.AssemblyLinearVelocity = Vector3.new(newX, newY, newZ)
         end
     end)
 end

@@ -43,42 +43,48 @@ local config = {
 	ActivationPadding = 0.5,
 	HorizontalMaxForce = 2500,
 	VerticalMaxForce = math.huge,
-        EnableLOD = true,
-        LODActivationRadius = 160,
-        LODDeactivationRadius = 210,
-        LODCheckInterval = 0.35,
-        LODSleepDropDistance = 0.5,
-        PositionUpdateThreshold = 0.015,
-        VelocityUpdateThreshold = 0.01,
-        EnableNetworkOwnershipManagement = true,
-        NetworkOwnershipCheckInterval = 0.5,
-}
+	EnableLOD = true,
+	LODActivationRadius = 160,
+	LODDeactivationRadius = 210,
+	LODCheckInterval = 0.35,
+	LODSleepDropDistance = 0.5,
+	PositionUpdateThreshold = 0.015,
+	VelocityUpdateThreshold = 0.01,
+	PositionUpdateInterval = 0.05,
+	VelocityUpdateInterval = 0.05,
+	ImmediateUpdateMultiplier = 4,
+	EnableNetworkOwnershipManagement = true,
+	NetworkOwnershipCheckInterval = 0.5,
+	}
 
 type PartData = {
-        sources: { [Instance]: boolean },
-        bodyPosition: BodyPosition?,
-        alignOrientation: AlignOrientation?,
-        orientationAttachment: Attachment?,
-        waveOffset: number,
-        rotationAngle: number,
-        rotationAxis: Vector3,
-        horizontalForward: Vector3?,
-        tagged: boolean,
-        part: BasePart?,
-        lastTargetPosition: Vector3?,
-        lastMaxForce: Vector3?,
-        isActive: boolean?,
-        nextDistanceCheck: number?,
-        currentOwner: Player?,
-        nextOwnershipCheck: number?,
-        preSleepAnchored: boolean?,
-        preSleepCanCollide: boolean?,
-        lodSleeping: boolean?,
-        hasActivated: boolean?,
-        pendingVelocityDelta: Vector3?,
-        pendingVelocityBase: Vector3?,
-        pendingVelocityMagnitude: number?,
-}
+	sources: { [Instance]: boolean },
+	bodyPosition: BodyPosition?,
+	alignOrientation: AlignOrientation?,
+	orientationAttachment: Attachment?,
+	waveOffset: number,
+	rotationAngle: number,
+	rotationAxis: Vector3,
+	horizontalForward: Vector3?,
+	tagged: boolean,
+	part: BasePart?,
+	lastTargetPosition: Vector3?,
+	lastMaxForce: Vector3?,
+	isActive: boolean?,
+	nextDistanceCheck: number?,
+	currentOwner: Player?,
+	nextOwnershipCheck: number?,
+	preSleepAnchored: boolean?,
+	preSleepCanCollide: boolean?,
+	lodSleeping: boolean?,
+	hasActivated: boolean?,
+	pendingVelocityDelta: Vector3?,
+	pendingVelocityBase: Vector3?,
+	pendingVelocityMagnitude: number?,
+	pendingTargetPosition: Vector3?,
+	nextPositionUpdate: number?,
+	nextVelocityUpdate: number?,
+	}
 
 type SourceInfo = {
 	parts: { [BasePart]: boolean },
@@ -328,6 +334,8 @@ local function cleanupPart(part: Instance)
                 data.bodyPosition = nil
                 data.lastTargetPosition = nil
                 data.lastMaxForce = nil
+                data.pendingTargetPosition = nil
+                data.nextPositionUpdate = nil
 	end
 
 	if data.alignOrientation then
@@ -339,6 +347,8 @@ local function cleanupPart(part: Instance)
 		data.orientationAttachment:Destroy()
 		data.orientationAttachment = nil
 	end
+	data.pendingTargetPosition = nil
+	data.nextPositionUpdate = nil
 
 	if basePart and data.tagged then
 		CollectionService:RemoveTag(basePart, FLOAT_TAG)
@@ -356,6 +366,10 @@ local function cleanupPart(part: Instance)
 
 	data.isActive = nil
 	data.nextDistanceCheck = nil
+	data.pendingVelocityDelta = nil
+	data.pendingVelocityBase = nil
+	data.pendingVelocityMagnitude = nil
+	data.nextVelocityUpdate = nil
 end
 
 local function removeBodyMovers(part: BasePart, data: PartData)
@@ -364,6 +378,8 @@ local function removeBodyMovers(part: BasePart, data: PartData)
 		data.bodyPosition = nil
 		data.lastTargetPosition = nil
 		data.lastMaxForce = nil
+		data.pendingTargetPosition = nil
+		data.nextPositionUpdate = nil
 	end
 
 	if data.alignOrientation then
@@ -375,6 +391,10 @@ local function removeBodyMovers(part: BasePart, data: PartData)
 		data.orientationAttachment:Destroy()
 		data.orientationAttachment = nil
 	end
+	data.pendingVelocityDelta = nil
+	data.pendingVelocityBase = nil
+	data.pendingVelocityMagnitude = nil
+	data.nextVelocityUpdate = nil
 end
 
 local function ensureBodyPosition(part: BasePart, data: PartData): BodyPosition
@@ -467,28 +487,31 @@ local function registerPart(part: BasePart, source: Instance)
 		local axis = config.RotationAxis.Magnitude > 0 and config.RotationAxis.Unit or Vector3.new(0, 1, 0)
 		local horizontalForward = computeHorizontalForward(part)
 
-                data = {
-                        sources = {},
-                        bodyPosition = nil,
-                        alignOrientation = nil,
-                        orientationAttachment = nil,
-                        waveOffset = math.random() * math.pi * 2,
-                        rotationAngle = 0,
-                        rotationAxis = axis,
-                        tagged = false,
-                        part = part,
-                        lastTargetPosition = nil,
-                        lastMaxForce = nil,
-                        horizontalForward = horizontalForward,
-                        isActive = nil,
-                        nextDistanceCheck = nil,
-                        currentOwner = nil,
-                        nextOwnershipCheck = nil,
-                        preSleepAnchored = nil,
-                        preSleepCanCollide = nil,
-                        lodSleeping = false,
-                        hasActivated = false,
-                }
+	        data = {
+	                sources = {},
+	                bodyPosition = nil,
+	                alignOrientation = nil,
+	                orientationAttachment = nil,
+	                waveOffset = math.random() * math.pi * 2,
+	                rotationAngle = 0,
+	                rotationAxis = axis,
+	                tagged = false,
+	                part = part,
+	                lastTargetPosition = nil,
+	                lastMaxForce = nil,
+	                horizontalForward = horizontalForward,
+	                isActive = nil,
+	                nextDistanceCheck = nil,
+	                currentOwner = nil,
+	                nextOwnershipCheck = nil,
+			preSleepAnchored = nil,
+			preSleepCanCollide = nil,
+			lodSleeping = false,
+			hasActivated = false,
+			pendingTargetPosition = nil,
+			nextPositionUpdate = nil,
+			nextVelocityUpdate = nil,
+			}
                 trackedParts[part] = data
         elseif trackedPart ~= part then
                 trackedParts[trackedPart] = nil
@@ -915,6 +938,12 @@ local function updatePartActivation(basePart: BasePart, data: PartData, now: num
                 if not wasActive then
                         data.lastTargetPosition = nil
                         data.lastMaxForce = nil
+                        data.pendingTargetPosition = nil
+                        data.nextPositionUpdate = nil
+                        data.pendingVelocityDelta = nil
+                        data.pendingVelocityBase = nil
+                        data.pendingVelocityMagnitude = nil
+                        data.nextVelocityUpdate = nil
                 end
                 data.hasActivated = true
                 data.isActive = true
@@ -926,6 +955,12 @@ local function updatePartActivation(basePart: BasePart, data: PartData, now: num
                 enterSleepState(basePart, data)
                 data.isActive = false
                 data.nextOwnershipCheck = nil
+                data.pendingTargetPosition = nil
+                data.nextPositionUpdate = nil
+                data.pendingVelocityDelta = nil
+                data.pendingVelocityBase = nil
+                data.pendingVelocityMagnitude = nil
+                data.nextVelocityUpdate = nil
         end
 
         return data.isActive
@@ -1053,12 +1088,43 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
 		end
 	end
 
-        if vectorsDiffer(data.lastTargetPosition, basePosition, config.PositionUpdateThreshold) then
-                bodyPosition.Position = basePosition
-                data.lastTargetPosition = basePosition
-        end
+	local positionThreshold = config.PositionUpdateThreshold
+	local positionInterval = math.max(config.PositionUpdateInterval or 0, 0)
+	local immediateMultiplier = math.max(config.ImmediateUpdateMultiplier or 1, 1)
+	if positionInterval <= 0 then
+		if vectorsDiffer(data.lastTargetPosition, basePosition, positionThreshold) then
+			bodyPosition.Position = basePosition
+			data.lastTargetPosition = basePosition
+		end
+		data.pendingTargetPosition = nil
+		data.nextPositionUpdate = nil
+	else
+		local nextUpdate = data.nextPositionUpdate or 0
+		local needsUpdate = vectorsDiffer(data.lastTargetPosition, basePosition, positionThreshold)
+		if needsUpdate then
+			data.pendingTargetPosition = basePosition
+			local deltaMagnitude = data.lastTargetPosition and (basePosition - data.lastTargetPosition).Magnitude or math.huge
+			local immediateThreshold = math.max(positionThreshold * immediateMultiplier, positionThreshold)
+			if now >= nextUpdate or deltaMagnitude >= immediateThreshold then
+				bodyPosition.Position = basePosition
+				data.lastTargetPosition = basePosition
+				data.pendingTargetPosition = nil
+				data.nextPositionUpdate = now + positionInterval
+			end
+		elseif data.pendingTargetPosition then
+			if now >= nextUpdate and vectorsDiffer(data.lastTargetPosition, data.pendingTargetPosition, positionThreshold) then
+				local target = data.pendingTargetPosition
+				bodyPosition.Position = target
+				data.lastTargetPosition = target
+				data.pendingTargetPosition = nil
+				data.nextPositionUpdate = now + positionInterval
+			elseif not vectorsDiffer(data.lastTargetPosition, data.pendingTargetPosition, positionThreshold) then
+				data.pendingTargetPosition = nil
+			end
+		end
+	end
 
-        local velocity = part.AssemblyLinearVelocity
+	local velocity = part.AssemblyLinearVelocity
         local originalVelocity = velocity
 
         if config.EnableCustomGravity then
@@ -1077,44 +1143,81 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
                 velocity = velocity * drag
         end
 
-        local delta = velocity - originalVelocity
-        if delta.Magnitude > 0 then
-                local combinedDelta = delta
-                local totalDeltaMagnitude = delta.Magnitude
+	local velocityInterval = math.max(config.VelocityUpdateInterval or 0, 0)
+	local velocityImmediateThreshold = math.max(config.VelocityUpdateThreshold * immediateMultiplier, config.VelocityUpdateThreshold)
+	local delta = velocity - originalVelocity
+	if delta.Magnitude > 0 then
+		local combinedDelta = delta
+		local totalDeltaMagnitude = delta.Magnitude
 
-                if data.pendingVelocityDelta then
-                        local baseVelocity = data.pendingVelocityBase
-                        if baseVelocity and not vectorsDiffer(originalVelocity, baseVelocity, config.VelocityUpdateThreshold * 0.5) then
-                                combinedDelta += data.pendingVelocityDelta
-                                totalDeltaMagnitude += data.pendingVelocityMagnitude or 0
-                        else
-                                data.pendingVelocityDelta = nil
-                                data.pendingVelocityBase = nil
-                                data.pendingVelocityMagnitude = nil
-                        end
-                end
+		if data.pendingVelocityDelta then
+			local baseVelocity = data.pendingVelocityBase
+			if baseVelocity and not vectorsDiffer(originalVelocity, baseVelocity, config.VelocityUpdateThreshold * 0.5) then
+				combinedDelta += data.pendingVelocityDelta
+				totalDeltaMagnitude += data.pendingVelocityMagnitude or 0
+			else
+				data.pendingVelocityDelta = nil
+				data.pendingVelocityBase = nil
+				data.pendingVelocityMagnitude = nil
+			end
+		end
 
-                local targetVelocity = originalVelocity + combinedDelta
-                local componentChanged = vectorsDiffer(targetVelocity, originalVelocity, config.VelocityUpdateThreshold)
-                local magnitudeThreshold = math.max(config.VelocityUpdateThreshold, 1e-5)
-                local magnitudeChanged = combinedDelta.Magnitude >= magnitudeThreshold or targetVelocity.Magnitude <= magnitudeThreshold
-                local accumulatedExceeded = totalDeltaMagnitude >= magnitudeThreshold
+		local targetVelocity = originalVelocity + combinedDelta
+		local componentChanged = vectorsDiffer(targetVelocity, originalVelocity, config.VelocityUpdateThreshold)
+		local magnitudeThreshold = math.max(config.VelocityUpdateThreshold, 1e-5)
+		local magnitudeChanged = combinedDelta.Magnitude >= magnitudeThreshold or targetVelocity.Magnitude <= magnitudeThreshold
+		local accumulatedExceeded = totalDeltaMagnitude >= magnitudeThreshold
 
-                if componentChanged or magnitudeChanged or accumulatedExceeded then
-                        part.AssemblyLinearVelocity = targetVelocity
-                        data.pendingVelocityDelta = nil
-                        data.pendingVelocityBase = nil
-                        data.pendingVelocityMagnitude = nil
-                else
-                        data.pendingVelocityDelta = combinedDelta
-                        data.pendingVelocityBase = originalVelocity
-                        data.pendingVelocityMagnitude = totalDeltaMagnitude
-                end
-        elseif data.pendingVelocityDelta then
-                data.pendingVelocityDelta = nil
-                data.pendingVelocityBase = nil
-                data.pendingVelocityMagnitude = nil
-        end
+		if componentChanged or magnitudeChanged or accumulatedExceeded then
+			if velocityInterval <= 0 then
+				part.AssemblyLinearVelocity = targetVelocity
+				data.pendingVelocityDelta = nil
+				data.pendingVelocityBase = nil
+				data.pendingVelocityMagnitude = nil
+				data.nextVelocityUpdate = nil
+			else
+				local nextVelocityUpdate = data.nextVelocityUpdate or 0
+				if now >= nextVelocityUpdate or combinedDelta.Magnitude >= velocityImmediateThreshold then
+					part.AssemblyLinearVelocity = targetVelocity
+					data.pendingVelocityDelta = nil
+					data.pendingVelocityBase = nil
+					data.pendingVelocityMagnitude = nil
+					data.nextVelocityUpdate = now + velocityInterval
+				else
+					data.pendingVelocityDelta = combinedDelta
+					data.pendingVelocityBase = originalVelocity
+					data.pendingVelocityMagnitude = totalDeltaMagnitude
+				end
+			end
+		elseif velocityInterval > 0 then
+			data.pendingVelocityDelta = combinedDelta
+			data.pendingVelocityBase = originalVelocity
+			data.pendingVelocityMagnitude = totalDeltaMagnitude
+		end
+	elseif data.pendingVelocityDelta then
+		if velocityInterval > 0 then
+			local nextVelocityUpdate = data.nextVelocityUpdate or 0
+			if now >= nextVelocityUpdate then
+				local baseVelocity = data.pendingVelocityBase or originalVelocity
+				local targetVelocity = baseVelocity + data.pendingVelocityDelta
+				part.AssemblyLinearVelocity = targetVelocity
+				data.pendingVelocityDelta = nil
+				data.pendingVelocityBase = nil
+				data.pendingVelocityMagnitude = nil
+				data.nextVelocityUpdate = now + velocityInterval
+			end
+		else
+			data.pendingVelocityDelta = nil
+			data.pendingVelocityBase = nil
+			data.pendingVelocityMagnitude = nil
+			data.nextVelocityUpdate = nil
+		end
+	elseif velocityInterval > 0 then
+		local nextVelocityUpdate = data.nextVelocityUpdate
+		if nextVelocityUpdate and now >= nextVelocityUpdate then
+			data.nextVelocityUpdate = now + velocityInterval
+		end
+	end
 
 end
 

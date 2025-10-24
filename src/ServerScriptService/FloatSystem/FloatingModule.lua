@@ -10,11 +10,13 @@ local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
 
 local FloatingModule = {}
 
+type Player = Players.Player
+
 local config = {
-	OffsetY = 0.05,
-	EnableRotation = false,
-	RotationSpeed = 0.5,
-	DebugMode = false,
+        OffsetY = 0.05,
+        EnableRotation = false,
+        RotationSpeed = 0.5,
+        DebugMode = false,
 	EnableToolFloating = true,
 	EnablePartFloating = true,
 	BuoyancyForce = Vector3.new(0, 100, 0),
@@ -41,10 +43,14 @@ local config = {
 	ActivationPadding = 0.5,
 	HorizontalMaxForce = 2500,
 	VerticalMaxForce = math.huge,
-	EnableLOD = true,
-	LODActivationRadius = 160,
-	LODDeactivationRadius = 210,
-	LODCheckInterval = 0.35,
+        EnableLOD = true,
+        LODActivationRadius = 160,
+        LODDeactivationRadius = 210,
+        LODCheckInterval = 0.35,
+        LODSleepDropDistance = 0.5,
+        PositionUpdateThreshold = 0.015,
+        EnableNetworkOwnershipManagement = true,
+        NetworkOwnershipCheckInterval = 0.5,
 }
 
 type PartData = {
@@ -57,11 +63,17 @@ type PartData = {
 	rotationAxis: Vector3,
 	horizontalForward: Vector3?,
 	tagged: boolean,
-	part: BasePart?,
-	lastTargetPosition: Vector3?,
-	lastMaxForce: Vector3?,
-	isActive: boolean?,
-	nextDistanceCheck: number?,
+        part: BasePart?,
+        lastTargetPosition: Vector3?,
+        lastMaxForce: Vector3?,
+        isActive: boolean?,
+        nextDistanceCheck: number?,
+        currentOwner: Player?,
+        nextOwnershipCheck: number?,
+        preSleepAnchored: boolean?,
+        preSleepCanCollide: boolean?,
+        lodSleeping: boolean?,
+        hasActivated: boolean?,
 }
 
 type SourceInfo = {
@@ -84,7 +96,9 @@ local initialized = false
 local heartbeatConn: RBXScriptConnection?
 
 local FLOAT_TAG = "WaterFloat"
-local playerPositionBuffer: { Vector3 } = {}
+type PlayerInfo = { player: Player, position: Vector3 }
+local playerInfoBuffer: { PlayerInfo } = {}
+local ZERO_VECTOR = Vector3.new(0, 0, 0)
 
 local function getBodyPositionMaxForce(): Vector3
 	local horizontal = math.max(config.HorizontalMaxForce, 0)
@@ -146,21 +160,100 @@ local function computeHorizontalForward(part: BasePart): Vector3
 end
 
 local function findTrackedEntryForBasePart(basePart: BasePart): (Instance?, PartData?)
-	for trackedPart, trackedData in pairs(trackedParts) do
-		local resolved = resolveBasePart(trackedPart, trackedData)
-		if resolved == basePart then
-			return trackedPart, trackedData
-		end
-	end
+        for trackedPart, trackedData in pairs(trackedParts) do
+                local resolved = resolveBasePart(trackedPart, trackedData)
+                if resolved == basePart then
+                        return trackedPart, trackedData
+                end
+        end
 
-	return nil, nil
+        return nil, nil
+end
+
+local function releaseNetworkOwnership(basePart: BasePart?, data: PartData)
+        if not config.EnableNetworkOwnershipManagement then
+                data.currentOwner = nil
+                return
+        end
+
+        data.currentOwner = nil
+
+        if not basePart then
+                return
+        end
+
+        if not basePart:IsDescendantOf(Workspace) then
+                return
+        end
+
+        if not basePart.CanSetNetworkOwnership then
+                return
+        end
+
+        local ok, owner = pcall(function()
+                return basePart:GetNetworkOwner()
+        end)
+
+        if ok and owner ~= nil then
+                local success, message = pcall(function()
+                        basePart:SetNetworkOwnershipAuto()
+                end)
+                if not success and config.DebugMode then
+                        debugPrint(string.format("Failed to release network ownership for %s: %s", basePart:GetFullName(), message))
+                end
+        end
+end
+
+local function enterSleepState(basePart: BasePart, data: PartData)
+        if data.lodSleeping then
+                return
+        end
+
+        data.preSleepAnchored = basePart.Anchored
+        data.preSleepCanCollide = basePart.CanCollide
+
+        if data.hasActivated then
+                local dropDistance = math.max(config.LODSleepDropDistance or 0, 0)
+                if dropDistance > 0 then
+                        basePart.CFrame = basePart.CFrame + Vector3.new(0, -dropDistance, 0)
+                end
+        end
+
+        basePart.AssemblyLinearVelocity = ZERO_VECTOR
+        basePart.AssemblyAngularVelocity = ZERO_VECTOR
+        basePart.Anchored = true
+        basePart.CanCollide = false
+
+        data.lodSleeping = true
+end
+
+local function exitSleepState(basePart: BasePart, data: PartData)
+        if not data.lodSleeping then
+                return
+        end
+
+        if data.preSleepAnchored ~= nil then
+                basePart.Anchored = data.preSleepAnchored
+        else
+                basePart.Anchored = false
+        end
+
+        if data.preSleepCanCollide ~= nil then
+                basePart.CanCollide = data.preSleepCanCollide
+        else
+                basePart.CanCollide = true
+        end
+
+        data.preSleepAnchored = nil
+        data.preSleepCanCollide = nil
+        data.lodSleeping = false
 end
 
 local function cleanupPart(part: Instance)
-	local data = trackedParts[part]
+        local data = trackedParts[part]
 
-	if not data and part:IsA("BasePart") then
-		local lookup = partLookup[part]
+        if not data and part:IsA("BasePart") then
+                local lookup = partLookup[part]
 		if lookup then
 			local lookupData = trackedParts[lookup]
 			if lookupData then
@@ -191,17 +284,29 @@ local function cleanupPart(part: Instance)
 		end
 	end
 
-	if not data then
-		return
-	end
+        if not data then
+                return
+        end
 
-	local basePart = resolveBasePart(part, data)
+        local basePart = resolveBasePart(part, data)
 
-	if data.bodyPosition then
-		data.bodyPosition:Destroy()
-		data.bodyPosition = nil
-		data.lastTargetPosition = nil
-		data.lastMaxForce = nil
+        if basePart then
+                exitSleepState(basePart, data)
+        end
+
+        if basePart then
+                releaseNetworkOwnership(basePart, data)
+                data.nextOwnershipCheck = nil
+        else
+                data.currentOwner = nil
+                data.nextOwnershipCheck = nil
+        end
+
+        if data.bodyPosition then
+                data.bodyPosition:Destroy()
+                data.bodyPosition = nil
+                data.lastTargetPosition = nil
+                data.lastMaxForce = nil
 	end
 
 	if data.alignOrientation then
@@ -341,26 +446,32 @@ local function registerPart(part: BasePart, source: Instance)
 		local axis = config.RotationAxis.Magnitude > 0 and config.RotationAxis.Unit or Vector3.new(0, 1, 0)
 		local horizontalForward = computeHorizontalForward(part)
 
-		data = {
-			sources = {},
-			bodyPosition = nil,
-			alignOrientation = nil,
-			orientationAttachment = nil,
-			waveOffset = math.random() * math.pi * 2,
-			rotationAngle = 0,
-			rotationAxis = axis,
-			tagged = false,
-			part = part,
-			lastTargetPosition = nil,
-			lastMaxForce = nil,
-			horizontalForward = horizontalForward,
-			isActive = nil,
-			nextDistanceCheck = nil,
-		}
-		trackedParts[part] = data
-	elseif trackedPart ~= part then
-		trackedParts[trackedPart] = nil
-		trackedParts[part] = data
+                data = {
+                        sources = {},
+                        bodyPosition = nil,
+                        alignOrientation = nil,
+                        orientationAttachment = nil,
+                        waveOffset = math.random() * math.pi * 2,
+                        rotationAngle = 0,
+                        rotationAxis = axis,
+                        tagged = false,
+                        part = part,
+                        lastTargetPosition = nil,
+                        lastMaxForce = nil,
+                        horizontalForward = horizontalForward,
+                        isActive = nil,
+                        nextDistanceCheck = nil,
+                        currentOwner = nil,
+                        nextOwnershipCheck = nil,
+                        preSleepAnchored = nil,
+                        preSleepCanCollide = nil,
+                        lodSleeping = false,
+                        hasActivated = false,
+                }
+                trackedParts[part] = data
+        elseif trackedPart ~= part then
+                trackedParts[trackedPart] = nil
+                trackedParts[part] = data
 	end
 
 	data.part = part
@@ -688,61 +799,62 @@ local function updateRotation(part: BasePart, data: PartData, dt: number)
 	end
 end
 
-local function vectorsDiffer(a: Vector3?, b: Vector3?): boolean
-	if a == nil or b == nil then
-		return true
-	end
+local function vectorsDiffer(a: Vector3?, b: Vector3?, tolerance: number?): boolean
+        if a == nil or b == nil then
+                return true
+        end
 
-	local delta = a - b
-	return math.abs(delta.X) > 1e-4 or math.abs(delta.Y) > 1e-4 or math.abs(delta.Z) > 1e-4
+        local epsilon = math.max(tolerance or 1e-4, 0)
+        local delta = a - b
+        return math.abs(delta.X) > epsilon or math.abs(delta.Y) > epsilon or math.abs(delta.Z) > epsilon
 end
 
-local function gatherActivePlayerPositions(buffer: { Vector3 }): { Vector3 }
-	table.clear(buffer)
+local function gatherActivePlayers(buffer: { PlayerInfo }): { PlayerInfo }
+        table.clear(buffer)
 
-	for _, player in ipairs(Players:GetPlayers()) do
-		local character = player.Character
-		if not character then
-			continue
-		end
+        for _, player in ipairs(Players:GetPlayers()) do
+                local character = player.Character
+                if not character then
+                        continue
+                end
 
-		local root = character:FindFirstChild("HumanoidRootPart")
-		if root and root:IsA("BasePart") then
-			buffer[#buffer + 1] = root.Position
-		end
-	end
+                local root = character:FindFirstChild("HumanoidRootPart")
+                if root and root:IsA("BasePart") then
+                        buffer[#buffer + 1] = { player = player, position = root.Position }
+                end
+        end
 
-	return buffer
+        return buffer
 end
 
-local function shouldPartBeActive(partPosition: Vector3, playerPositions: { Vector3 }, wasActive: boolean): boolean
-	if #playerPositions == 0 then
-		return false
-	end
+local function shouldPartBeActive(partPosition: Vector3, playerInfos: { PlayerInfo }, wasActive: boolean): boolean
+        if #playerInfos == 0 then
+                return false
+        end
 
-	local activationRadius = math.max(config.LODActivationRadius, 0)
-	local deactivationRadius = math.max(config.LODDeactivationRadius, activationRadius)
+        local activationRadius = math.max(config.LODActivationRadius, 0)
+        local deactivationRadius = math.max(config.LODDeactivationRadius, activationRadius)
 
-	local activationThreshold = activationRadius * activationRadius
-	local deactivationThreshold = deactivationRadius * deactivationRadius
-	local threshold = wasActive and deactivationThreshold or activationThreshold
+        local activationThreshold = activationRadius * activationRadius
+        local deactivationThreshold = deactivationRadius * deactivationRadius
+        local threshold = wasActive and deactivationThreshold or activationThreshold
 
-	for _, position in ipairs(playerPositions) do
-		local offset = partPosition - position
-		if offset:Dot(offset) <= threshold then
-			return true
-		end
-	end
+        for _, info in ipairs(playerInfos) do
+                local offset = partPosition - info.position
+                if offset:Dot(offset) <= threshold then
+                        return true
+                end
+        end
 
 	return false
 end
 
-local function updatePartActivation(basePart: BasePart, data: PartData, now: number, playerPositions: { Vector3 }): boolean
-	if not config.EnableLOD then
-		data.isActive = true
-		data.nextDistanceCheck = nil
-		return true
-	end
+local function updatePartActivation(basePart: BasePart, data: PartData, now: number, playerInfos: { PlayerInfo }): boolean
+        if not config.EnableLOD then
+                data.isActive = true
+                data.nextDistanceCheck = nil
+                return true
+        end
 
 	local nextCheck = data.nextDistanceCheck or 0
 	if now < nextCheck and data.isActive ~= nil then
@@ -756,30 +868,118 @@ local function updatePartActivation(basePart: BasePart, data: PartData, now: num
 		data.nextDistanceCheck = now + interval
 	end
 
-	local wasActive = data.isActive == true
-	local shouldActivate = shouldPartBeActive(basePart.Position, playerPositions, wasActive)
+        local wasActive = data.isActive == true
+        local shouldActivate = shouldPartBeActive(basePart.Position, playerInfos, wasActive)
 
-	if shouldActivate then
-		if not wasActive then
-			data.lastTargetPosition = nil
-			data.lastMaxForce = nil
-		end
-		data.isActive = true
-	else
-		if wasActive then
-			removeBodyMovers(basePart, data)
-		end
-		data.isActive = false
-	end
+        if shouldActivate then
+                if data.lodSleeping then
+                        exitSleepState(basePart, data)
+                end
+                if not wasActive then
+                        data.lastTargetPosition = nil
+                        data.lastMaxForce = nil
+                end
+                data.hasActivated = true
+                data.isActive = true
+        else
+                if wasActive then
+                        removeBodyMovers(basePart, data)
+                end
+                releaseNetworkOwnership(basePart, data)
+                enterSleepState(basePart, data)
+                data.isActive = false
+                data.nextOwnershipCheck = nil
+        end
 
-	return data.isActive
+        return data.isActive
+end
+
+local function updateNetworkOwnership(basePart: BasePart, data: PartData, now: number, playerInfos: { PlayerInfo })
+        if not config.EnableNetworkOwnershipManagement then
+                return
+        end
+
+        if not basePart.CanSetNetworkOwnership then
+                return
+        end
+
+        local nextCheck = data.nextOwnershipCheck or 0
+        if now < nextCheck then
+                return
+        end
+
+        local interval = math.max(config.NetworkOwnershipCheckInterval, 0)
+        if interval == 0 then
+                data.nextOwnershipCheck = now
+        else
+                data.nextOwnershipCheck = now + interval
+        end
+
+        if #playerInfos == 0 then
+                if data.currentOwner ~= nil or basePart:GetNetworkOwner() ~= nil then
+                        releaseNetworkOwnership(basePart, data)
+                end
+                return
+        end
+
+        local position = basePart.Position
+        local closestPlayer: Player? = nil
+        local closestDistanceSq = math.huge
+
+        for _, info in ipairs(playerInfos) do
+                local offset = position - info.position
+                local distanceSq = offset:Dot(offset)
+                if distanceSq < closestDistanceSq then
+                        closestDistanceSq = distanceSq
+                        closestPlayer = info.player
+                end
+        end
+
+        if not closestPlayer then
+                if data.currentOwner ~= nil or basePart:GetNetworkOwner() ~= nil then
+                        releaseNetworkOwnership(basePart, data)
+                end
+                return
+        end
+
+        if config.EnableLOD then
+                local activationRadius = math.max(config.LODDeactivationRadius, config.LODActivationRadius)
+                if activationRadius > 0 then
+                        local threshold = activationRadius * activationRadius
+                        if closestDistanceSq > threshold then
+                                if data.currentOwner ~= nil or basePart:GetNetworkOwner() ~= nil then
+                                        releaseNetworkOwnership(basePart, data)
+                                end
+                                return
+                        end
+                end
+        end
+
+        local ok, owner = pcall(function()
+                return basePart:GetNetworkOwner()
+        end)
+
+        if ok and owner == closestPlayer then
+                data.currentOwner = closestPlayer
+                return
+        end
+
+        local success, message = pcall(function()
+                basePart:SetNetworkOwner(closestPlayer)
+        end)
+
+        if success then
+                data.currentOwner = closestPlayer
+        elseif config.DebugMode then
+                debugPrint(string.format("Failed to assign network ownership for %s: %s", basePart:GetFullName(), message))
+        end
 end
 
 local function applyForces(part: BasePart, data: PartData, dt: number, now: number)
-	local surfaceY = WaterPhysics.TryGetWaterSurface(part.Position)
-	if not surfaceY then
-		removeBodyMovers(part, data)
-		return
+        local surfaceY = WaterPhysics.TryGetWaterSurface(part.Position)
+        if not surfaceY then
+                removeBodyMovers(part, data)
+                return
 	end
 
 	local halfHeight = part.Size.Y * 0.5
@@ -816,10 +1016,10 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
 		end
 	end
 
-	if vectorsDiffer(data.lastTargetPosition, basePosition) then
-		bodyPosition.Position = basePosition
-		data.lastTargetPosition = basePosition
-	end
+        if vectorsDiffer(data.lastTargetPosition, basePosition, config.PositionUpdateThreshold) then
+                bodyPosition.Position = basePosition
+                data.lastTargetPosition = basePosition
+        end
 
 	local velocity = part.AssemblyLinearVelocity
 
@@ -843,13 +1043,17 @@ local function applyForces(part: BasePart, data: PartData, dt: number, now: numb
 end
 
 local function heartbeatUpdate(dt: number)
-	local now = Workspace:GetServerTimeNow()
-	local playerPositions = config.EnableLOD and gatherActivePlayerPositions(playerPositionBuffer) or playerPositionBuffer
+        local now = Workspace:GetServerTimeNow()
+        local needPlayerData = config.EnableLOD or config.EnableNetworkOwnershipManagement
+        local playerInfos = needPlayerData and gatherActivePlayers(playerInfoBuffer) or playerInfoBuffer
+        if not needPlayerData then
+                table.clear(playerInfos)
+        end
 
-	for part, data in pairs(trackedParts) do
-		local basePart = resolveBasePart(part, data)
+        for part, data in pairs(trackedParts) do
+                local basePart = resolveBasePart(part, data)
 
-		if not basePart or not basePart.Parent or not basePart:IsDescendantOf(Workspace) then
+                if not basePart or not basePart.Parent or not basePart:IsDescendantOf(Workspace) then
 			cleanupPart(part)
 			continue
 		end
@@ -862,20 +1066,23 @@ local function heartbeatUpdate(dt: number)
 		data.part = basePart
 		partLookup[basePart] = part
 
-		if basePart.Anchored then
-			removeBodyMovers(basePart, data)
-			continue
-		end
+                if basePart.Anchored and not data.lodSleeping then
+                        releaseNetworkOwnership(basePart, data)
+                        data.nextOwnershipCheck = nil
+                        removeBodyMovers(basePart, data)
+                        continue
+                end
 
-		if not updatePartActivation(basePart, data, now, playerPositions) then
-			if data.bodyPosition or data.alignOrientation or data.orientationAttachment then
-				removeBodyMovers(basePart, data)
-			end
-			continue
-		end
+                if not updatePartActivation(basePart, data, now, playerInfos) then
+                        if data.bodyPosition or data.alignOrientation or data.orientationAttachment then
+                                removeBodyMovers(basePart, data)
+                        end
+                        continue
+                end
 
-		applyForces(basePart, data, dt, now)
-	end
+                updateNetworkOwnership(basePart, data, now, playerInfos)
+                applyForces(basePart, data, dt, now)
+        end
 end
 
 function FloatingModule.Initialize()

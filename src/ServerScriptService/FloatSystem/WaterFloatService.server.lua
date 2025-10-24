@@ -292,7 +292,7 @@ RunService.Heartbeat:Connect(function(dt)
             continue
         end
 
-        local buoyantForce, ratio = WaterPhysics.ComputeBuoyancyForce(part, surfaceY)
+        local _, ratio = WaterPhysics.ComputeBuoyancyForce(part, surfaceY)
         if ratio <= 0 and surfaceY < part.Position.Y then
             if data.force then
                 data.force.Force = Vector3.zero
@@ -332,7 +332,7 @@ RunService.Heartbeat:Connect(function(dt)
         end
 
         if data.force then
-            data.force.Force = Vector3.new(horizontalForce.X, verticalForce, horizontalForce.Z) + buoyantForce
+            data.force.Force = Vector3.new(horizontalForce.X, verticalForce, horizontalForce.Z)
         end
     end
 end)

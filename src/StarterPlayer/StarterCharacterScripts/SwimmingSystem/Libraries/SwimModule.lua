@@ -98,47 +98,69 @@ function swimModule:Start()
     self.Enabled = true
 
     self.heartbeatConnection = RunService.Heartbeat:Connect(function()
-        if humanoid.MoveDirection.Magnitude > 0 then
-            surfaceOffset = nil
-            depthOffset = nil
-            return
-        end
+        local moveDirection = humanoid.MoveDirection
+        local moving = moveDirection.Magnitude > 0
+        local desiredVelocityY: number? = nil
 
-        local desiredVelocityY = 0
         if surfaceState then
             local rootSample = surfaceState.RootSample
-            local surfacedNow = surfaceState.Surfaced and rootSample and rootSample.DynamicHeight
-            if surfacedNow then
-                if not lastSurfaced or surfaceOffset == nil then
-                    surfaceOffset = rootPart.Position.Y - rootSample.DynamicHeight
-                end
+            local surfacedHeight: number? = nil
+            if surfaceState.Surfaced and rootSample and rootSample.DynamicHeight then
+                surfacedHeight = rootSample.DynamicHeight
+            end
 
-                local targetY = rootSample.DynamicHeight + surfaceOffset
-                desiredVelocityY = math.clamp((targetY - rootPart.Position.Y) * SURFACE_RESPONSIVENESS, -20, 20)
-                lastSurfaced = true
-                depthOffset = nil
+            if surfacedHeight then
+                local descending = moveDirection.Y < -0.1
+                if descending then
+                    surfaceOffset = nil
+                    lastSurfaced = false
+                    depthOffset = nil
+                else
+                    if not lastSurfaced or surfaceOffset == nil then
+                        surfaceOffset = rootPart.Position.Y - surfacedHeight
+                    end
+
+                    local targetY = surfacedHeight + surfaceOffset
+                    desiredVelocityY = math.clamp((targetY - rootPart.Position.Y) * SURFACE_RESPONSIVENESS, -20, 20)
+                    lastSurfaced = true
+                    depthOffset = nil
+                end
             else
-                local wasSurfaced = lastSurfaced
                 surfaceOffset = nil
                 lastSurfaced = false
 
                 local lowerSample = surfaceState.LowerSample
-                if lowerSample and lowerSample.EffectiveHeight then
-                    if wasSurfaced or depthOffset == nil then
+                if lowerSample and lowerSample.EffectiveHeight and not moving then
+                    if depthOffset == nil then
                         depthOffset = rootPart.Position.Y - lowerSample.EffectiveHeight
                     end
 
                     local targetY = lowerSample.EffectiveHeight + depthOffset
                     desiredVelocityY = math.clamp((targetY - rootPart.Position.Y) * SURFACE_RESPONSIVENESS, -20, 20)
+                else
+                    depthOffset = nil
                 end
             end
         else
             surfaceOffset = nil
-            lastSurfaced = false
             depthOffset = nil
+            lastSurfaced = false
         end
 
-        rootPart.AssemblyLinearVelocity = Vector3.new(0, desiredVelocityY, 0)
+        local velocity = rootPart.AssemblyLinearVelocity
+
+        if desiredVelocityY then
+            local newX = moving and velocity.X or 0
+            local newZ = moving and velocity.Z or 0
+
+            if velocity.X ~= newX or velocity.Y ~= desiredVelocityY or velocity.Z ~= newZ then
+                rootPart.AssemblyLinearVelocity = Vector3.new(newX, desiredVelocityY, newZ)
+            end
+        elseif not moving then
+            if math.abs(velocity.X) > 1e-3 or math.abs(velocity.Z) > 1e-3 then
+                rootPart.AssemblyLinearVelocity = Vector3.new(0, velocity.Y, 0)
+            end
+        end
     end)
 end
 

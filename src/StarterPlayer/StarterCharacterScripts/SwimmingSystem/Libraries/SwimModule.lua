@@ -151,8 +151,17 @@ function swimModule:Start()
         local velocity = rootPart.AssemblyLinearVelocity
 
         if desiredVelocityY then
-            local newX = moving and velocity.X or 0
-            local newZ = moving and velocity.Z or 0
+            local newX, newZ = 0, 0
+
+            if moving then
+                local horizontalDirection = Vector3.new(moveDirection.X, 0, moveDirection.Z)
+                if horizontalDirection.Magnitude > 1e-4 then
+                    local horizontalUnit = horizontalDirection.Unit
+                    local speed = humanoid.WalkSpeed or 0
+                    newX = horizontalUnit.X * speed
+                    newZ = horizontalUnit.Z * speed
+                end
+            end
 
             if velocity.X ~= newX or velocity.Y ~= desiredVelocityY or velocity.Z ~= newZ then
                 rootPart.AssemblyLinearVelocity = Vector3.new(newX, desiredVelocityY, newZ)

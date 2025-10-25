@@ -11,6 +11,9 @@ local BoatSplashService = {}
 
 local boatStates = setmetatable({}, { __mode = "k" })
 
+local recipientsBuffer = table.create(8)
+local payloadBuffer = {}
+
 local clock = os.clock
 
 local DEFAULT_ENTRY_HEIGHT = 0.18
@@ -358,32 +361,46 @@ function BoatSplashService._dispatchSplash(position, intensity, owner, samplerKe
                 return
         end
 
-        local recipients = {}
+        table.clear(recipientsBuffer)
 
-	for _, player in ipairs(Players:GetPlayers()) do
-		local character = player.Character
-		local hrp = character and character:FindFirstChild("HumanoidRootPart")
-		if hrp then
-			local distance = (hrp.Position - position).Magnitude
-			if distance <= MAX_VISIBILITY_DISTANCE then
-				table.insert(recipients, player)
-			end
-		end
-	end
+        local players = Players:GetPlayers()
+        for index = 1, #players do
+                local player = players[index]
+                local character = player.Character
+                local hrp = character and character:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                        local distance = (hrp.Position - position).Magnitude
+                        if distance <= MAX_VISIBILITY_DISTANCE then
+                                recipientsBuffer[#recipientsBuffer + 1] = player
+                        end
+                end
+        end
 
-	if owner and owner.Parent and not table.find(recipients, owner) then
-		table.insert(recipients, owner)
-	end
+        if owner and owner.Parent then
+                local alreadyPresent = false
+                for index = 1, #recipientsBuffer do
+                        if recipientsBuffer[index] == owner then
+                                alreadyPresent = true
+                                break
+                        end
+                end
 
-        local payload = {
-                position = position,
-                intensity = intensity,
-                samplerKey = samplerKey,
-                effectType = effectType,
-        }
+                if not alreadyPresent then
+                        recipientsBuffer[#recipientsBuffer + 1] = owner
+                end
+        end
 
-        for _, player in ipairs(recipients) do
-                boatSplashEvent:FireClient(player, payload)
+        if #recipientsBuffer == 0 then
+                return
+        end
+
+        payloadBuffer.position = position
+        payloadBuffer.intensity = intensity
+        payloadBuffer.samplerKey = samplerKey
+        payloadBuffer.effectType = effectType
+
+        for index = 1, #recipientsBuffer do
+                boatSplashEvent:FireClient(recipientsBuffer[index], payloadBuffer)
         end
 end
 

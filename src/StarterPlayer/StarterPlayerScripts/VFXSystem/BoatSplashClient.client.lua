@@ -191,15 +191,16 @@ local function createSplashEffect(payload, legacyIntensity)
         local effectType = eventPayload.effectType or "Impact"
         local intensity = math.clamp(eventPayload.intensity or 0, 0, 1)
 
-        local attachment = Instance.new("Attachment")
-        attachment.WorldPosition = position
-
         local targetPart = findSamplerPart(position, samplerKey)
+        local attachment = Instance.new("Attachment")
+
         if targetPart then
                 attachment.Parent = targetPart
         else
                 attachment.Parent = effectFolder
         end
+
+        attachment.WorldPosition = position
 
         if effectType == "Wake" then
                 emitWakeBurst(attachment, intensity)

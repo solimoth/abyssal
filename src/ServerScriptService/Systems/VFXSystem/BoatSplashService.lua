@@ -21,6 +21,9 @@ local HORIZONTAL_WEIGHT = 0.3
 local MAX_VERTICAL_SPEED = 45
 local MAX_HORIZONTAL_REFERENCE = 45
 local SPLASH_COOLDOWN = 0.65
+local DEFAULT_WAKE_COOLDOWN = 0.25
+local DEFAULT_WAKE_SPEED_THRESHOLD = 10
+local DEFAULT_WAKE_MAX_SPEED = 70
 local MAX_VISIBILITY_DISTANCE = 250
 
 local ZERO_VECTOR = Vector3.new()
@@ -48,6 +51,10 @@ local SAMPLE_POINTS = {
                 minDownwardSpeed = 1.1,
                 cooldown = 0.55,
                 intensityMultiplier = 1.1,
+                wakeCooldown = 0.2,
+                wakeSpeedThreshold = 9,
+                wakeMaxSpeed = 60,
+                wakeIntensityMultiplier = 0.5,
         },
         {
                 key = "BoatBack",
@@ -207,16 +214,45 @@ local function processSample(player, boat, sampler, state, baseOffset)
                                 if intensity > 0 then
                                         local dropReference = sampler.dropReference or (minDrop + 0.55)
                                         local dropFactor = math.clamp(drop / dropReference, 0, 1.5)
-                                        intensity = math.clamp(intensity * (0.6 + dropFactor * 0.6) * (sampler.intensityMultiplier or 1), 0, 1)
+                                        local impactMultiplier = sampler.intensityMultiplier or 1
+                                        intensity = math.clamp(intensity * (0.6 + dropFactor * 0.6) * impactMultiplier, 0, 1)
 
                                         BoatSplashService._dispatchSplash(
                                                 Vector3.new(part.Position.X, waterLevel, part.Position.Z),
                                                 intensity,
-                                                player
+                                                player,
+                                                sampler.key,
+                                                "Impact"
                                         )
 
                                         sampleState.lastSplashTime = now
                                 end
+                        end
+                end
+        end
+
+        local wakeSpeedThreshold = sampler.wakeSpeedThreshold or DEFAULT_WAKE_SPEED_THRESHOLD
+        if wakeSpeedThreshold > 0 and sampler.key == "BoatFront" then
+                local wakeCooldown = sampler.wakeCooldown or DEFAULT_WAKE_COOLDOWN
+                local lastWake = sampleState.lastWakeTime or 0
+                local nearSurface = heightDelta <= entryHeight
+
+                if nearSurface and now - lastWake >= wakeCooldown then
+                        local wakeMaxSpeed = sampler.wakeMaxSpeed or DEFAULT_WAKE_MAX_SPEED
+                        local wakeIntensityMultiplier = sampler.wakeIntensityMultiplier or 1
+                        local speedRange = math.max(wakeMaxSpeed - wakeSpeedThreshold, 1)
+                        local horizontalRatio = math.clamp((horizontalSpeed - wakeSpeedThreshold) / speedRange, 0, 1)
+
+                        if horizontalRatio > 0 then
+                                BoatSplashService._dispatchSplash(
+                                        Vector3.new(part.Position.X, waterLevel, part.Position.Z),
+                                        math.clamp(horizontalRatio * wakeIntensityMultiplier, 0, 1),
+                                        player,
+                                        sampler.key,
+                                        "Wake"
+                                )
+
+                                sampleState.lastWakeTime = now
                         end
                 end
         end
@@ -242,10 +278,13 @@ function BoatSplashService.ProcessBoat(player, boat, primaryPart, waterSurfaceOf
         end
 end
 
-function BoatSplashService._dispatchSplash(position, intensity, owner)
-	intensity = math.clamp(intensity, 0, 1)
+function BoatSplashService._dispatchSplash(position, intensity, owner, samplerKey, effectType)
+        intensity = math.clamp(intensity, 0, 1)
+        if intensity <= 0 then
+                return
+        end
 
-	local recipients = {}
+        local recipients = {}
 
 	for _, player in ipairs(Players:GetPlayers()) do
 		local character = player.Character
@@ -262,9 +301,16 @@ function BoatSplashService._dispatchSplash(position, intensity, owner)
 		table.insert(recipients, owner)
 	end
 
-	for _, player in ipairs(recipients) do
-		boatSplashEvent:FireClient(player, position, intensity)
-	end
+        local payload = {
+                position = position,
+                intensity = intensity,
+                samplerKey = samplerKey,
+                effectType = effectType,
+        }
+
+        for _, player in ipairs(recipients) do
+                boatSplashEvent:FireClient(player, payload)
+        end
 end
 
 function BoatSplashService.ClearBoat(boat)

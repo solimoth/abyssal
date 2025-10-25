@@ -8,6 +8,10 @@ local WaterPhysics = require(ReplicatedStorage:WaitForChild("Modules"):WaitForCh
 local WaveRegistry = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("WaveRegistry"))
 local SwimInteriorUtils = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("SwimInteriorUtils"))
 
+local RemotesFolder = ReplicatedStorage:WaitForChild("Remotes")
+local TimeSystemRemotes = RemotesFolder:WaitForChild("TimeSystem")
+local UpdateUnderwaterRemote = TimeSystemRemotes:WaitForChild("UpdateUnderwaterState")
+
 local Libraries = script:WaitForChild("Libraries")
 local swimModule = require(Libraries:WaitForChild("SwimModule"))
 local lightingModule = require(Libraries:WaitForChild("UnderwaterLighting"))
@@ -26,6 +30,25 @@ local humanoid = character:FindFirstChildOfClass("Humanoid")
 local rootPart = character:WaitForChild("HumanoidRootPart")
 
 local isTouchScreen = UserInputService.TouchEnabled
+
+local UNDERWATER_ATTRIBUTE = "IsUnderwater"
+local currentUnderwaterAttribute: boolean? = nil
+
+local function setUnderwaterAttribute(value: boolean)
+    if currentUnderwaterAttribute == value then
+        return
+    end
+
+    currentUnderwaterAttribute = value
+    player:SetAttribute(UNDERWATER_ATTRIBUTE, value)
+    UpdateUnderwaterRemote:FireServer(value)
+end
+
+setUnderwaterAttribute(false)
+
+player.CharacterRemoving:Connect(function()
+    setUnderwaterAttribute(false)
+end)
 
 local detectorOffsets = {
     Upper = Vector3.new(0, 1, -0.75),
@@ -164,6 +187,9 @@ local function onHeartbeat()
 
     local rootCFrame = rootPart.CFrame
     local isUpperIn, isLowerIn, isHeadIn, isCameraIn, lowerSample = computeDetectorStatus(rootCFrame, insideInterior)
+
+    local isUnderwater = (not insideInterior) and isUpperIn and isLowerIn
+    setUnderwaterAttribute(isUnderwater)
 
     if not insideInterior and not isUpperIn and not isLowerIn then
         gotOut = false

@@ -66,15 +66,62 @@ local PHASES = {
     },
 }
 
+local PHASE_COUNT = #PHASES
+
 local playerPhaseState = setmetatable({}, { __mode = "k" })
 local attributeConnections = setmetatable({}, { __mode = "k" })
 local missingConfigurations = {}
+local configurationExistsCache = {}
+local configurationCounts = {}
 
 local currentPhaseIndex = 1
 local currentPhase = PHASES[currentPhaseIndex]
-local currentPhaseStartTime = os.clock()
+local currentPhaseElapsed = 0
 local currentPhaseDuration = currentPhase and math.max(currentPhase.duration, 0) or 0
 local lastClockTime
+
+local function incrementConfigurationCount(name)
+    if typeof(name) ~= "string" or name == "" then
+        return
+    end
+
+    configurationCounts[name] = (configurationCounts[name] or 0) + 1
+    configurationExistsCache[name] = true
+    missingConfigurations[name] = nil
+end
+
+local function decrementConfigurationCount(name)
+    if typeof(name) ~= "string" or name == "" then
+        return
+    end
+
+    local count = configurationCounts[name]
+    if not count then
+        return
+    end
+
+    if count <= 1 then
+        configurationCounts[name] = nil
+        configurationExistsCache[name] = false
+    else
+        configurationCounts[name] = count - 1
+    end
+end
+
+local function onConfigurationAdded(instance)
+    incrementConfigurationCount(instance.Name)
+end
+
+local function onConfigurationRemoved(instance)
+    decrementConfigurationCount(instance.Name)
+end
+
+for _, descendant in ipairs(ConfigurationsFolder:GetDescendants()) do
+    incrementConfigurationCount(descendant.Name)
+end
+
+ConfigurationsFolder.DescendantAdded:Connect(onConfigurationAdded)
+ConfigurationsFolder.DescendantRemoving:Connect(onConfigurationRemoved)
 
 local function markMissingConfiguration(name)
     if not missingConfigurations[name] then
@@ -88,12 +135,26 @@ local function ensureConfiguration(name)
         return false
     end
 
+    local cached = configurationExistsCache[name]
+    if cached ~= nil then
+        if cached == false then
+            markMissingConfiguration(name)
+        end
+        return cached
+    end
+
     local configuration = ConfigurationsFolder:FindFirstChild(name, true)
     if configuration then
-        missingConfigurations[name] = nil
+        if not configurationCounts[name] then
+            incrementConfigurationCount(name)
+        else
+            configurationExistsCache[name] = true
+            missingConfigurations[name] = nil
+        end
         return true
     end
 
+    configurationExistsCache[name] = false
     markMissingConfiguration(name)
     return false
 end
@@ -266,7 +327,7 @@ local function setPhase(phase, elapsedIntoPhase)
         elapsed = 0
     end
 
-    currentPhaseStartTime = os.clock() - elapsed
+    currentPhaseElapsed = elapsed
 
     applyClockTime(currentPhase, elapsed)
 
@@ -277,14 +338,16 @@ end
 
 local function advancePhase(elapsedIntoNextPhase)
     currentPhaseIndex += 1
-    if currentPhaseIndex > #PHASES then
+    if currentPhaseIndex > PHASE_COUNT then
         currentPhaseIndex = 1
     end
 
     setPhase(PHASES[currentPhaseIndex], elapsedIntoNextPhase)
 end
 
-local function onHeartbeat()
+local function onHeartbeat(deltaTime)
+    currentPhaseElapsed += math.max(deltaTime or 0, 0)
+
     local safetyCounter = 0
 
     while true do
@@ -297,19 +360,20 @@ local function onHeartbeat()
             applyClockTime(currentPhase, currentPhaseDuration)
             advancePhase(0)
         else
-            local elapsed = os.clock() - currentPhaseStartTime
-            if elapsed >= currentPhaseDuration then
+            if currentPhaseElapsed >= currentPhaseDuration then
                 applyClockTime(currentPhase, currentPhaseDuration)
-                advancePhase(elapsed - currentPhaseDuration)
+                local overflow = currentPhaseElapsed - currentPhaseDuration
+                advancePhase(overflow)
             else
-                applyClockTime(currentPhase, elapsed)
+                applyClockTime(currentPhase, currentPhaseElapsed)
                 break
             end
         end
 
         safetyCounter += 1
-        if safetyCounter > #PHASES + 1 then
+        if safetyCounter > PHASE_COUNT + 1 then
             warn("[TimeSystem] Phase advancement safety triggered, resetting cycle timing.")
+            setPhase(PHASES[currentPhaseIndex], 0)
             break
         end
     end

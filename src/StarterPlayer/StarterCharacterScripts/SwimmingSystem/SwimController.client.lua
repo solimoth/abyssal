@@ -27,6 +27,24 @@ local rootPart = character:WaitForChild("HumanoidRootPart")
 
 local isTouchScreen = UserInputService.TouchEnabled
 
+local UNDERWATER_ATTRIBUTE = "IsUnderwater"
+local currentUnderwaterAttribute: boolean? = nil
+
+local function setUnderwaterAttribute(value: boolean)
+    if currentUnderwaterAttribute == value then
+        return
+    end
+
+    currentUnderwaterAttribute = value
+    player:SetAttribute(UNDERWATER_ATTRIBUTE, value)
+end
+
+setUnderwaterAttribute(false)
+
+player.CharacterRemoving:Connect(function()
+    setUnderwaterAttribute(false)
+end)
+
 local detectorOffsets = {
     Upper = Vector3.new(0, 1, -0.75),
     Lower = Vector3.new(0, -2.572, -0.75),
@@ -164,6 +182,9 @@ local function onHeartbeat()
 
     local rootCFrame = rootPart.CFrame
     local isUpperIn, isLowerIn, isHeadIn, isCameraIn, lowerSample = computeDetectorStatus(rootCFrame, insideInterior)
+
+    local isUnderwater = (not insideInterior) and isUpperIn and isLowerIn
+    setUnderwaterAttribute(isUnderwater)
 
     if not insideInterior and not isUpperIn and not isLowerIn then
         gotOut = false

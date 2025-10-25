@@ -104,7 +104,7 @@ local function configurationExists(name)
         return true
     end
 
-    local configuration = configurationsFolder:FindFirstChild(name)
+    local configuration = configurationsFolder:FindFirstChild(name, true)
     return configuration ~= nil
 end
 

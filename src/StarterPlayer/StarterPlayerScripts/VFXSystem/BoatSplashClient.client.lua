@@ -9,6 +9,37 @@ local boatSplashEvent = vfxRemotes:WaitForChild("BoatSplash")
 local TEXTURE_ID = "rbxassetid://121641543712692"
 local EFFECT_FOLDER_NAME = "VFXSystem"
 
+local IMPACT_UPWARD_TRANSPARENCY = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.1),
+        NumberSequenceKeypoint.new(0.4, 0.3),
+        NumberSequenceKeypoint.new(1, 1),
+})
+
+local IMPACT_MIST_COLOR = ColorSequence.new(Color3.fromRGB(235, 247, 255))
+local IMPACT_MIST_TRANSPARENCY = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.35),
+        NumberSequenceKeypoint.new(0.8, 0.7),
+        NumberSequenceKeypoint.new(1, 1),
+})
+
+local UPWARD_COLOR = ColorSequence.new(Color3.new(1, 1, 1))
+local WAKE_SPRAY_COLOR = ColorSequence.new(Color3.fromRGB(230, 244, 255))
+local WAKE_SPRAY_TRANSPARENCY = NumberSequence.new({
+        NumberSequenceKeypoint.new(0, 0.25),
+        NumberSequenceKeypoint.new(0.7, 0.75),
+        NumberSequenceKeypoint.new(1, 1),
+})
+
+local FULL_ROTATION = NumberRange.new(0, 360)
+local IMPACT_SPREAD = Vector2.new(180, 180)
+local MIST_SPREAD = Vector2.new(150, 150)
+local WAKE_SPREAD = Vector2.new(25, 55)
+local ZERO_ROT_SPEED = NumberRange.new(-20, 20)
+local IMPACT_ROT_SPEED = NumberRange.new(-45, 45)
+local EMIT_TOP = Enum.NormalId.Top
+local EMIT_FRONT = Enum.NormalId.Front
+local ZERO_LIGHT_INFLUENCE = 0
+
 local effectFolder = Workspace:FindFirstChild(EFFECT_FOLDER_NAME)
 if not effectFolder then
         effectFolder = Instance.new("Folder")
@@ -66,12 +97,8 @@ local function emitImpactBurst(attachment, intensity)
         local upwardEmitter = Instance.new("ParticleEmitter")
         upwardEmitter.Name = "BoatSplashUpward"
         upwardEmitter.Texture = TEXTURE_ID
-        upwardEmitter.Color = ColorSequence.new(Color3.new(1, 1, 1))
-        upwardEmitter.Transparency = NumberSequence.new({
-                NumberSequenceKeypoint.new(0, 0.1),
-                NumberSequenceKeypoint.new(0.4, 0.3),
-                NumberSequenceKeypoint.new(1, 1),
-        })
+        upwardEmitter.Color = UPWARD_COLOR
+        upwardEmitter.Transparency = IMPACT_UPWARD_TRANSPARENCY
         upwardEmitter.Size = NumberSequence.new({
                 NumberSequenceKeypoint.new(0, 0.8 + (impactIntensity * 1.4)),
                 NumberSequenceKeypoint.new(0.5, 0.4 + (impactIntensity * 0.6)),
@@ -80,23 +107,19 @@ local function emitImpactBurst(attachment, intensity)
         upwardEmitter.Lifetime = NumberRange.new(0.4 + impactIntensity * 0.2, 0.7 + impactIntensity * 0.4)
         upwardEmitter.Speed = NumberRange.new(12 + impactIntensity * 10, 18 + impactIntensity * 16)
         upwardEmitter.Acceleration = Vector3.new(0, -Workspace.Gravity * 0.3, 0)
-        upwardEmitter.SpreadAngle = Vector2.new(180, 180)
-        upwardEmitter.Rotation = NumberRange.new(0, 360)
-        upwardEmitter.RotSpeed = NumberRange.new(-45, 45)
-        upwardEmitter.EmissionDirection = Enum.NormalId.Top
-        upwardEmitter.LightInfluence = 0
+        upwardEmitter.SpreadAngle = IMPACT_SPREAD
+        upwardEmitter.Rotation = FULL_ROTATION
+        upwardEmitter.RotSpeed = IMPACT_ROT_SPEED
+        upwardEmitter.EmissionDirection = EMIT_TOP
+        upwardEmitter.LightInfluence = ZERO_LIGHT_INFLUENCE
         upwardEmitter.Enabled = false
         upwardEmitter.Parent = attachment
 
         local mistEmitter = Instance.new("ParticleEmitter")
         mistEmitter.Name = "BoatSplashMist"
         mistEmitter.Texture = TEXTURE_ID
-        mistEmitter.Color = ColorSequence.new(Color3.fromRGB(235, 247, 255))
-        mistEmitter.Transparency = NumberSequence.new({
-                NumberSequenceKeypoint.new(0, 0.35),
-                NumberSequenceKeypoint.new(0.8, 0.7),
-                NumberSequenceKeypoint.new(1, 1),
-        })
+        mistEmitter.Color = IMPACT_MIST_COLOR
+        mistEmitter.Transparency = IMPACT_MIST_TRANSPARENCY
         mistEmitter.Size = NumberSequence.new({
                 NumberSequenceKeypoint.new(0, 1.2 + impactIntensity * 1.8),
                 NumberSequenceKeypoint.new(1, 0),
@@ -104,11 +127,11 @@ local function emitImpactBurst(attachment, intensity)
         mistEmitter.Lifetime = NumberRange.new(0.6 + impactIntensity * 0.3, 1 + impactIntensity * 0.5)
         mistEmitter.Speed = NumberRange.new(6 + impactIntensity * 6, 10 + impactIntensity * 8)
         mistEmitter.Acceleration = Vector3.new(0, -Workspace.Gravity * 0.15, 0)
-        mistEmitter.SpreadAngle = Vector2.new(150, 150)
-        mistEmitter.Rotation = NumberRange.new(0, 360)
-        mistEmitter.RotSpeed = NumberRange.new(-20, 20)
-        mistEmitter.EmissionDirection = Enum.NormalId.Top
-        mistEmitter.LightInfluence = 0
+        mistEmitter.SpreadAngle = MIST_SPREAD
+        mistEmitter.Rotation = FULL_ROTATION
+        mistEmitter.RotSpeed = ZERO_ROT_SPEED
+        mistEmitter.EmissionDirection = EMIT_TOP
+        mistEmitter.LightInfluence = ZERO_LIGHT_INFLUENCE
         mistEmitter.Enabled = false
         mistEmitter.Parent = attachment
 
@@ -139,12 +162,8 @@ local function emitWakeBurst(attachment, intensity)
         local sprayEmitter = Instance.new("ParticleEmitter")
         sprayEmitter.Name = "BoatWakeSpray"
         sprayEmitter.Texture = TEXTURE_ID
-        sprayEmitter.Color = ColorSequence.new(Color3.fromRGB(230, 244, 255))
-        sprayEmitter.Transparency = NumberSequence.new({
-                NumberSequenceKeypoint.new(0, 0.25),
-                NumberSequenceKeypoint.new(0.7, 0.75),
-                NumberSequenceKeypoint.new(1, 1),
-        })
+        sprayEmitter.Color = WAKE_SPRAY_COLOR
+        sprayEmitter.Transparency = WAKE_SPRAY_TRANSPARENCY
         sprayEmitter.Size = NumberSequence.new({
                 NumberSequenceKeypoint.new(0, 0.45 + wakeIntensity * 0.55),
                 NumberSequenceKeypoint.new(1, 0),
@@ -152,11 +171,11 @@ local function emitWakeBurst(attachment, intensity)
         sprayEmitter.Lifetime = NumberRange.new(0.35 + wakeIntensity * 0.2, 0.55 + wakeIntensity * 0.35)
         sprayEmitter.Speed = NumberRange.new(7 + wakeIntensity * 6, 11 + wakeIntensity * 10)
         sprayEmitter.Acceleration = Vector3.new(0, -Workspace.Gravity * 0.12, 0)
-        sprayEmitter.SpreadAngle = Vector2.new(25, 55)
-        sprayEmitter.Rotation = NumberRange.new(0, 360)
-        sprayEmitter.RotSpeed = NumberRange.new(-20, 20)
-        sprayEmitter.EmissionDirection = Enum.NormalId.Front
-        sprayEmitter.LightInfluence = 0
+        sprayEmitter.SpreadAngle = WAKE_SPREAD
+        sprayEmitter.Rotation = FULL_ROTATION
+        sprayEmitter.RotSpeed = ZERO_ROT_SPEED
+        sprayEmitter.EmissionDirection = EMIT_FRONT
+        sprayEmitter.LightInfluence = ZERO_LIGHT_INFLUENCE
         sprayEmitter.Enabled = false
         sprayEmitter.Parent = attachment
 

@@ -303,6 +303,15 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
                 return clampedThrottle * baseSpeed * deltaTime
         end
 
+        local function getYawRate()
+                local currentTurnSpeed = inputs.currentTurnSpeed
+                if typeof(currentTurnSpeed) == "number" then
+                        return currentTurnSpeed * rotationWeightFactor
+                end
+
+                return steer * turnSpeed
+        end
+
         local shouldSurface = SubmarinePhysics.ShouldAutoSurface(currentCFrame.Position, configSurfaceOffset)
 
         if shouldSurface and not isInDiveMode then
@@ -324,7 +333,7 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
                 local leveledPitch = x * (1 - levelingSpeed * deltaTime)
                 local leveledRoll = z * (1 - levelingSpeed * deltaTime)
 
-                local yawAmount = steer * turnSpeed * deltaTime
+                local yawAmount = getYawRate() * deltaTime
 
                 local moveDirection = currentCFrame.LookVector
                 local horizontalDir = Vector3.new(moveDirection.X, 0, moveDirection.Z)
@@ -351,7 +360,7 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
                 return newCFrame
         else
                 -- DIVE MODE
-                local yawAmount = steer * turnSpeed * deltaTime
+                local yawAmount = getYawRate() * deltaTime
                 local pitchAmount = pitch * pitchSpeed * deltaTime
                 local rollAmount = config.CanInvert and (roll * rollSpeed * deltaTime) or 0
 

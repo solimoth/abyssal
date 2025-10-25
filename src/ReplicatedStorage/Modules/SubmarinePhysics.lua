@@ -303,6 +303,15 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
                 return clampedThrottle * baseSpeed * deltaTime
         end
 
+        local function getYawRate()
+                local currentTurnSpeed = inputs.currentTurnSpeed
+                if typeof(currentTurnSpeed) == "number" then
+                        return currentTurnSpeed * rotationWeightFactor
+                end
+
+                return steer * turnSpeed
+        end
+
         local shouldSurface = SubmarinePhysics.ShouldAutoSurface(currentCFrame.Position, configSurfaceOffset)
 
         if shouldSurface and not isInDiveMode then
@@ -324,7 +333,7 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
                 local leveledPitch = x * (1 - levelingSpeed * deltaTime)
                 local leveledRoll = z * (1 - levelingSpeed * deltaTime)
 
-                local yawAmount = steer * turnSpeed * deltaTime
+                local yawAmount = getYawRate() * deltaTime
 
                 local moveDirection = currentCFrame.LookVector
                 local horizontalDir = Vector3.new(moveDirection.X, 0, moveDirection.Z)
@@ -351,7 +360,7 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
                 return newCFrame
         else
                 -- DIVE MODE
-                local yawAmount = steer * turnSpeed * deltaTime
+                local yawAmount = getYawRate() * deltaTime
                 local pitchAmount = pitch * pitchSpeed * deltaTime
                 local rollAmount = config.CanInvert and (roll * rollSpeed * deltaTime) or 0
 
@@ -362,23 +371,13 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
 
                 local moveDirection = newRotation.LookVector
                 local moveDistance = getForwardDistance()
+                local translation = moveDirection * moveDistance
 
-                local horizontalDirection = Vector3.new(moveDirection.X, 0, moveDirection.Z)
-                local horizontalDisplacement = Vector3.zero
-                if horizontalDirection.Magnitude > 0 then
-                        horizontalDisplacement = horizontalDirection.Unit * moveDistance
-                end
-
-                local verticalMovement = 0
                 if math.abs(ascend) > 0.01 then
-                        verticalMovement = ascend * verticalSpeed * deltaTime
-                elseif math.abs(pitch) > 0.01 and math.abs(throttle) > 0.01 then
-                        verticalMovement = moveDirection.Y * moveDistance
+                        translation = translation + Vector3.new(0, ascend * verticalSpeed * deltaTime, 0)
                 end
 
-                local newPosition = currentCFrame.Position
-                        + horizontalDisplacement
-                        + Vector3.new(0, verticalMovement, 0)
+                local newPosition = currentCFrame.Position + translation
 
                 local minDepth = config.MinDepth
                 if minDepth ~= nil then

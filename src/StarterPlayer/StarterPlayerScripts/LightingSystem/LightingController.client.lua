@@ -14,7 +14,6 @@ local DEFAULT_TRANSITION = {
 local LIGHTING_PROPERTIES = {
     "Ambient",
     "Brightness",
-    "ClockTime",
     "ColorShift_Bottom",
     "ColorShift_Top",
     "EnvironmentDiffuseScale",

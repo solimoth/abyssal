@@ -24,6 +24,9 @@ local SPLASH_COOLDOWN = 0.65
 local DEFAULT_WAKE_COOLDOWN = 0.2
 local DEFAULT_WAKE_SPEED_THRESHOLD = 8
 local DEFAULT_WAKE_MAX_SPEED = 65
+local DEFAULT_WAKE_MIN_RATE = 2.5
+local DEFAULT_WAKE_MAX_RATE = 10
+local MAX_WAKE_EMISSIONS_PER_STEP = 3
 local MAX_VISIBILITY_DISTANCE = 250
 local MAX_SAMPLE_DELTA = 1.25
 
@@ -174,6 +177,7 @@ local function processSample(player, boat, sampler, state, baseOffset)
                         lastUpdateTime = nil,
                         lastWaterLevel = nil,
                         lastPosition = nil,
+                        wakeAccumulator = 0,
                 }
                 state.samples[sampler.key] = sampleState
         end
@@ -264,27 +268,65 @@ local function processSample(player, boat, sampler, state, baseOffset)
 
         local wakeSpeedThreshold = sampler.wakeSpeedThreshold or DEFAULT_WAKE_SPEED_THRESHOLD
         if wakeSpeedThreshold > 0 and sampler.key == "BoatFront" then
-                local wakeCooldown = sampler.wakeCooldown or DEFAULT_WAKE_COOLDOWN
-                local lastWake = sampleState.lastWakeTime or 0
                 local nearSurface = heightDelta <= entryHeight
 
-                if nearSurface and now - lastWake >= wakeCooldown then
+                if nearSurface then
                         local wakeMaxSpeed = sampler.wakeMaxSpeed or DEFAULT_WAKE_MAX_SPEED
                         local wakeIntensityMultiplier = sampler.wakeIntensityMultiplier or 1
                         local speedRange = math.max(wakeMaxSpeed - wakeSpeedThreshold, 1)
                         local horizontalRatio = math.clamp((horizontalSpeed - wakeSpeedThreshold) / speedRange, 0, 1)
 
                         if horizontalRatio > 0 then
-                                BoatSplashService._dispatchSplash(
-                                        Vector3.new(part.Position.X, waterLevel, part.Position.Z),
-                                        math.clamp(horizontalRatio * wakeIntensityMultiplier, 0, 1),
-                                        player,
-                                        sampler.key,
-                                        "Wake"
-                                )
+                                local wakeMinRate = sampler.wakeMinRate or DEFAULT_WAKE_MIN_RATE
+                                local wakeMaxRate = sampler.wakeMaxRate or DEFAULT_WAKE_MAX_RATE
+                                local wakeRateRange = math.max(wakeMaxRate - wakeMinRate, 0)
+                                local targetRate = wakeMinRate + (wakeRateRange * horizontalRatio)
+                                local intensity = math.clamp(horizontalRatio * wakeIntensityMultiplier, 0, 1)
+                                local effectiveDeltaTime = deltaTime and math.clamp(deltaTime, 1e-3, MAX_SAMPLE_DELTA) or nil
 
-                                sampleState.lastWakeTime = now
+                                if effectiveDeltaTime then
+                                        local accumulator = (sampleState.wakeAccumulator or 0) + (targetRate * effectiveDeltaTime)
+                                        local emissions = math.clamp(math.floor(accumulator), 0, MAX_WAKE_EMISSIONS_PER_STEP)
+
+                                        if emissions > 0 then
+                                                accumulator -= emissions
+
+                                                for _ = 1, emissions do
+                                                        BoatSplashService._dispatchSplash(
+                                                                Vector3.new(part.Position.X, waterLevel, part.Position.Z),
+                                                                intensity,
+                                                                player,
+                                                                sampler.key,
+                                                                "Wake"
+                                                        )
+                                                end
+
+                                                sampleState.lastWakeTime = now
+                                        end
+
+                                        sampleState.wakeAccumulator = accumulator
+                                else
+                                        sampleState.wakeAccumulator = 0
+                                        local wakeCooldown = sampler.wakeCooldown or DEFAULT_WAKE_COOLDOWN
+                                        local lastWake = sampleState.lastWakeTime or 0
+
+                                        if now - lastWake >= wakeCooldown then
+                                                BoatSplashService._dispatchSplash(
+                                                        Vector3.new(part.Position.X, waterLevel, part.Position.Z),
+                                                        intensity,
+                                                        player,
+                                                        sampler.key,
+                                                        "Wake"
+                                                )
+
+                                                sampleState.lastWakeTime = now
+                                        end
+                                end
+                        else
+                                sampleState.wakeAccumulator = 0
                         end
+                else
+                        sampleState.wakeAccumulator = 0
                 end
         end
 

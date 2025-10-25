@@ -149,7 +149,7 @@ local function blendValue(baseValue, targetValue, alpha)
 end
 
 local function getDefaultConfigurationFolder(): Instance?
-    return ConfigurationsFolder:FindFirstChild(defaultConfigurationName)
+    return ConfigurationsFolder:FindFirstChild(defaultConfigurationName, true)
 end
 
 local function getDefaultLightingAttribute(propertyName: string)
@@ -191,7 +191,7 @@ local function getDefaultEffectTemplate(effectName: string): Instance?
 end
 
 local function getBaseWaterColor()
-    local defaultConfiguration = ConfigurationsFolder:FindFirstChild(defaultConfigurationName)
+    local defaultConfiguration = ConfigurationsFolder:FindFirstChild(defaultConfigurationName, true)
     if defaultConfiguration then
         local attributeValue = defaultConfiguration:GetAttribute(WATER_COLOR_ATTRIBUTE)
         if typeof(attributeValue) == "Color3" then
@@ -380,7 +380,7 @@ local function applyConfiguration(configurationName, options)
     options = mergeOptions(options)
     local progress = options.transitionProgress
 
-    local configuration = ConfigurationsFolder:FindFirstChild(configurationName)
+    local configuration = ConfigurationsFolder:FindFirstChild(configurationName, true)
     if not configuration then
         warn(("[LightingController] Unknown configuration '%s'"):format(configurationName))
         return
@@ -439,7 +439,7 @@ ConfigurationsFolder:GetAttributeChangedSignal("DefaultConfiguration"):Connect(f
     defaultConfigurationName = readDefaultConfigurationName()
 end)
 
-if ConfigurationsFolder:FindFirstChild(defaultConfigurationName) then
+if ConfigurationsFolder:FindFirstChild(defaultConfigurationName, true) then
     applyConfiguration(defaultConfigurationName, DEFAULT_TRANSITION)
 else
     warn(("[LightingController] Default configuration '%s' does not exist."):format(defaultConfigurationName))

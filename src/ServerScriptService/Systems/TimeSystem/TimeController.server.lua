@@ -1,5 +1,7 @@
+local Lighting = game:GetService("Lighting")
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local ServerScriptService = game:GetService("ServerScriptService")
 
 local LightingService = require(ServerScriptService:WaitForChild("Systems")
@@ -11,6 +13,7 @@ local ConfigurationsFolder = LightingSystemFolder:WaitForChild("LightingConfigur
 
 local UNDERWATER_ATTRIBUTE = "IsUnderwater"
 local TIME_SOURCE_ID = "time-cycle"
+local MIN_CLOCKTIME_STEP = 1 / 240
 
 local PHASES = {
     {
@@ -25,6 +28,8 @@ local PHASES = {
             priority = 0,
             transitionProgress = 1,
         },
+        clockTimeStart = 6,
+        clockTimeFinish = 17,
     },
     {
         name = "Sunset",
@@ -38,6 +43,8 @@ local PHASES = {
             priority = 1000,
             transitionProgress = 1,
         },
+        clockTimeStart = 17,
+        clockTimeFinish = 19,
     },
     {
         name = "Night",
@@ -51,6 +58,8 @@ local PHASES = {
             priority = 1000,
             transitionProgress = 1,
         },
+        clockTimeStart = 19,
+        clockTimeFinish = 30,
     },
 }
 
@@ -60,6 +69,9 @@ local missingConfigurations = {}
 
 local currentPhaseIndex = 1
 local currentPhase = PHASES[currentPhaseIndex]
+local currentPhaseStartTime = os.clock()
+local currentPhaseDuration = currentPhase and math.max(currentPhase.duration, 0) or 0
+local lastClockTime
 
 local function markMissingConfiguration(name)
     if not missingConfigurations[name] then
@@ -174,33 +186,116 @@ end
 
 Players.PlayerRemoving:Connect(disconnectPlayer)
 
-local function applyPhase(phase)
+local function getPhaseDuration(phase)
+    if not phase then
+        return 0
+    end
+
+    if typeof(phase.duration) ~= "number" then
+        return 0
+    end
+
+    return math.max(phase.duration, 0)
+end
+
+local function computeClockTime(phase, elapsed)
+    if not phase then
+        return nil
+    end
+
+    local startTime = phase.clockTimeStart
+    local finishTime = phase.clockTimeFinish
+    if typeof(startTime) ~= "number" or typeof(finishTime) ~= "number" then
+        return nil
+    end
+
+    local duration = getPhaseDuration(phase)
+    if duration <= 0 then
+        return finishTime % 24
+    end
+
+    local progress = math.clamp(elapsed / duration, 0, 1)
+    local absoluteTime = startTime + (finishTime - startTime) * progress
+    return absoluteTime % 24
+end
+
+local function applyClockTime(phase, elapsed)
+    local clockTime = computeClockTime(phase, elapsed)
+    if clockTime == nil then
+        return
+    end
+
+    if lastClockTime == nil then
+        lastClockTime = clockTime
+        Lighting.ClockTime = clockTime
+        return
+    end
+
+    local difference = math.abs(clockTime - lastClockTime)
+    if difference > 12 then
+        difference = 24 - difference
+    end
+
+    if difference >= MIN_CLOCKTIME_STEP then
+        lastClockTime = clockTime
+        Lighting.ClockTime = clockTime
+    end
+end
+
+local function setPhase(phase, elapsedIntoPhase)
     currentPhase = phase
+    currentPhaseDuration = getPhaseDuration(phase)
+
+    local elapsed = math.max(elapsedIntoPhase or 0, 0)
+    if currentPhaseDuration <= 0 then
+        elapsed = 0
+    end
+
+    currentPhaseStartTime = os.clock() - elapsed
+
+    applyClockTime(currentPhase, elapsed)
 
     for _, player in ipairs(Players:GetPlayers()) do
         updatePlayer(player)
     end
 end
 
-local function runCycle()
+local function advancePhase(elapsedIntoNextPhase)
+    currentPhaseIndex += 1
+    if currentPhaseIndex > #PHASES then
+        currentPhaseIndex = 1
+    end
+
+    setPhase(PHASES[currentPhaseIndex], elapsedIntoNextPhase)
+end
+
+local function onHeartbeat()
+    local safetyCounter = 0
+
     while true do
-        local phase = PHASES[currentPhaseIndex]
-        applyPhase(phase)
-
-        local duration = 0
-        if phase and typeof(phase.duration) == "number" then
-            duration = math.max(phase.duration, 0)
+        if not currentPhase then
+            advancePhase()
+            return
         end
 
-        if duration > 0 then
-            task.wait(duration)
+        if currentPhaseDuration <= 0 then
+            applyClockTime(currentPhase, currentPhaseDuration)
+            advancePhase(0)
         else
-            task.wait()
+            local elapsed = os.clock() - currentPhaseStartTime
+            if elapsed >= currentPhaseDuration then
+                applyClockTime(currentPhase, currentPhaseDuration)
+                advancePhase(elapsed - currentPhaseDuration)
+            else
+                applyClockTime(currentPhase, elapsed)
+                break
+            end
         end
 
-        currentPhaseIndex += 1
-        if currentPhaseIndex > #PHASES then
-            currentPhaseIndex = 1
+        safetyCounter += 1
+        if safetyCounter > #PHASES + 1 then
+            warn("[TimeSystem] Phase advancement safety triggered, resetting cycle timing.")
+            break
         end
     end
 end
@@ -220,4 +315,6 @@ end)
 
 LightingService:ClearSourceFromAll(TIME_SOURCE_ID)
 
-runCycle()
+setPhase(currentPhase)
+
+RunService.Heartbeat:Connect(onHeartbeat)

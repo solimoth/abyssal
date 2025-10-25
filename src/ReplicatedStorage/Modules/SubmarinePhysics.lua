@@ -371,23 +371,13 @@ function SubmarinePhysics.CalculateMovement(currentCFrame, inputs, config, delta
 
                 local moveDirection = newRotation.LookVector
                 local moveDistance = getForwardDistance()
+                local translation = moveDirection * moveDistance
 
-                local horizontalDirection = Vector3.new(moveDirection.X, 0, moveDirection.Z)
-                local horizontalDisplacement = Vector3.zero
-                if horizontalDirection.Magnitude > 0 then
-                        horizontalDisplacement = horizontalDirection.Unit * moveDistance
-                end
-
-                local verticalMovement = 0
                 if math.abs(ascend) > 0.01 then
-                        verticalMovement = ascend * verticalSpeed * deltaTime
-                elseif math.abs(pitch) > 0.01 and math.abs(throttle) > 0.01 then
-                        verticalMovement = moveDirection.Y * moveDistance
+                        translation = translation + Vector3.new(0, ascend * verticalSpeed * deltaTime, 0)
                 end
 
-                local newPosition = currentCFrame.Position
-                        + horizontalDisplacement
-                        + Vector3.new(0, verticalMovement, 0)
+                local newPosition = currentCFrame.Position + translation
 
                 local minDepth = config.MinDepth
                 if minDepth ~= nil then

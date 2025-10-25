@@ -32,6 +32,7 @@ local SubmarineStates = {}
 local PlayerSelectedBoatTypes = {}
 local BoatCollisionIgnoreLists = {}
 local BoatCollisionCooldowns = {}
+local BoatStuckStates = {}
 
 -- ACCELERATION SYSTEM STORAGE
 local BoatSpeeds = {}
@@ -122,6 +123,16 @@ local SUB_COLLISION_BOUNCE_MULTIPLIER_SURFACE = 0.35
 local BOAT_COLLISION_BOUNCE_MIN_SPEED = 3
 local BOAT_COLLISION_BOUNCE_MAX_SPEED = 22
 local BOAT_COLLISION_COOLDOWN = 0.35
+
+local BOAT_STUCK_MOVEMENT_THRESHOLD = 0.45
+local BOAT_STUCK_SPEED_THRESHOLD = 2
+local BOAT_STUCK_TIME_THRESHOLD = 1.75
+local BOAT_STUCK_MIN_INPUT = 0.25
+local BOAT_STUCK_RECOVERY_RADII = {6, 12, 20, 30}
+local BOAT_STUCK_VERTICAL_OFFSETS = {0, 3, -3}
+local BOAT_STUCK_CLEARANCE = Vector3.new(3, 5, 3)
+local BOAT_STUCK_TELEPORT_COOLDOWN = 6
+local BOAT_STUCK_SECURITY_WINDOW = 3
 
 local TriggerSubmarineImplosion
 
@@ -261,10 +272,137 @@ local function BuildCollisionIgnoreList(boat)
 	return list
 end
 
-local function ApplyBoatCollisionResponse(player, boat, currentCFrame, targetCFrame, currentSpeed, currentTurnSpeed, config, isSubmarine)
-	if not boat or not boat.PrimaryPart or not targetCFrame then
-		return targetCFrame, currentSpeed, currentTurnSpeed, false
+local function FindSafeBoatTeleportCFrame(boat, referenceCFrame, waterSurfaceOffset)
+	if not boat or not referenceCFrame then
+		return nil
 	end
+
+	local primaryPart = boat.PrimaryPart
+	if not primaryPart then
+		return nil
+	end
+
+	local extents = boat:GetExtentsSize()
+	if not extents or extents.Magnitude <= 0 then
+		extents = primaryPart.Size
+	end
+
+	local halfSize = (extents * 0.5) + BOAT_STUCK_CLEARANCE
+	local overlapParams = OverlapParams.new()
+	overlapParams.FilterType = Enum.RaycastFilterType.Exclude
+	overlapParams.FilterDescendantsInstances = BuildCollisionIgnoreList(boat)
+
+	local lookVector = referenceCFrame.LookVector
+	if lookVector.Magnitude < 0.1 then
+		lookVector = Vector3.new(0, 0, -1)
+	else
+		lookVector = lookVector.Unit
+	end
+
+	local upVector = referenceCFrame.UpVector
+	if upVector.Magnitude < 0.1 then
+		upVector = Vector3.new(0, 1, 0)
+	else
+		upVector = upVector.Unit
+	end
+
+	local basePosition = referenceCFrame.Position
+	local searchDirections = {
+		Vector3.new(1, 0, 0),
+		Vector3.new(-1, 0, 0),
+		Vector3.new(0, 0, 1),
+		Vector3.new(0, 0, -1),
+		Vector3.new(1, 0, 1).Unit,
+		Vector3.new(-1, 0, 1).Unit,
+		Vector3.new(1, 0, -1).Unit,
+		Vector3.new(-1, 0, -1).Unit,
+	}
+
+	local function adjustY(position)
+		local waterLevel = getWaterLevel(position)
+		if typeof(waterLevel) == "number" then
+			local offset = typeof(waterSurfaceOffset) == "number" and waterSurfaceOffset or 0
+			return Vector3.new(position.X, waterLevel - offset, position.Z)
+		end
+
+		return position
+	end
+
+	for _, radius in ipairs(BOAT_STUCK_RECOVERY_RADII) do
+		for _, direction in ipairs(searchDirections) do
+			local horizontalOffset = direction * radius
+			for _, vertical in ipairs(BOAT_STUCK_VERTICAL_OFFSETS) do
+				local candidatePosition = basePosition + horizontalOffset + Vector3.new(0, vertical, 0)
+				candidatePosition = adjustY(candidatePosition)
+
+				local orientation = CFrame.lookAt(
+					candidatePosition,
+					candidatePosition + lookVector,
+					upVector
+				)
+
+				local touching = Workspace:GetPartBoundsInBox(orientation, halfSize * 2, overlapParams)
+				if not touching or #touching == 0 then
+					return orientation
+				end
+			end
+		end
+	end
+
+	return nil
+end
+
+local function TryRecoverStuckBoat(player, boat, currentCFrame, proposedCFrame, currentSpeed, throttle, ascend, deltaTime, waterSurfaceOffset, collisionOccurred, isSubmarine)
+	if not proposedCFrame or not currentCFrame then
+		return proposedCFrame, currentSpeed, false
+	end
+
+	local state = BoatStuckStates[player]
+	if not state then
+		state = {
+			blockedTime = 0,
+			cooldownUntil = 0,
+		}
+		BoatStuckStates[player] = state
+	end
+
+	local isTryingToMove = math.abs(throttle or 0) > BOAT_STUCK_MIN_INPUT
+	if isSubmarine then
+		isTryingToMove = isTryingToMove or math.abs(ascend or 0) > BOAT_STUCK_MIN_INPUT
+	end
+
+	local movement = (proposedCFrame.Position - currentCFrame.Position).Magnitude
+
+	if movement < BOAT_STUCK_MOVEMENT_THRESHOLD and math.abs(currentSpeed) < BOAT_STUCK_SPEED_THRESHOLD and (isTryingToMove or collisionOccurred) then
+		state.blockedTime = (state.blockedTime or 0) + deltaTime
+	else
+		state.blockedTime = math.max((state.blockedTime or 0) - deltaTime, 0)
+	end
+
+	if state.cooldownUntil and state.cooldownUntil > tick() then
+		return proposedCFrame, currentSpeed, false
+	end
+
+	if state.blockedTime >= BOAT_STUCK_TIME_THRESHOLD then
+		local safeCFrame = FindSafeBoatTeleportCFrame(boat, currentCFrame, waterSurfaceOffset)
+		if safeCFrame then
+			BoatSecurity.RegisterSafeTeleport(player, safeCFrame.Position, BOAT_STUCK_SECURITY_WINDOW)
+			BoatCollisionCooldowns[player] = tick() + BOAT_COLLISION_COOLDOWN
+			state.blockedTime = 0
+			state.cooldownUntil = tick() + BOAT_STUCK_TELEPORT_COOLDOWN
+			return safeCFrame, 0, true
+		else
+			state.cooldownUntil = tick() + 0.75
+		end
+	end
+
+	return proposedCFrame, currentSpeed, false
+end
+
+local function ApplyBoatCollisionResponse(player, boat, currentCFrame, targetCFrame, currentSpeed, currentTurnSpeed, config, isSubmarine)
+        if not boat or not boat.PrimaryPart or not targetCFrame then
+                return targetCFrame, currentSpeed, currentTurnSpeed, false
+        end
 
 	local cooldownUntil = BoatCollisionCooldowns[player]
 	if cooldownUntil and cooldownUntil > tick() then
@@ -330,7 +468,7 @@ local function ApplyBoatCollisionResponse(player, boat, currentCFrame, targetCFr
 	end
 	bounceSpeed = math.min(bounceSpeed, bounceCap)
 
-	local newSpeed = -bounceSpeed
+        local newSpeed = bounceSpeed
 	local newTurnSpeed = currentTurnSpeed * BOAT_COLLISION_TURN_DAMPING
 
 	BoatCollisionCooldowns[player] = tick() + BOAT_COLLISION_COOLDOWN
@@ -617,11 +755,12 @@ local function CleanupBoat(player)
 		BoatConnections[player] = nil
 	end
 
-        BoatControls[player] = nil
-        BoatLastActivity[player] = nil
-        BoatSecurity.CleanupPlayer(player)
-        SubmarineStates[player] = nil
+	BoatControls[player] = nil
+	BoatStuckStates[player] = nil
 	BoatCollisionCooldowns[player] = nil
+	BoatLastActivity[player] = nil
+	BoatSecurity.CleanupPlayer(player)
+	SubmarineStates[player] = nil
 end
 
 -- Process cleanup queue
@@ -2479,8 +2618,8 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
                 )
 	end
 
-	local collisionOccurred
-	newCFrame, currentSpeed, currentTurnSpeed, collisionOccurred = ApplyBoatCollisionResponse(
+        local collisionOccurred
+        newCFrame, currentSpeed, currentTurnSpeed, collisionOccurred = ApplyBoatCollisionResponse(
                 player,
                 boat,
                 currentCFrame,
@@ -2490,6 +2629,26 @@ local function UpdateBoatPhysics(player, boat, deltaTime, playerPositions)
                 config,
                 isSubmarine
         )
+
+        local stuckRecovered
+        newCFrame, currentSpeed, stuckRecovered = TryRecoverStuckBoat(
+                player,
+                boat,
+                currentCFrame,
+                newCFrame,
+                currentSpeed,
+                throttle,
+                ascend,
+                deltaTime,
+                waterSurfaceOffset,
+                collisionOccurred,
+                isSubmarine
+        )
+
+        if stuckRecovered then
+                currentTurnSpeed = 0
+                collisionOccurred = true
+        end
 
         BoatSpeeds[player] = currentSpeed
         BoatTurnSpeeds[player] = currentTurnSpeed

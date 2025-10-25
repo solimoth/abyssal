@@ -44,7 +44,7 @@ local PHASES = {
             transitionProgress = 1,
         },
         clockTimeStart = 17,
-        clockTimeFinish = 19,
+        clockTimeFinish = 18,
     },
     {
         name = "Night",
@@ -58,7 +58,7 @@ local PHASES = {
             priority = 1000,
             transitionProgress = 1,
         },
-        clockTimeStart = 19,
+        clockTimeStart = 18,
         clockTimeFinish = 30,
     },
 }

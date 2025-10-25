@@ -10,6 +10,9 @@ local LightingService = require(ServerScriptService:WaitForChild("Systems")
 
 local LightingSystemFolder = ReplicatedStorage:WaitForChild("LightingSystem")
 local ConfigurationsFolder = LightingSystemFolder:WaitForChild("LightingConfigurations")
+local RemotesFolder = ReplicatedStorage:WaitForChild("Remotes")
+local TimeSystemRemotes = RemotesFolder:WaitForChild("TimeSystem")
+local UpdateUnderwaterRemote = TimeSystemRemotes:WaitForChild("UpdateUnderwaterState")
 
 local UNDERWATER_ATTRIBUTE = "IsUnderwater"
 local TIME_SOURCE_ID = "time-cycle"
@@ -185,6 +188,18 @@ local function disconnectPlayer(player)
 end
 
 Players.PlayerRemoving:Connect(disconnectPlayer)
+
+UpdateUnderwaterRemote.OnServerEvent:Connect(function(player, isUnderwater)
+    if typeof(isUnderwater) ~= "boolean" then
+        return
+    end
+
+    if player:GetAttribute(UNDERWATER_ATTRIBUTE) == isUnderwater then
+        return
+    end
+
+    player:SetAttribute(UNDERWATER_ATTRIBUTE, isUnderwater)
+end)
 
 local function getPhaseDuration(phase)
     if not phase then

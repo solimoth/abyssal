@@ -8,6 +8,10 @@ local WaterPhysics = require(ReplicatedStorage:WaitForChild("Modules"):WaitForCh
 local WaveRegistry = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("WaveRegistry"))
 local SwimInteriorUtils = require(ReplicatedStorage:WaitForChild("Modules"):WaitForChild("SwimInteriorUtils"))
 
+local RemotesFolder = ReplicatedStorage:WaitForChild("Remotes")
+local TimeSystemRemotes = RemotesFolder:WaitForChild("TimeSystem")
+local UpdateUnderwaterRemote = TimeSystemRemotes:WaitForChild("UpdateUnderwaterState")
+
 local Libraries = script:WaitForChild("Libraries")
 local swimModule = require(Libraries:WaitForChild("SwimModule"))
 local lightingModule = require(Libraries:WaitForChild("UnderwaterLighting"))
@@ -37,6 +41,7 @@ local function setUnderwaterAttribute(value: boolean)
 
     currentUnderwaterAttribute = value
     player:SetAttribute(UNDERWATER_ATTRIBUTE, value)
+    UpdateUnderwaterRemote:FireServer(value)
 end
 
 setUnderwaterAttribute(false)

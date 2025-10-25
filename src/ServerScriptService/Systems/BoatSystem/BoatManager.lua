@@ -12,6 +12,8 @@ local HttpService = game:GetService("HttpService")
 local TweenService = game:GetService("TweenService")
 local CollectionService = game:GetService("CollectionService")
 
+local VFX_TEXTURE_ID = "rbxassetid://121641543712692"
+
 local BoatConfig = require(ReplicatedStorage.Modules.BoatConfig)
 local BoatSecurity = require(ReplicatedStorage.Modules.BoatSecurity)
 local WaterPhysics = require(ReplicatedStorage.Modules.WaterPhysics)
@@ -1289,29 +1291,35 @@ local function ApplySubmarineStressEffects(player, boat, config, targetCFrame, d
 			attachment.Position = offset
 		end
 
-		local emitter = state.damageEmitter
-		if not emitter or emitter.Parent ~= attachment then
-			emitter = Instance.new("ParticleEmitter")
-			emitter.Name = "HullLeakBubbles"
-			emitter.Rate = 0
-			emitter.Speed = NumberRange.new(5, 9)
-			emitter.Lifetime = NumberRange.new(0.8, 1.4)
-			emitter.Size = NumberSequence.new({
-				NumberSequenceKeypoint.new(0, 0.4),
-				NumberSequenceKeypoint.new(0.5, 0.9),
-				NumberSequenceKeypoint.new(1, 0.3)
-			})
-			emitter.Transparency = NumberSequence.new({
-				NumberSequenceKeypoint.new(0, 0),
-				NumberSequenceKeypoint.new(1, 1)
-			})
-			emitter.Color = ColorSequence.new(Color3.fromRGB(214, 238, 255))
-			emitter.Acceleration = Vector3.new(0, 14, 0)
-			emitter.SpreadAngle = Vector2.new(45, 45)
-			emitter.Parent = attachment
-			state.damageEmitter = emitter
-			state.lastLeakEmissionRate = 0
-		end
+			local emitter = state.damageEmitter
+			if not emitter or emitter.Parent ~= attachment then
+                        emitter = Instance.new("ParticleEmitter")
+                        emitter.Name = "HullLeakBubbles"
+                        emitter.Texture = VFX_TEXTURE_ID
+                        emitter.Rate = 0
+                        emitter.Speed = NumberRange.new(5, 9)
+                        emitter.Lifetime = NumberRange.new(0.8, 1.4)
+                        emitter.Size = NumberSequence.new({
+                                NumberSequenceKeypoint.new(0, 0.35),
+                                NumberSequenceKeypoint.new(0.45, 0.85),
+                                NumberSequenceKeypoint.new(1, 0.25)
+                        })
+                        emitter.Transparency = NumberSequence.new({
+                                NumberSequenceKeypoint.new(0, 0.05),
+                                NumberSequenceKeypoint.new(0.6, 0.45),
+                                NumberSequenceKeypoint.new(1, 1)
+                        })
+                        emitter.Color = ColorSequence.new(Color3.fromRGB(214, 238, 255))
+                        emitter.Acceleration = Vector3.new(0, 16, 0)
+                        emitter.SpreadAngle = Vector2.new(45, 55)
+                        emitter.LightInfluence = 0
+                        emitter.LockedToPart = false
+                        emitter.Rotation = NumberRange.new(0, 360)
+                        emitter.RotSpeed = NumberRange.new(-45, 45)
+                        emitter.Parent = attachment
+                        state.damageEmitter = emitter
+                        state.lastLeakEmissionRate = 0
+                end
 
 		local emissionRate = math.clamp(30 + (1 - integrityRatio) * SUB_LEAK_MAX_RATE, 20, SUB_LEAK_MAX_RATE)
 		if math.abs((state.lastLeakEmissionRate or 0) - emissionRate) > 1 then
@@ -1495,44 +1503,54 @@ TriggerSubmarineImplosion = function(player, boat, config)
 		effectPart.CFrame = primaryPart.CFrame
 		effectPart.Parent = workspace
 
-		local bubbleBurst = Instance.new("ParticleEmitter")
-		bubbleBurst.Name = "ImplosionBubbles"
-		bubbleBurst.Rate = 0
-		bubbleBurst.Speed = NumberRange.new(25, 35)
-		bubbleBurst.Lifetime = NumberRange.new(0.35, 0.6)
-		bubbleBurst.Size = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 6),
-			NumberSequenceKeypoint.new(1, 0)
-		})
-		bubbleBurst.Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 0),
-			NumberSequenceKeypoint.new(1, 1)
-		})
-		bubbleBurst.Acceleration = Vector3.new(0, -60, 0)
-		bubbleBurst.Color = ColorSequence.new(Color3.fromRGB(210, 235, 255), Color3.fromRGB(32, 120, 255))
-		bubbleBurst.SpreadAngle = Vector2.new(360, 360)
-		bubbleBurst.LightEmission = 0.8
-		bubbleBurst.Parent = effectPart
-		bubbleBurst:Emit(200)
+                local bubbleBurst = Instance.new("ParticleEmitter")
+                bubbleBurst.Name = "ImplosionBubbles"
+                bubbleBurst.Texture = VFX_TEXTURE_ID
+                bubbleBurst.Rate = 0
+                bubbleBurst.Speed = NumberRange.new(24, 34)
+                bubbleBurst.Lifetime = NumberRange.new(0.4, 0.7)
+                bubbleBurst.Size = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 3.8),
+                        NumberSequenceKeypoint.new(0.45, 1.2),
+                        NumberSequenceKeypoint.new(1, 0.2)
+                })
+                bubbleBurst.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0.05),
+                        NumberSequenceKeypoint.new(0.4, 0.35),
+                        NumberSequenceKeypoint.new(1, 1)
+                })
+                bubbleBurst.Acceleration = Vector3.new(0, -58, 0)
+                bubbleBurst.Color = ColorSequence.new(Color3.fromRGB(210, 235, 255), Color3.fromRGB(32, 120, 255))
+                bubbleBurst.SpreadAngle = Vector2.new(360, 360)
+                bubbleBurst.LightInfluence = 0
+                bubbleBurst.Rotation = NumberRange.new(0, 360)
+                bubbleBurst.RotSpeed = NumberRange.new(-140, 140)
+                bubbleBurst.Parent = effectPart
+                bubbleBurst:Emit(200)
 
-		local shockwave = Instance.new("ParticleEmitter")
-		shockwave.Name = "ImplosionShockwave"
-		shockwave.Rate = 0
-		shockwave.Speed = NumberRange.new(15, 18)
-		shockwave.Lifetime = NumberRange.new(0.2, 0.35)
-		shockwave.Size = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 2),
-			NumberSequenceKeypoint.new(0.3, 8),
-			NumberSequenceKeypoint.new(1, 12)
-		})
-		shockwave.Transparency = NumberSequence.new({
-			NumberSequenceKeypoint.new(0, 0),
-			NumberSequenceKeypoint.new(1, 1)
-		})
-		shockwave.Color = ColorSequence.new(Color3.fromRGB(255, 255, 255))
-		shockwave.LightEmission = 1
-		shockwave.Parent = effectPart
-		shockwave:Emit(35)
+                local shockwave = Instance.new("ParticleEmitter")
+                shockwave.Name = "ImplosionShockwave"
+                shockwave.Texture = VFX_TEXTURE_ID
+                shockwave.Rate = 0
+                shockwave.Speed = NumberRange.new(12, 16)
+                shockwave.Lifetime = NumberRange.new(0.22, 0.4)
+                shockwave.Size = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 1.2),
+                        NumberSequenceKeypoint.new(0.3, 7.5),
+                        NumberSequenceKeypoint.new(1, 11)
+                })
+                shockwave.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0.08),
+                        NumberSequenceKeypoint.new(0.4, 0.45),
+                        NumberSequenceKeypoint.new(1, 1)
+                })
+                shockwave.Color = ColorSequence.new(Color3.fromRGB(245, 252, 255))
+                shockwave.LightInfluence = 0
+                shockwave.LightEmission = 0.6
+                shockwave.Rotation = NumberRange.new(0, 360)
+                shockwave.RotSpeed = NumberRange.new(-80, 80)
+                shockwave.Parent = effectPart
+                shockwave:Emit(35)
 
 		Debris:AddItem(effectPart, 3)
 

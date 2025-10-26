@@ -15,10 +15,10 @@ local MIN_LIFETIME = 3
 local MAX_LIFETIME = 7
 local MIN_SPEED = 8
 local MAX_SPEED = 15
-local MIN_HORIZONTAL_OFFSET = 18
-local MAX_HORIZONTAL_OFFSET = 32
-local MIN_VERTICAL_OFFSET = 6
-local MAX_VERTICAL_OFFSET = 14
+local SPAWN_HEIGHT_MIN = 986
+local SPAWN_HEIGHT_MAX = 1026
+local MIN_HORIZONTAL_OFFSET = 36
+local MAX_HORIZONTAL_OFFSET = 64
 local MAX_CAMERA_ANGLE = math.rad(65)
 local MIN_BOB_AMPLITUDE = 1.5
 local MAX_BOB_AMPLITUDE = 4
@@ -131,7 +131,10 @@ local function computeSpawnPosition(rootPart, head, rng)
     ).Unit
 
     local offsetPosition = basePosition + rotatedDirection * horizontalOffset
-    local spawnHeight = basePosition.Y + rng:NextNumber(MIN_VERTICAL_OFFSET, MAX_VERTICAL_OFFSET)
+
+    local targetHeight = rng:NextNumber(SPAWN_HEIGHT_MIN, SPAWN_HEIGHT_MAX)
+    local minimumHeight = head.Position.Y + 6
+    local spawnHeight = math.max(targetHeight, minimumHeight)
 
     local travelDirection = Vector3.new(-rotatedDirection.Z, 0, rotatedDirection.X).Unit
 

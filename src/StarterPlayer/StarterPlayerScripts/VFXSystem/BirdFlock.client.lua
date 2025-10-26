@@ -9,16 +9,17 @@ local birdTemplate = birdFolder:WaitForChild("BirdSprite1")
 
 local EFFECT_FOLDER_NAME = "VFXSystem"
 local MIN_PLAYER_HEIGHT = 898.011
-local SPAWN_HEIGHT_MIN = 986
-local SPAWN_HEIGHT_MAX = 1026
 local MIN_SPAWN_DELAY = 4.5
 local MAX_SPAWN_DELAY = 11
 local MIN_LIFETIME = 3
 local MAX_LIFETIME = 7
 local MIN_SPEED = 8
 local MAX_SPEED = 15
-local MIN_HORIZONTAL_OFFSET = 10
-local MAX_HORIZONTAL_OFFSET = 28
+local MIN_HORIZONTAL_OFFSET = 18
+local MAX_HORIZONTAL_OFFSET = 32
+local MIN_VERTICAL_OFFSET = 6
+local MAX_VERTICAL_OFFSET = 14
+local MAX_CAMERA_ANGLE = math.rad(65)
 local MIN_BOB_AMPLITUDE = 1.5
 local MAX_BOB_AMPLITUDE = 4
 local MIN_BOB_FREQUENCY = 0.25
@@ -102,13 +103,39 @@ end
 local function computeSpawnPosition(rootPart, head, rng)
     local basePosition = head.Position
     local horizontalOffset = rng:NextNumber(MIN_HORIZONTAL_OFFSET, MAX_HORIZONTAL_OFFSET)
-    local direction = getHorizontalDirection(rng)
-    local offsetPosition = basePosition + direction * horizontalOffset
-    local targetHeight = rng:NextNumber(SPAWN_HEIGHT_MIN, SPAWN_HEIGHT_MAX)
-    local minimumHeight = head.Position.Y + 6
-    local spawnHeight = math.max(targetHeight, minimumHeight)
 
-    return Vector3.new(offsetPosition.X, spawnHeight, offsetPosition.Z), direction
+    local forwardDirection
+    local camera = Workspace.CurrentCamera
+
+    if camera then
+        forwardDirection = camera.CFrame.LookVector
+    else
+        forwardDirection = rootPart.CFrame.LookVector
+    end
+
+    forwardDirection = Vector3.new(forwardDirection.X, 0, forwardDirection.Z)
+
+    if forwardDirection.Magnitude < 1e-3 then
+        forwardDirection = getHorizontalDirection(rng)
+    else
+        forwardDirection = forwardDirection.Unit
+    end
+
+    local angleOffset = rng:NextNumber(-MAX_CAMERA_ANGLE, MAX_CAMERA_ANGLE)
+    local cosAngle = math.cos(angleOffset)
+    local sinAngle = math.sin(angleOffset)
+    local rotatedDirection = Vector3.new(
+        forwardDirection.X * cosAngle - forwardDirection.Z * sinAngle,
+        0,
+        forwardDirection.X * sinAngle + forwardDirection.Z * cosAngle
+    ).Unit
+
+    local offsetPosition = basePosition + rotatedDirection * horizontalOffset
+    local spawnHeight = basePosition.Y + rng:NextNumber(MIN_VERTICAL_OFFSET, MAX_VERTICAL_OFFSET)
+
+    local travelDirection = Vector3.new(-rotatedDirection.Z, 0, rotatedDirection.X).Unit
+
+    return Vector3.new(offsetPosition.X, spawnHeight, offsetPosition.Z), travelDirection
 end
 
 local function createBirdData(player, rng, serverTime)

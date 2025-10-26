@@ -67,12 +67,14 @@ local function setVisibility(birdInstance, decals, alpha)
     local visibility = math.clamp(alpha, 0, 1)
     local transparency = 1 - visibility
 
-    birdInstance.Transparency = transparency
-
     for _, decal in ipairs(decals) do
         if decal.Parent then
             decal.Transparency = transparency
         end
+    end
+
+    if birdInstance.Transparency ~= 1 then
+        birdInstance.Transparency = 1
     end
 end
 

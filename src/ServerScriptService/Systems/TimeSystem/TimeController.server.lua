@@ -13,10 +13,28 @@ local ConfigurationsFolder = LightingSystemFolder:WaitForChild("LightingConfigur
 local RemotesFolder = ReplicatedStorage:WaitForChild("Remotes")
 local TimeSystemRemotes = RemotesFolder:WaitForChild("TimeSystem")
 local UpdateUnderwaterRemote = TimeSystemRemotes:WaitForChild("UpdateUnderwaterState")
+local ModulesFolder = ReplicatedStorage:WaitForChild("Modules")
+local WaterPhysics = require(ModulesFolder:WaitForChild("WaterPhysics"))
+local SwimInteriorUtils = require(ModulesFolder:WaitForChild("SwimInteriorUtils"))
 
 local UNDERWATER_ATTRIBUTE = "IsUnderwater"
 local TIME_SOURCE_ID = "time-cycle"
 local MIN_CLOCKTIME_STEP = 1 / 240
+
+local UNDERWATER_ENTRY_DEPTH = 0.1
+local UNDERWATER_HEAD_THRESHOLD = 0.05
+local UNDERWATER_RATE_LIMIT = 6
+local UNDERWATER_RATE_CAPACITY = 8
+local UNDERWATER_RATE_DECAY = 0.5
+local UNDERWATER_RATE_WARN_THRESHOLD = 8
+local UNDERWATER_RATE_WARN_COOLDOWN = 5
+
+local osClock = os.clock
+
+local detectorOffsets = {
+    Upper = Vector3.new(0, 1, -0.75),
+    Lower = Vector3.new(0, -2.572, -0.75),
+}
 
 local PHASES = {
     {
@@ -79,6 +97,8 @@ local currentPhase = PHASES[currentPhaseIndex]
 local currentPhaseElapsed = 0
 local currentPhaseDuration = currentPhase and math.max(currentPhase.duration, 0) or 0
 local lastClockTime
+local underwaterRateState = setmetatable({}, { __mode = "k" })
+local underwaterMismatchState = setmetatable({}, { __mode = "k" })
 
 local function incrementConfigurationCount(name)
     if typeof(name) ~= "string" or name == "" then
@@ -157,6 +177,97 @@ local function ensureConfiguration(name)
     configurationExistsCache[name] = false
     markMissingConfiguration(name)
     return false
+end
+
+local function cleanupSecurityState(player)
+    underwaterRateState[player] = nil
+    underwaterMismatchState[player] = nil
+end
+
+local function getWaterDepth(position)
+    local surfaceY = WaterPhysics.TryGetWaterSurface(position)
+    if not surfaceY then
+        return 0
+    end
+
+    return math.max(0, surfaceY - position.Y)
+end
+
+local function computeServerUnderwaterState(player)
+    local character = player.Character
+    if not character then
+        return nil
+    end
+
+    local rootPart = character:FindFirstChild("HumanoidRootPart")
+    if not rootPart then
+        return nil
+    end
+
+    if SwimInteriorUtils.IsInsideShipInterior(character) then
+        return false
+    end
+
+    local rootCFrame = rootPart.CFrame
+    local upperDepth = getWaterDepth(rootCFrame:PointToWorldSpace(detectorOffsets.Upper))
+    local lowerDepth = getWaterDepth(rootCFrame:PointToWorldSpace(detectorOffsets.Lower))
+
+    local underwater = upperDepth > UNDERWATER_ENTRY_DEPTH and lowerDepth > UNDERWATER_ENTRY_DEPTH
+
+    if not underwater then
+        local head = character:FindFirstChild("Head")
+        if head then
+            local headDepth = getWaterDepth(head.Position)
+            if headDepth > UNDERWATER_HEAD_THRESHOLD and lowerDepth > UNDERWATER_ENTRY_DEPTH then
+                underwater = true
+            end
+        end
+    end
+
+    return underwater
+end
+
+local function checkUnderwaterRateLimit(player)
+    local now = osClock()
+    local state = underwaterRateState[player]
+    if not state then
+        state = {
+            tokens = UNDERWATER_RATE_CAPACITY,
+            lastUpdate = now,
+            violations = 0,
+            lastWarn = 0,
+        }
+        underwaterRateState[player] = state
+    end
+
+    local elapsed = now - state.lastUpdate
+    state.lastUpdate = now
+
+    state.tokens = math.min(
+        UNDERWATER_RATE_CAPACITY,
+        state.tokens + (elapsed * UNDERWATER_RATE_LIMIT)
+    )
+
+    if state.tokens < 1 then
+        state.violations += 1
+        if state.violations >= UNDERWATER_RATE_WARN_THRESHOLD then
+            if now - state.lastWarn >= UNDERWATER_RATE_WARN_COOLDOWN then
+                warn(
+                    string.format(
+                        "[TimeSystem] %s exceeded underwater update rate limit (%d violations)",
+                        player.Name,
+                        state.violations
+                    )
+                )
+                state.lastWarn = now
+            end
+        end
+        return false
+    end
+
+    state.tokens -= 1
+    state.violations = math.max(state.violations - UNDERWATER_RATE_DECAY, 0)
+    return true
 end
 
 local function clearTimeOverride(player)
@@ -246,6 +357,8 @@ local function disconnectPlayer(player)
         clearTimeOverride(player)
         playerPhaseState[player] = nil
     end
+
+    cleanupSecurityState(player)
 end
 
 Players.PlayerRemoving:Connect(disconnectPlayer)
@@ -255,11 +368,45 @@ UpdateUnderwaterRemote.OnServerEvent:Connect(function(player, isUnderwater)
         return
     end
 
-    if player:GetAttribute(UNDERWATER_ATTRIBUTE) == isUnderwater then
+    if not checkUnderwaterRateLimit(player) then
         return
     end
 
-    player:SetAttribute(UNDERWATER_ATTRIBUTE, isUnderwater)
+    local computedState = computeServerUnderwaterState(player)
+    if computedState == nil then
+        return
+    end
+
+    if computedState ~= isUnderwater then
+        local mismatch = underwaterMismatchState[player]
+        local now = osClock()
+        if not mismatch then
+            mismatch = {
+                count = 0,
+                lastWarn = 0,
+            }
+            underwaterMismatchState[player] = mismatch
+        end
+
+        mismatch.count += 1
+        if mismatch.count >= 5 and now - mismatch.lastWarn >= 10 then
+            warn(
+                string.format(
+                    "[TimeSystem] Ignored underwater state from %s (client=%s, server=%s)",
+                    player.Name,
+                    tostring(isUnderwater),
+                    tostring(computedState)
+                )
+            )
+            mismatch.lastWarn = now
+        end
+    else
+        underwaterMismatchState[player] = nil
+    end
+
+    if player:GetAttribute(UNDERWATER_ATTRIBUTE) ~= computedState then
+        player:SetAttribute(UNDERWATER_ATTRIBUTE, computedState)
+    end
 end)
 
 local function getPhaseDuration(phase)

@@ -220,6 +220,22 @@ local function spawnBirdForPlayer(player, state, serverTime)
     queueNextSpawn(state, serverTime)
 end
 
+local function removeBird(index)
+    local data = activeBirds[index]
+    local instance = data.instance
+
+    if instance then
+        instance:Destroy()
+    end
+
+    local state = playerState[data.owner]
+    if state then
+        state.active = math.max(0, state.active - 1)
+    end
+
+    table.remove(activeBirds, index)
+end
+
 local function cleanupPlayerState(player)
     for index = #activeBirds, 1, -1 do
         if activeBirds[index].owner == player then
@@ -240,22 +256,6 @@ end)
 Players.PlayerRemoving:Connect(function(player)
     cleanupPlayerState(player)
 end)
-
-local function removeBird(index)
-    local data = activeBirds[index]
-    local instance = data.instance
-
-    if instance then
-        instance:Destroy()
-    end
-
-    local state = playerState[data.owner]
-    if state then
-        state.active = math.max(0, state.active - 1)
-    end
-
-    table.remove(activeBirds, index)
-end
 
 RunService.Heartbeat:Connect(function()
     local serverTime = Workspace:GetServerTimeNow()

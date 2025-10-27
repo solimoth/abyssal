@@ -22,10 +22,10 @@ local function createEmitter(parent: Attachment)
     local emitter = Instance.new("ParticleEmitter")
     emitter.Texture = TEXTURE_ID
     emitter.LightInfluence = 0
-    emitter.Lifetime = NumberRange.new(0.24, 0.36)
-    emitter.Speed = NumberRange.new(6, 9)
-    emitter.Acceleration = Vector3.new(0, 22, 0)
-    emitter.SpreadAngle = Vector2.new(16, 22)
+    emitter.Lifetime = NumberRange.new(0.28, 0.4)
+    emitter.Speed = NumberRange.new(9, 13)
+    emitter.Acceleration = Vector3.new(0, 18, 0)
+    emitter.SpreadAngle = Vector2.new(20, 32)
     emitter.Rotation = NumberRange.new(0, 360)
     emitter.RotSpeed = NumberRange.new(-140, 140)
     emitter.Size = NumberSequence.new({
@@ -42,8 +42,8 @@ local function createEmitter(parent: Attachment)
     emitter.Orientation = Enum.ParticleOrientation.FacingCamera
     emitter.LockedToPart = false
     emitter.Rate = 0
-    emitter.Drag = 1.4
-    emitter.ZOffset = 0.25
+    emitter.Drag = 0.95
+    emitter.ZOffset = 0.45
     emitter.Parent = parent
 
     return emitter
